@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "perceptron"
+dynamic = ["version"]
+description = "TensorStream utilities and data structures"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Perceptron, Inc." }
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "License :: Other/Proprietary License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "torch>=2.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/"  # update if desired
+
+[tool.hatch.version]
+path = "perceptron/__init__.py"
+
+[tool.hatch.build]
+include = [
+  "perceptron/**",
+  "README.md",
+  "LICENSE",
+]
+
