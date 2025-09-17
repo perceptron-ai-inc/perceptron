@@ -151,17 +151,6 @@ Repository layout
 
 ---
 
-## Releases
-- Publishing is automated: pushing a change to `HISTORY.md` on `main` builds and uploads to PyPI.
-- Before updating `HISTORY.md`, bump the version in both `pyproject.toml` and `src/perceptron/__init__.py` (they must match).
-- Configure the GitHub secret `PYPI_API_TOKEN` with your PyPI token (scoped to the project) to enable publishing.
-
-Manual run: you can also trigger the workflow via the “Run workflow” button in GitHub Actions.
-
-If a version was already uploaded, the workflow skips re-uploading that same version.
-
----
-
 ## Contacts & Support
 - Technical: [support@perceptron.inc](mailto:support@perceptron.inc)
 - Commercial: [sales@perceptron.inc](mailto:sales@perceptron.inc)

@@ -1,12 +1,8 @@
-name: Publish to PyPI on HISTORY change
+name: Publish to PyPI (on release)
 
 on:
-  push:
-    # Trigger when HISTORY.md changes on the default branch
-    branches:
-      - main
-    paths:
-      - HISTORY.md
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -57,10 +53,8 @@ jobs:
         run: python -m build
 
       - name: Publish to PyPI
-        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           # Skip existing to avoid failures if version already uploaded
           skip-existing: true
-
