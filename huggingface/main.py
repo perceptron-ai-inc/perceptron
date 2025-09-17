@@ -17,7 +17,7 @@ import torch
 import io
 from PIL import Image as PILImage
 import base64
-from transformers import AutoTokenizer, AutoConfig
+from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
 from loguru import logger
 
 # Prefer local repo package over any site-installed "perceptron"
@@ -28,7 +28,7 @@ if REPO_ROOT not in sys.path:
 
 from perceptron.tensorstream import VisionType
 from perceptron.tensorstream.ops import tensor_stream_token_view, modality_mask
-from huggingface.modular_isaac import IsaacProcessor, IsaacForConditionalGeneration
+from huggingface.modular_isaac import IsaacProcessor
 
 
 # Create a dummy multimodal input (text + image) without external schema dependencies
@@ -115,7 +115,7 @@ def main():
     logger.info("HuggingFace Perceptron Modular Implementation Demo")
     logger.info("=" * 60)
 
-    hf_path = "/home/akshat/github/genesis/genesis_isaac_dpo_hf_converted_checkpoint"
+    hf_path = "PerceptronAI/Isaac-0.1-Base"
 
     # Load processor and config from the HF checkpoint
     logger.info(f"Loading processor and config from HF checkpoint: {hf_path}")
@@ -123,9 +123,9 @@ def main():
     config = AutoConfig.from_pretrained(hf_path, trust_remote_code=True)
     processor = IsaacProcessor(tokenizer=tokenizer, config=config)
 
-    # Load model from the HF checkpoint
-    logger.info(f"Loading ForConditionalGeneration model from HF checkpoint: {hf_path}")
-    model = IsaacForConditionalGeneration.from_pretrained(hf_path)
+    # Load model from the HF checkpoint using AutoModelForCausalLM
+    logger.info(f"Loading AutoModelForCausalLM from HF checkpoint: {hf_path}")
+    model = AutoModelForCausalLM.from_pretrained(hf_path, trust_remote_code=True)
 
     # Move to appropriate device and dtype
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

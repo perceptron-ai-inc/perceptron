@@ -12,9 +12,6 @@ import PIL.Image
 
 
 from transformers import (
-    AutoConfig,
-    AutoModel,
-    AutoModelForCausalLM,
     AutoTokenizer,
     BatchFeature,
     Qwen3Config,
@@ -65,7 +62,6 @@ class PixelShuffleSiglip2VisionConfig(Siglip2VisionConfig):
         num_patches: int = 256,
         **kwargs,
     ):
-        # Call parent with all vision config parameters
         super().__init__(**kwargs)
 
         # Add our custom fields
@@ -82,8 +78,6 @@ def create_cumulative_seq_lengths(seq_sizes: torch.Tensor, device: torch.device)
 
 
 class Siglip2VariableSequenceEmbeddings(nn.Module):
-    """Our custom embeddings with variable-length sequence support."""
-
     def __init__(self, config: PixelShuffleSiglip2VisionConfig):
         super().__init__()
         self.config = config
@@ -109,7 +103,7 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
             .unsqueeze(0)
         )
 
-        _seq_patches, seq_sizes, spatial_shapes = packed_seq_patches
+        _seq_patches, _seq_sizes, spatial_shapes = packed_seq_patches
         pos_embeds_list = []
         mode = "bilinear"
         align_corners = False
@@ -151,11 +145,6 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
         return embeddings
 
 
-# Always use variable-length implementation as requested
-_supports_varlen_flash_attn = True
-
-
-# Keep our custom attention for variable-length sequences
 class Siglip2VariableLengthAttention(nn.Module):
     """Custom attention that supports variable-length sequences with flash attention."""
 
@@ -433,8 +422,6 @@ def pixel_shuffle_varlen(
 
 
 class Siglip2SequenceVisionTransformer(nn.Module):
-    """Vision transformer using HF components where possible, custom where needed."""
-
     def __init__(self, config: PixelShuffleSiglip2VisionConfig):
         super().__init__()
         self.config = config
@@ -479,9 +466,6 @@ class Siglip2SequenceVisionTransformer(nn.Module):
         return hidden_states
 
 
-# build_vision_encoder function removed - logic integrated directly in IsaacModel.__init__
-
-
 # ============================================================================
 # Configuration
 # ============================================================================
@@ -495,10 +479,10 @@ VISION_SCALE = 1 / 255
 
 
 def _make_writeable(arr: np.ndarray) -> np.ndarray:
-    """Return *arr* itself if it is already write‑able, otherwise try to flip the
-    write flag in‑place and finally fall back to `arr.copy()`.
+    """Return *arr* itself if it is already writeable, otherwise try to flip the
+    write flag in-place and finally fall back to `arr.copy()`.
     This guarantees the buffer handed to `torch.from_numpy()` is always
-    write‑able, silencing the PyTorch warning about undefined behaviour.
+    writeable, silencing the PyTorch warning about undefined behaviour.
     """
     if arr.flags.writeable:
         return arr
@@ -606,8 +590,6 @@ def get_image_size_for_max_num_patches(
         return target_height, target_width
 
 
-# Create module-level constants for mean and std tensors
-# These will be created once and moved to the appropriate device as needed
 _MEAN_TENSOR = torch.tensor(VISION_MEAN, dtype=torch.float32).view(1, 1, 1, -1)
 _STD_TENSOR = torch.tensor(VISION_STD, dtype=torch.float32).view(1, 1, 1, -1)
 
@@ -805,10 +787,7 @@ class RopeScaling(TypedDict, total=False):
 
 
 class IsaacConfig(Qwen3Config):
-    """Configuration class for Isaac multimodal model.
-
-    Inherits from Qwen3Config for text model configuration and adds vision configuration.
-    """
+    """Configuration class for Isaac multimodal model."""
 
     model_type = "isaac"
     sub_configs = {"vision_config": PixelShuffleSiglip2VisionConfig}
@@ -889,7 +868,7 @@ def create_text_event(tokenizer: AutoTokenizer, text: str, time: float = 0.0) ->
 
 
 # ============================================================================
-# Processor - Qwen3VL-style Interface
+# Processor
 # ============================================================================
 
 
@@ -925,13 +904,9 @@ class IsaacProcessor(ProcessorMixin):
         add_generation_prompt: bool = False,
         **kwargs,
     ) -> Any:
-        text = self.tokenizer.apply_chat_template(
+        return self.tokenizer.apply_chat_template(
             messages, tokenize=tokenize, add_generation_prompt=add_generation_prompt, **kwargs
         )
-        sys_prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n"
-        if text.startswith(sys_prompt):
-            text = text[len(sys_prompt) :]
-        return text
 
     def build_event_stream_simple(
         self,
@@ -1038,7 +1013,6 @@ class IsaacProcessor(ProcessorMixin):
         else:
             images_list = None
 
-        # For now, only support batch_size=1 (following IsaacProcessor)
         if len(texts) != 1:
             raise ValueError("IsaacProcessor currently supports batch_size=1")
         if images_list is not None:
@@ -1117,7 +1091,6 @@ class IsaacRotaryEmbedding(nn.Module):
         # Read RopeScaling parameters
         self.rope_type = rope_scaling.get("rope_type", "default")
 
-        # TODO: parameterize in the config
         self.mrope_section = [
             self.head_dim // 4,  # 2x more for temporal dim
             self.head_dim // 8,
@@ -1147,19 +1120,15 @@ class IsaacRotaryEmbedding(nn.Module):
 class IsaacModel(Qwen3Model):
     def __init__(self, config: IsaacConfig):
         super().__init__(config)
-        # Replace decoder layers with our custom ones
         self.layers = torch.nn.ModuleList(
             [Qwen3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        # Our custom rotary embedding is set by IsaacForCausalLM
         self.rotary_emb = IsaacRotaryEmbedding(config, device=self.device)
 
-        # Build the exact vision embedding used in training/sglang
         vision_cfg = config.vision_config
         if vision_cfg is None:
             raise ValueError("IsaacConfig should always have vision_config")
 
-        # Build vision encoder directly (previously in build_vision_encoder function)
         hidden_dim = vision_cfg.hidden_size * (vision_cfg.pixel_shuffle_scale_factor**2)
         self.vision_embedding = nn.Sequential(
             Siglip2SequenceVisionTransformer(vision_cfg),
@@ -1172,7 +1141,7 @@ class IsaacModel(Qwen3Model):
             nn.Linear(4 * hidden_dim, config.hidden_size, bias=False),
         )
 
-        # Dispatch table for TensorStream balanced embedding (text + vision for now)
+        # Dispatch table for TensorStream balanced embedding (text + vision)
         self.embed_fns = {
             TextType: self.embed_text_tokens,
             VisionType: self.embed_vision,
@@ -1194,8 +1163,7 @@ class IsaacModel(Qwen3Model):
     def embed_stream(self, tensor_stream: TensorStream) -> torch.Tensor:
         """
         Embed each modality stream independently, preserving the original TensorStream
-        structure. Mirrors the SGLang Qwen3-VL isaac flow: group → compact →
-        modality-specific embed → reconstruct.
+        structure.
         """
         flat_stream = tensor_stream.flat_stream()
         per_modality_stream = group_streams(flat_stream, group_fn=lambda ev: ev.type, schedule=False)
@@ -1249,7 +1217,7 @@ class IsaacModel(Qwen3Model):
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        use_cache = False  # use_cache if use_cache is not None else self.config.use_cache
+        use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # Get inputs
@@ -1319,12 +1287,7 @@ class IsaacModel(Qwen3Model):
 
 
 class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
-    """
-    Isaac multimodal model for conditional generation.
-
-    Extends Qwen3ForCausalLM with vision encoding, TensorStream processing, and generation support.
-    Combines the functionality of both causal LM and conditional generation in a single class.
-    """
+    """Isaac multimodal model for conditional generation."""
 
     config_class = IsaacConfig
 
@@ -1336,7 +1299,6 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         # Tracks rotary position offsets computed during a full forward pass so decode steps can reuse them.
         self.rope_deltas = None
 
-        # Store config for processing
         self.config = config
 
     def get_rope_index(
@@ -1494,12 +1456,9 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         return True
 
 
-def register_auto_classes():
-    """Register Isaac classes with HuggingFace Auto* classes."""
-    AutoConfig.register("isaac", IsaacConfig)
-    AutoModel.register(IsaacConfig, IsaacForConditionalGeneration)
-    AutoModelForCausalLM.register(IsaacConfig, IsaacForConditionalGeneration)
-
-
-# Register on import
-register_auto_classes()
+__all__ = [
+    "IsaacConfig",
+    "IsaacModel",
+    "IsaacForConditionalGeneration",
+    "IsaacProcessor",
+]
