@@ -1,0 +1,102 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version (x.y.z)'
+        required: true
+        type: string
+
+jobs:
+  bump-tag-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Bump version in pyproject and __init__
+        id: bump
+        env:
+          NEW_VERSION: ${{ inputs.version }}
+        run: |
+          python - << 'PY'
+          import os, re, sys, pathlib, tomllib
+          root = pathlib.Path('.')
+          new_v = os.environ.get('NEW_VERSION')
+          if not new_v:
+            print('NEW_VERSION not provided', file=sys.stderr)
+            sys.exit(1)
+          if not re.fullmatch(r"\d+\.\d+\.\d+", new_v):
+            print(f"Invalid version format: {new_v}. Expected x.y.z", file=sys.stderr)
+            sys.exit(1)
+
+          py = root / 'pyproject.toml'
+          data = tomllib.loads(py.read_bytes())
+          cur_v = data['project']['version']
+
+          def parse(v):
+            return tuple(map(int, v.split('.')))
+          if parse(new_v) <= parse(cur_v):
+            print(f"New version {new_v} must be greater than current {cur_v}", file=sys.stderr)
+            sys.exit(1)
+
+          # Update pyproject
+          txt = py.read_text(encoding='utf-8')
+          txt = re.sub(r"(?m)^version\s*=\s*\"[^\"]+\"", f'version = "{new_v}"', txt)
+          py.write_text(txt, encoding='utf-8')
+
+          # Update src/perceptron/__init__.py
+          init_path = root / 'src' / 'perceptron' / '__init__.py'
+          init_txt = init_path.read_text(encoding='utf-8')
+          init_txt = re.sub(r"(?m)^__version__\s*=\s*['\"][^'\"]+['\"]", f'__version__ = "{new_v}"', init_txt)
+          init_path.write_text(init_txt, encoding='utf-8')
+
+          print(f"Bumped: {cur_v} -> {new_v}")
+          PY
+
+      - name: Commit and push
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src/perceptron/__init__.py
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump version to ${{ inputs.version }}"
+            git pull --ff-only
+            git push
+          else
+            echo "No changes to commit"
+          fi
+
+      - name: Create and push tag
+        run: |
+          set -e
+          TAG="v${{ inputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists locally"
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+          fi
+          git push origin "$TAG" || echo "Tag $TAG may already exist on remote"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ inputs.version }}
+          name: v${{ inputs.version }}
+          body: |
+            Release v${{ inputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

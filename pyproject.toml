@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perceptron"
+version = "0.1.1"
+description = "Perceptron multimodal SDK"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0",
+    "rich>=13",
+    "typer>=0.9.0",
+    "Pillow>=9.0.0",
+    "numpy>=1.24",
+    "httpx>=0.26.0",
+    "shellingham>=1.5.0",
+    "colorama>=0.4.6",
+]
+
+[project.scripts]
+perceptron = "perceptron.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pre-commit>=3.5",
+    "ruff==0.13.0",
+    "ty==0.0.1-alpha.20",
+]
+torch = [
+    "torch>=2.0",
+]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["perceptron*"]
