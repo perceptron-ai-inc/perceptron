@@ -121,7 +121,26 @@ Directory mode disables streaming and logs raw responses, plus per-file validati
 Notes
 - Pass `model="..."`, `provider="..."`, `max_tokens=...`, etc., through `**kwargs` on any helper.
 - `detect_from_coco` discovers annotations, constructs balanced examples when `shots > 0`, and returns `CocoDetectResult` objects.
-- For advanced workflows, build tasks with the typed DSL (`text`, `system`, `image`, `point`, `box`, `polygon`, `collection`) and decorate with `@perceive` / `@async_perceive`. Use the inspector attached to decorated functions to view compiled payloads without executing.
+- For advanced workflows, build tasks with the typed DSL (`text`, `system`, `image`, `point`, `box`, `polygon`, `collection`) and decorate with `@perceive` / `@async_perceive`.
+
+### Using the DSL with `@perceive`
+```python
+from perceptron import perceive, image, text
+
+@perceive(expects="box")
+def describe_landmark(path):
+    return image(path) + text("Highlight the main structures in one sentence.")
+
+result = describe_landmark("./landmark.jpg")
+print(result.text)
+for box in result.points or []:
+    print(box.mention, box)
+
+# Inspect the compiled payload without executing the request
+print(describe_landmark.inspect("./landmark.jpg"))
+```
+
+Set `stream=True` in the decorator to receive incremental events (`text.delta`, `points.delta`, `final`). Swap `expects` to `text`, `point`, or `polygon` when you need alternate structures.
 
 ---
 
@@ -142,7 +161,6 @@ Notes
 
 Repository layout
 - `src/perceptron` – core SDK and DSL
-- `examples` – runnable usage samples
 - `tests` – high-level API and DSL tests
 
 ---
