@@ -51,7 +51,7 @@ from perceptron.tensorstream.ops import (
 
 
 class PixelShuffleSiglip2VisionConfig(Siglip2VisionConfig):
-    """Vision configuration for Genesis with Pixel Shuffle support.
+    """Vision configuration for Isaac with Pixel Shuffle support.
 
     Extends Siglip2VisionConfig with additional fields for pixel shuffle.
     """
@@ -178,7 +178,7 @@ class Siglip2VariableLengthAttention(nn.Module):
         self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
-    def forward(self, hidden_states, cu_seqlens=None, max_seqlen=None, output_attentions=False):
+    def forward(self, hidden_states, cu_seqlens=None, max_seqlen=None):
         batch_size, seq_len, _ = hidden_states.size()
 
         # For variable-length attention, we need to reshape to (total_tokens, embed_dim)
@@ -233,7 +233,7 @@ class Siglip2VariableLengthAttention(nn.Module):
         return attn_output, None
 
 
-class GenesisSiglip2EncoderLayer(nn.Module):
+class IsaacSiglip2EncoderLayer(nn.Module):
     """Siglip2 encoder layer with variable-length attention."""
 
     def __init__(self, config: PixelShuffleSiglip2VisionConfig):
@@ -250,7 +250,6 @@ class GenesisSiglip2EncoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor = None,
         max_seqlen: int = None,
-        output_attentions: bool = False,
     ) -> tuple[torch.FloatTensor]:
         residual = hidden_states
 
@@ -269,27 +268,25 @@ class GenesisSiglip2EncoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
 
-        return (hidden_states, attn_weights) if output_attentions else (hidden_states,)
+        return (hidden_states,)
 
 
-class GenesisEncoder(nn.Module):
-    """Encoder using Genesis encoder layers with variable-length attention support."""
+class IsaacEncoder(nn.Module):
+    """Encoder using Isaac encoder layers with variable-length attention support."""
 
     def __init__(self, config: PixelShuffleSiglip2VisionConfig):
         super().__init__()
         self.config = config
-        self.layers = nn.ModuleList([GenesisSiglip2EncoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([IsaacSiglip2EncoderLayer(config) for _ in range(config.num_hidden_layers)])
 
     def forward(
         self,
         inputs_embeds,
         cu_seqlens: torch.Tensor | None = None,
         max_seqlen: int | None = None,
-        output_attentions: bool = False,
         output_hidden_states: bool = False,
     ):
         all_hidden_states = () if output_hidden_states else None
-        all_attentions = () if output_attentions else None
 
         hidden_states = inputs_embeds
 
@@ -301,18 +298,14 @@ class GenesisEncoder(nn.Module):
                 hidden_states,
                 cu_seqlens,
                 max_seqlen,
-                output_attentions=output_attentions,
             )
 
             hidden_states = layer_outputs[0]
 
-            if output_attentions:
-                all_attentions = all_attentions + (layer_outputs[1],)
-
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        return hidden_states, all_hidden_states, all_attentions
+        return hidden_states, all_hidden_states, None
 
 
 def create_pixel_shuffle_index_map(
@@ -446,7 +439,7 @@ class Siglip2SequenceVisionTransformer(nn.Module):
         super().__init__()
         self.config = config
         self.embeddings = Siglip2VariableSequenceEmbeddings(config)
-        self.encoder = GenesisEncoder(config)
+        self.encoder = IsaacEncoder(config)
         self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.pixel_shuffle_scale_factor = config.pixel_shuffle_scale_factor
 
@@ -486,7 +479,7 @@ class Siglip2SequenceVisionTransformer(nn.Module):
         return hidden_states
 
 
-# build_vision_encoder function removed - logic integrated directly in GenesisModel.__init__
+# build_vision_encoder function removed - logic integrated directly in IsaacModel.__init__
 
 
 # ============================================================================
@@ -529,7 +522,6 @@ def extract_image_pil(image: PIL.Image.Image) -> torch.Tensor | None:
     return torch.from_numpy(arr)
 
 
-# Vision processing functions copied from genesis.core.datasets.stream_processing
 def get_image_size_for_max_num_patches(
     image_height: int,
     image_width: int,
@@ -624,7 +616,6 @@ def prepare_image_tensor(
     image: torch.Tensor,
     scale: float = VISION_SCALE,
 ) -> torch.Tensor:
-
     r"""Standardize RGB images prior to patch extraction via rescaling and whitening.
 
     Args:
@@ -658,7 +649,7 @@ def patchify_vision(image: torch.Tensor, patch_size: int) -> torch.Tensor:
             Edge length of the square patches
 
     Returns:
-        `torch.Tensor`: 
+        `torch.Tensor`:
             Patch tensor where each position stores the flattened pixels belonging to that patch.
 
     Raises:
@@ -813,13 +804,13 @@ class RopeScaling(TypedDict, total=False):
     original_max_position_embeddings: int
 
 
-class GenesisConfig(Qwen3Config):
-    """Configuration class for Genesis multimodal model.
+class IsaacConfig(Qwen3Config):
+    """Configuration class for Isaac multimodal model.
 
     Inherits from Qwen3Config for text model configuration and adds vision configuration.
     """
 
-    model_type = "genesis"
+    model_type = "isaac"
     sub_configs = {"vision_config": PixelShuffleSiglip2VisionConfig}
 
     def __init__(
@@ -872,7 +863,7 @@ def create_text_event(tokenizer: AutoTokenizer, text: str, time: float = 0.0) ->
             segments are instantaneous in the scheduler.
 
     Returns:
-        `Event`: Event carrying a `(num_tokens, 1)` tensor of token ids with matching 
+        `Event`: Event carrying a `(num_tokens, 1)` tensor of token ids with matching
         metadata so that downstream processors can compute modality-specific embeddings.
     """
     tokens = tokenizer.encode(text, add_special_tokens=False, return_tensors="pt").squeeze(0)
@@ -902,14 +893,14 @@ def create_text_event(tokenizer: AutoTokenizer, text: str, time: float = 0.0) ->
 # ============================================================================
 
 
-class GenesisProcessor(ProcessorMixin):
+class IsaacProcessor(ProcessorMixin):
     attributes = []
     tokenizer_class = ("AutoTokenizer",)
 
     def __init__(
         self,
         tokenizer: AutoTokenizer,
-        config: GenesisConfig,
+        config: IsaacConfig,
     ):
         super().__init__()
         self.tokenizer = tokenizer
@@ -1031,7 +1022,7 @@ class GenesisProcessor(ProcessorMixin):
             return_tensors: Format for output tensors
 
         Returns:
-            BatchFeature with input_ids, attention_mask, and tensor_stream
+            BatchFeature with input_ids and tensor_stream
         """
         # Normalize inputs to lists
         if isinstance(text, str):
@@ -1049,7 +1040,7 @@ class GenesisProcessor(ProcessorMixin):
 
         # For now, only support batch_size=1 (following GenesisProcessor)
         if len(texts) != 1:
-            raise ValueError("GenesisProcessor currently supports batch_size=1")
+            raise ValueError("IsaacProcessor currently supports batch_size=1")
         if images_list is not None:
             # Count vision tokens in text to validate image count
             vision_token_count = texts[0].count(self.vision_token)
@@ -1082,7 +1073,6 @@ class GenesisProcessor(ProcessorMixin):
 
         data = {
             "input_ids": input_ids,
-            "attention_mask": None,
             "tensor_stream": tensor_stream,
         }
 
@@ -1112,8 +1102,8 @@ def compute_position_ids_input_ids(input_ids: torch.Tensor) -> torch.Tensor:
     return position_ids
 
 
-class GenesisRotaryEmbedding(nn.Module):
-    def __init__(self, config: GenesisConfig, device=None):
+class IsaacRotaryEmbedding(nn.Module):
+    def __init__(self, config: IsaacConfig, device=None):
         super().__init__()
 
         # Extract dimensions from config
@@ -1154,20 +1144,20 @@ class GenesisRotaryEmbedding(nn.Module):
         return cos, sin
 
 
-class GenesisModel(Qwen3Model):
-    def __init__(self, config: GenesisConfig):
+class IsaacModel(Qwen3Model):
+    def __init__(self, config: IsaacConfig):
         super().__init__(config)
         # Replace decoder layers with our custom ones
         self.layers = torch.nn.ModuleList(
             [Qwen3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        # Our custom rotary embedding is set by GenesisForCausalLM
-        self.rotary_emb = GenesisRotaryEmbedding(config, device=self.device)
+        # Our custom rotary embedding is set by IsaacForCausalLM
+        self.rotary_emb = IsaacRotaryEmbedding(config, device=self.device)
 
         # Build the exact vision embedding used in training/sglang
         vision_cfg = config.vision_config
         if vision_cfg is None:
-            raise ValueError("GenesisConfig should always have vision_config")
+            raise ValueError("IsaacConfig should always have vision_config")
 
         # Build vision encoder directly (previously in build_vision_encoder function)
         hidden_dim = vision_cfg.hidden_size * (vision_cfg.pixel_shuffle_scale_factor**2)
@@ -1204,7 +1194,7 @@ class GenesisModel(Qwen3Model):
     def embed_stream(self, tensor_stream: TensorStream) -> torch.Tensor:
         """
         Embed each modality stream independently, preserving the original TensorStream
-        structure. Mirrors the SGLang Qwen3-VL perceptron flow: group → compact →
+        structure. Mirrors the SGLang Qwen3-VL isaac flow: group → compact →
         modality-specific embed → reconstruct.
         """
         flat_stream = tensor_stream.flat_stream()
@@ -1246,7 +1236,6 @@ class GenesisModel(Qwen3Model):
         past_key_values: list[torch.FloatTensor] | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
         use_cache: bool | None = None,
-        output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         cache_position: torch.LongTensor | None = None,
@@ -1257,7 +1246,6 @@ class GenesisModel(Qwen3Model):
 
         Computes position embeddings once and passes them through all layers.
         """
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
@@ -1301,7 +1289,7 @@ class GenesisModel(Qwen3Model):
         # Prepare attention mask
         if attention_mask is not None:
             attention_mask = self._update_causal_mask(
-                attention_mask, inputs_embeds, cache_position, past_key_values, output_attentions
+                attention_mask, inputs_embeds, cache_position, past_key_values, False
             )
 
         # Initialize hidden states
@@ -1313,7 +1301,6 @@ class GenesisModel(Qwen3Model):
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
-                output_attentions=output_attentions,
                 use_cache=use_cache,
                 cache_position=cache_position,
                 position_embeddings=(cos, sin),
@@ -1331,19 +1318,19 @@ class GenesisModel(Qwen3Model):
         )
 
 
-class GenesisForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
+class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
     """
-    Genesis multimodal model for conditional generation.
+    Isaac multimodal model for conditional generation.
 
     Extends Qwen3ForCausalLM with vision encoding, TensorStream processing, and generation support.
     Combines the functionality of both causal LM and conditional generation in a single class.
     """
 
-    config_class = GenesisConfig
+    config_class = IsaacConfig
 
-    def __init__(self, config: GenesisConfig):
+    def __init__(self, config: IsaacConfig):
         Qwen3PreTrainedModel.__init__(self, config)
-        self.model = GenesisModel(config)  # Use our custom model
+        self.model = IsaacModel(config)  # Use our custom model
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         # Tracks rotary position offsets computed during a full forward pass so decode steps can reuse them.
@@ -1395,7 +1382,6 @@ class GenesisForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
         inputs_embeds: torch.FloatTensor | None = None,
         labels: torch.LongTensor | None = None,
         use_cache: bool | None = None,
-        output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         cache_position: torch.LongTensor | None = None,
@@ -1446,7 +1432,6 @@ class GenesisForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
-            output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             cache_position=cache_position,
@@ -1465,7 +1450,7 @@ class GenesisForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            attentions=None,
         )
 
     def prepare_inputs_for_generation(
@@ -1510,10 +1495,10 @@ class GenesisForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
 
 
 def register_auto_classes():
-    """Register Genesis classes with HuggingFace Auto* classes."""
-    AutoConfig.register("genesis", GenesisConfig)
-    AutoModel.register(GenesisConfig, GenesisForConditionalGeneration)
-    AutoModelForCausalLM.register(GenesisConfig, GenesisForConditionalGeneration)
+    """Register Isaac classes with HuggingFace Auto* classes."""
+    AutoConfig.register("isaac", IsaacConfig)
+    AutoModel.register(IsaacConfig, IsaacForConditionalGeneration)
+    AutoModelForCausalLM.register(IsaacConfig, IsaacForConditionalGeneration)
 
 
 # Register on import

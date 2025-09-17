@@ -8,7 +8,7 @@ This script shows how to:
 4. Generate text continuations
 
 Example usage:
-    python -m genesis.huggingface.main
+    python -m huggingface.main
 """
 
 from __future__ import annotations
@@ -20,35 +20,48 @@ import base64
 from transformers import AutoTokenizer, AutoConfig
 from loguru import logger
 
-from genesis.data.schema import Document, Text, Image, Role
+# Prefer local repo package over any site-installed "perceptron"
+import os, sys
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from perceptron.tensorstream import VisionType
 from perceptron.tensorstream.ops import tensor_stream_token_view, modality_mask
-from huggingface.modular_genesis import GenesisProcessor, GenesisForConditionalGeneration
+from huggingface.modular_isaac import GenesisProcessor, GenesisForConditionalGeneration
 
 
-# Create a dummy document with multimodal content
-DUMMY_DOCUMENT = Document(
-    content=[
-        Text(content="<hint>BOX</hint>\nHello! I have an image to show you.", role=Role.USER),
-        Image(
-            # Small red dot image (base64 encoded PNG)
-            content="iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",
-            role=Role.USER,
-        ),
-        Text(content="What do you see in this image?", role=Role.USER),
-    ]
-)
+# Create a dummy multimodal input (text + image) without external schema dependencies
+# Each item is a dict with keys: type in {"text","image"}, content (string), role (optional)
+DUMMY_DOCUMENT = [
+    {
+        "type": "text",
+        "content": "<hint>BOX</hint>\nHello! I have an image to show you.",
+        "role": "user",
+    },
+    {
+        "type": "image",
+        # Small red dot image (base64 encoded PNG)
+        "content": "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",
+        "role": "user",
+    },
+    {
+        "type": "text",
+        "content": "What do you see in this image?",
+        "role": "user",
+    },
+]
 
 
 def document_to_messages(
-    document: Document, vision_token: str = "<image>"
+    document: list[dict], vision_token: str = "<image>"
 ) -> tuple[list[dict[str, str]], list[PILImage.Image]]:
     """
     Convert a Document to messages format compatible with chat templates.
     Each content turn creates its own message entry.
 
     Args:
-        document: Document containing Text and/or Image content
+        document: list of dicts containing Text and/or Image content
         vision_token: Token to use for image placeholder
 
     Returns:
@@ -57,23 +70,26 @@ def document_to_messages(
     messages = []
     images = []
 
-    for item in document.content:
-        if isinstance(item, Text):
-            if item.content:
+    for item in document:
+        itype = item.get("type")
+        if itype == "text":
+            content = item.get("content")
+            if content:
                 messages.append(
                     {
-                        "role": item.role.value if item.role else "user",
-                        "content": item.content,
+                        "role": item.get("role", "user"),
+                        "content": content,
                     }
                 )
-        elif isinstance(item, Image):
-            if item.content:
+        elif itype == "image":
+            content = item.get("content")
+            if content:
                 # Decode base64 image
-                img = PILImage.open(io.BytesIO(base64.b64decode(item.content)))
+                img = PILImage.open(io.BytesIO(base64.b64decode(content)))
                 images.append(img)
                 messages.append(
                     {
-                        "role": item.role.value if item.role else "user",
+                        "role": item.get("role", "user"),
                         "content": vision_token,
                     }
                 )
@@ -99,8 +115,7 @@ def main():
     logger.info("HuggingFace Genesis Modular Implementation Demo")
     logger.info("=" * 60)
 
-    # Use the Perceptron checkpoint directly - it will be converted automatically
-    hf_path = "/home/akshat/models/dpo_v6/step-126/"
+    hf_path = "/home/akshat/github/genesis/genesis_isaac_dpo_hf_converted_checkpoint"
 
     # Load processor and config from the HF checkpoint
     logger.info(f"Loading processor and config from HF checkpoint: {hf_path}")
@@ -120,7 +135,7 @@ def main():
 
     logger.info(f"Model loaded on {device} with dtype {dtype}")
 
-    # Process the dummy document using chat templates
+# Process the dummy document using chat templates
     logger.info("\nProcessing dummy document:")
     logger.info(f"Document content: {DUMMY_DOCUMENT}")
 
