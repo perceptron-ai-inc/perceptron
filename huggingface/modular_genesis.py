@@ -41,7 +41,7 @@ from perceptron.tensorstream import (
     create_stream,
     group_streams,
 )
-from perceptron.tensorstream.utils import (
+from perceptron.tensorstream.ops import (
     compute_mrope_pos_tensor,
     modality_mask,
     reconstruct_tensor_stream_from_compact_dict,

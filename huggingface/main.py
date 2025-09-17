@@ -22,9 +22,8 @@ from loguru import logger
 
 from genesis.data.schema import Document, Text, Image, Role
 from perceptron.tensorstream import VisionType
-from perceptron.tensorstream.utils import tensor_stream_token_view, modality_mask
+from perceptron.tensorstream.ops import tensor_stream_token_view, modality_mask
 from huggingface.modular_genesis import GenesisProcessor, GenesisForConditionalGeneration
-from genesis.scripts.core.initializations.convert_perceptron_to_huggingface import convert_perceptron_to_huggingface
 
 
 # Create a dummy document with multimodal content
@@ -101,22 +100,7 @@ def main():
     logger.info("=" * 60)
 
     # Use the Perceptron checkpoint directly - it will be converted automatically
-    model_path = "/home/akshat/models/dpo_v6/step-126/"
-
-    # Convert Perceptron checkpoint to HF format if needed
-    from pathlib import Path
-    import tempfile
-
-    checkpoint_path = Path(model_path)
-
-    if (checkpoint_path / "config.toml").exists():
-        logger.info("Detected Perceptron checkpoint, converting to Genesis HF format...")
-        temp_dir = tempfile.mkdtemp(prefix="genesis_hf_")
-        hf_path = convert_perceptron_to_huggingface(str(checkpoint_path), output_path=temp_dir, cleanup_temp=True)
-        logger.info(f"Converted Genesis checkpoint at: {hf_path}")
-    else:
-        logger.info("Using existing HuggingFace checkpoint")
-        hf_path = model_path
+    hf_path = "/home/akshat/models/dpo_v6/step-126/"
 
     # Load processor and config from the HF checkpoint
     logger.info(f"Loading processor and config from HF checkpoint: {hf_path}")
