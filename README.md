@@ -5,25 +5,22 @@ Python SDK and CLI for perceptive-language models. The SDK is provider-agnostic 
 ---
 
 ## Installation
-Perceptron currently ships as a source package (the `perceptron` project on PyPI is unrelated). Install directly from this repository.
-
 - Prerequisites: Python 3.10+, `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv))
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
+python -m pip install --upgrade pip
+python -m pip install perceptron
 
 # Optional extras
-python -m pip install -e .[torch]    # TensorStream helpers (requires PyTorch)
-python -m pip install -e .[dev]      # Dev tooling
+python -m pip install "perceptron[torch]"   # TensorStream helpers (requires PyTorch)
+python -m pip install "perceptron[dev]"     # Dev tools (ruff, pytest, pre-commit)
 ```
 
 Using `uv`:
 ```bash
-uv pip install --editable .
-uv pip install --editable .[torch]
+uv pip install perceptron
+uv pip install "perceptron[torch]"
+uv pip install "perceptron[dev]"
 ```
 
 The CLI entry point `perceptron` is available after install.
