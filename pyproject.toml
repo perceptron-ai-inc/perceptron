@@ -23,7 +23,12 @@ classifiers = [
   "License :: Other/Proprietary License",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = [
+# Default install is lightweight; heavy deps are optional extras
+dependencies = []
+
+[project.optional-dependencies]
+# Install with: pip install perceptron[torch]
+torch = [
   "torch>=2.1.0",
 ]
 
@@ -39,4 +44,3 @@ include = [
   "README.md",
   "LICENSE",
 ]
-
