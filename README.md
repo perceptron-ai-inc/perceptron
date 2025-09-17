@@ -1,6 +1,6 @@
-# Isaac 0.1 SDK
+# Perceptron SDK
 
-Isaac 0.1 is Perceptron's first perceptive-language model: a 2B-parameter system built to understand and act in the physical world. Despite being over 50x smaller than incumbent perception stacks, it matches or outperforms far larger models across grounded reasoning, in-context learning, and fine-grained visual analysis. This repository ships the Python SDK and CLI you need to bring Isaac into production workflows today.
+Isaac 0.1 is Perceptron's first perceptive-language model: a 2B-parameter system built to understand and act in the physical world. Despite being over significantly smaller than incumbent perception stacks, it matches or outperforms far larger models across grounded reasoning, in-context learning, and fine-grained visual analysis. This repository ships the Python SDK and CLI you need to bring Isaac into production workflows today.
 
 ---
 
@@ -25,11 +25,11 @@ Isaac 0.1 is Perceptron's first perceptive-language model: a 2B-parameter system
 ---
 
 ## Quick Performance Snapshot
-- **Grounding & localization:** high-precision pointing AP under occlusion and clutter.
+- **Grounding & localization:** high-precision pointing under occlusion and clutter.
 - **Visual question answering:** leads the 2B parameter class and competes with much larger systems.
 - **In-context object learning:** matches / exceeds fine-tuned YOLO-style detectors without task-specific retraining.
 
-Full benchmark tables, prompts, and methodology will be published in the forthcoming technical report.
+Full benchmark tables, prompts, and methodology will be published in the upcoming technical report.
 
 ---
 
@@ -53,24 +53,36 @@ Full benchmark tables, prompts, and methodology will be published in the forthco
 ---
 
 ## Installation
-Isaac's SDK is distributed as a single Python package with all dependencies included.
+Perceptron currently ships as a source package. The `perceptron` project on PyPI is unrelated, so install directly from this repository.
 
+### Prerequisites
+- Python 3.10+
+- `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv) if you prefer)
+
+### Install from a local checkout
 ```bash
-# Local development from this repo
-uv pip install --editable .
-
-# Or install the wheel/source archive directly
-uv pip install .
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
 ```
 
-The CLI entry point `perceptron` installs automatically.
+The CLI entry point `perceptron` is available as soon as the install finishes.
 
-TensorStream helpers depend on PyTorch; install the optional extra with `pip install .[torch]` (or `perceptron[torch]` after packaging).
+- Optional TensorStream helpers (requires PyTorch): `python -m pip install -e .[torch]`
+- Development tooling: `python -m pip install -e .[dev]`
+- Non-editable install for packaging/CI: `python -m pip install .`
+
+#### Using `uv`
+```bash
+uv pip install --editable .
+uv pip install --editable .[torch]   # extras behave the same way
+```
 
 ---
 
 ## Development
-- Install tooling: `pip install perceptron[dev]` (or `uv pip install --editable .[dev]`)
+- Install tooling: `python -m pip install -e .[dev]` (or `uv pip install --editable .[dev]`)
 - Enable git hooks: `pre-commit install`
 - Run all checks locally: `pre-commit run --all-files`
 

@@ -25,16 +25,12 @@ perceptron = "perceptron.cli:app"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.6.8",
-    "ty>=0.1.6",
+    "pre-commit>=3.5",
+    "ruff==0.13.0",
+    "ty==0.0.1-alpha.20",
 ]
 torch = [
     "torch>=2.0",
-]
-dev = [
-  "pre-commit>=3.5",
-  "ruff==0.13.0",
-  "ty==0.0.1-alpha.20",
 ]
 
 [tool.setuptools.package-dir]
