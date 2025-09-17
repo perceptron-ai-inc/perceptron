@@ -1,46 +1,40 @@
 [build-system]
-requires = ["hatchling>=1.24.0"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "perceptron"
-dynamic = ["version"]
-description = "TensorStream utilities and data structures"
+version = "0.1.0"
+description = "Perceptron multimodal SDK"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
-authors = [
-  { name = "Perceptron, Inc." }
+dependencies = [
+    "requests>=2.31.0",
+    "rich>=13",
+    "typer>=0.9.0",
+    "Pillow>=9.0.0",
+    "numpy>=1.24",
+    "httpx>=0.26.0",
+    "shellingham>=1.5.0",
+    "colorama>=0.4.6",
 ]
-classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Intended Audience :: Developers",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "License :: Other/Proprietary License",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-]
-# Default install is lightweight; heavy deps are optional extras
-dependencies = []
+
+[project.scripts]
+perceptron = "perceptron.cli:app"
 
 [project.optional-dependencies]
-# Install with: pip install perceptron[torch]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6.8",
+    "ty>=0.1.6",
+]
 torch = [
-  "torch>=2.1.0",
+    "torch>=2.0",
 ]
 
-[project.urls]
-Homepage = "https://github.com/"  # update if desired
+[tool.setuptools.package-dir]
+"" = "src"
 
-[tool.hatch.version]
-path = "perceptron/__init__.py"
-
-[tool.hatch.build]
-include = [
-  "perceptron/**",
-  "README.md",
-  "LICENSE",
-]
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["perceptron*"]
