@@ -1038,7 +1038,7 @@ class IsaacProcessor(ProcessorMixin):
         else:
             images_list = None
 
-        # For now, only support batch_size=1 (following GenesisProcessor)
+        # For now, only support batch_size=1 (following IsaacProcessor)
         if len(texts) != 1:
             raise ValueError("IsaacProcessor currently supports batch_size=1")
         if images_list is not None:
