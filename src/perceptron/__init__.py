@@ -48,7 +48,7 @@ from .pointing.parser import (
 from .dsl.nodes import text, system, agent, image, point, box, polygon, block
 from .dsl.perceive import perceive, async_perceive, inspect_task, PerceiveResult
 from .annotations import annotate_image
-from .highlevel import caption, ocr, detect, detect_from_coco
+from .highlevel import caption, ocr, detect, detect_from_coco, question
 
 __all__ = [
     # Config
@@ -102,6 +102,7 @@ __all__ = [
     "caption",
     "ocr",
     "detect",
+    "question",
     "detect_from_coco",
     "__version__",
 ]

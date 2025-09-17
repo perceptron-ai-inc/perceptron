@@ -25,6 +25,14 @@ def test_caption_command(monkeypatch, tmp_path):
     assert "hello" in result.stdout
 
 
+def test_caption_command_json_output(monkeypatch):
+    monkeypatch.setattr("perceptron.cli.caption_image", lambda *a, **k: _StubResult("hello"))
+    result = runner.invoke(app, ["caption", "https://example.com/img", "--format", "json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["text"] == "hello"
+
+
 def test_caption_command_directory(monkeypatch, tmp_path):
     img1 = tmp_path / "one.png"
     img2 = tmp_path / "two.jpg"
@@ -127,15 +135,39 @@ def test_detect_command_directory(monkeypatch, tmp_path):
     assert points[0]["top_left"]["mention"] == "person"
 
 
-def test_chat_command(monkeypatch):
-    class _StubClient:
-        def generate(self, task, **kwargs):
-            return {"text": "hello", "raw": {}}
-
-    monkeypatch.setattr("perceptron.cli.Client", _StubClient)
-    result = runner.invoke(app, ["chat", "hi there", "--system", "You are kind."])
+def test_question_command(monkeypatch):
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: _StubResult("cat"))
+    result = runner.invoke(app, ["question", "https://example.com/img", "What is shown?"])
     assert result.exit_code == 0
-    assert "hello" in result.stdout
+    assert "cat" in result.stdout
+
+
+def test_question_command_box_json(monkeypatch):
+    res = _StubResult("box answer")
+    res.points = [
+        BoundingBox(
+            top_left=SinglePoint(1, 2, mention="item"),
+            bottom_right=SinglePoint(3, 4),
+            mention="item",
+        )
+    ]
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: res)
+    result = runner.invoke(
+        app,
+        [
+            "question",
+            "https://example.com/img",
+            "Where is the item?",
+            "--expects",
+            "box",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["text"] == "box answer"
+    assert payload["points"][0]["type"] == "box"
 
 
 def test_config_command():

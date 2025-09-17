@@ -75,6 +75,7 @@ def test_async_perceive_compile_only(monkeypatch):
     assert res.text is None
     assert isinstance(res.raw, dict)
     assert res.raw["content"][0]["type"] == "image"
+    assert any(err.get("code") == "credentials_missing" for err in res.errors)
 
 
 def test_async_perceive_supports_async_function(monkeypatch):

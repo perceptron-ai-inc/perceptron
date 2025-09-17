@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
@@ -14,7 +15,7 @@ from rich.table import Table
 from . import caption as caption_image
 from . import detect as detect_image
 from . import ocr as ocr_image
-from .client import Client
+from . import question as question_image
 from .pointing.types import BoundingBox, Collection, Polygon, SinglePoint
 
 console = Console()
@@ -38,6 +39,18 @@ _OUTPUT_FILENAMES = {
     "ocr": "ocr.json",
     "detect": "detections.json",
 }
+
+
+class OutputFormat(str, Enum):
+    TEXT = "text"
+    JSON = "json"
+
+
+class ExpectationType(str, Enum):
+    TEXT = "text"
+    POINT = "point"
+    BOX = "box"
+    POLYGON = "polygon"
 
 
 def _resolve_image(image: str) -> str | bytes:
@@ -107,6 +120,29 @@ def _serialize_points(points: Optional[List[Any]]) -> Optional[List[Any]]:
     if not points:
         return None
     return [_serialize_annotation(point) for point in points]
+
+
+def _result_payload(result: Any, *, include_raw: bool) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    text_value = getattr(result, "text", None)
+    if text_value is not None:
+        payload["text"] = text_value
+    points = _serialize_points(getattr(result, "points", None))
+    if points is not None:
+        payload["points"] = points
+    parsed = getattr(result, "parsed", None)
+    if parsed:
+        payload["parsed"] = parsed
+    usage = getattr(result, "usage", None)
+    if usage:
+        payload["usage"] = usage
+    errors = getattr(result, "errors", None) or []
+    payload["errors"] = errors
+    if include_raw:
+        raw = getattr(result, "raw", None)
+        if raw is not None:
+            payload["raw"] = raw
+    return payload
 
 
 def _process_directory(
@@ -226,6 +262,35 @@ def _print_errors(errors):
     console.print(Panel(table, title="Errors", border_style="red"))
 
 
+def _render_result(
+    result: Any,
+    *,
+    title: str,
+    output_format: OutputFormat,
+    show_raw: bool,
+    show_points_table: bool = False,
+):
+    if output_format is OutputFormat.JSON:
+        payload = _result_payload(result, include_raw=show_raw)
+        console.print_json(data=payload)
+        return
+
+    points_serialized = _serialize_points(getattr(result, "points", None))
+    console.print(Panel(result.text or "<no text>", title=title, border_style="green"))
+    if show_points_table and getattr(result, "points", None):
+        table = Table(title="Detections", show_header=True, header_style="bold blue")
+        table.add_column("Bounding Box")
+        table.add_column("Mention")
+        for point in result.points or []:
+            table.add_row(str(point), getattr(point, "mention", ""))
+        console.print(table)
+    elif points_serialized:
+        console.print_json(data={"points": points_serialized})
+    _print_errors(getattr(result, "errors", []))
+    if show_raw and getattr(result, "raw", None):
+        console.print(result.raw)
+
+
 @app.command()
 def config(
     provider: Optional[str] = typer.Option(None, help="Default provider identifier."),
@@ -258,6 +323,13 @@ def caption(
     style: str = typer.Option("concise", help="Captioning style."),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
 ):
     """Generate captions using the high-level helper."""
 
@@ -285,10 +357,12 @@ def caption(
         return
 
     res = caption_image(img, style=style)
-    console.print(Panel(res.text or "<no text>", title="Caption", border_style="green"))
-    _print_errors(res.errors)
-    if show_raw:
-        console.print(res.raw)
+    _render_result(
+        res,
+        title="Caption",
+        output_format=output_format,
+        show_raw=show_raw,
+    )
 
 
 @app.command()
@@ -296,6 +370,13 @@ def ocr(
     image: str = typer.Argument(..., help="Image path or URL."),
     prompt: Optional[str] = typer.Option(None, help="Optional instruction override."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
 ):
     """Run OCR via the high-level helper."""
 
@@ -313,10 +394,12 @@ def ocr(
 
     img = _resolve_image(image)
     res = ocr_image(img, prompt=prompt)
-    console.print(Panel(res.text or "<no text>", title="OCR", border_style="green"))
-    _print_errors(res.errors)
-    if show_raw:
-        console.print(res.raw)
+    _render_result(
+        res,
+        title="OCR",
+        output_format=output_format,
+        show_raw=show_raw,
+    )
 
 
 @app.command()
@@ -324,6 +407,13 @@ def detect(
     image: str = typer.Argument(..., help="Image path or URL."),
     classes: Optional[str] = typer.Option(None, help="Comma-separated class list."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
 ):
     """Run detection via the high-level helper."""
 
@@ -342,48 +432,63 @@ def detect(
 
     img = _resolve_image(image)
     res = detect_image(img, classes=class_list)
-    console.print(Panel(res.text or "<no text>", title="Detect", border_style="green"))
-    if res.points:
-        table = Table(title="Detections", show_header=True, header_style="bold blue")
-        table.add_column("Bounding Box")
-        table.add_column("Mention")
-        for point in res.points:
-            table.add_row(str(point), getattr(point, "mention", ""))
-        console.print(table)
-    _print_errors(res.errors)
-    if show_raw:
-        console.print(res.raw)
+    _render_result(
+        res,
+        title="Detect",
+        output_format=output_format,
+        show_raw=show_raw,
+        show_points_table=True,
+    )
 
 
 @app.command()
-def chat(
-    user: str = typer.Argument(..., help="User message."),
-    system: Optional[str] = typer.Option(None, help="System instruction."),
-    provider: Optional[str] = typer.Option(None, help="Override provider for this call."),
-    temperature: float = typer.Option(0.0, help="Sampling temperature."),
+def question(
+    image: str = typer.Argument(..., help="Image path or URL."),
+    prompt: str = typer.Argument(..., help="Question to answer about the image."),
+    expects: ExpectationType = typer.Option(
+        ExpectationType.TEXT,
+        "--expects",
+        case_sensitive=False,
+        help="Expected output structure (text, point, box, or polygon).",
+    ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
+    show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
 ):
-    """Send a low-level chat-style request."""
+    """Answer a question about an image."""
 
-    task_content = []
-    if system:
-        task_content.append({"type": "text", "role": "system", "content": system})
-    task_content.append({"type": "text", "role": "user", "content": user})
-    task = {"content": task_content}
-    client = Client()
+    path = Path(image)
+    if path.is_dir():
+        raise typer.BadParameter("Directory mode is not supported for 'question'.")
+
+    try:
+        img = _resolve_image(image)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    expects_value = expects.value
 
     if stream:
-        console.print(Panel("Streaming chat", title="Chat", border_style="cyan"))
-        for event in client.stream(task, provider=provider, temperature=temperature):
+        console.print(Panel("Streaming question", title="Question", border_style="cyan"))
+        for event in question_image(img, prompt, expects=expects_value, stream=True):
             console.print(event)
         return
 
-    res = client.generate(task, provider=provider, temperature=temperature)
-    console.print(Panel(res.get("text") or "<no text>", title="Chat", border_style="cyan"))
-    if res.get("raw"):
-        console.print(res["raw"])
-
-
+    res = question_image(img, prompt, expects=expects_value)
+    show_points = expects in {ExpectationType.POINT, ExpectationType.BOX, ExpectationType.POLYGON}
+    _render_result(
+        res,
+        title="Question",
+        output_format=output_format,
+        show_raw=show_raw,
+        show_points_table=show_points and expects is ExpectationType.BOX,
+    )
 def main():  # pragma: no cover
     app()
 

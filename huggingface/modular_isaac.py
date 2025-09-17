@@ -470,7 +470,7 @@ class Siglip2SequenceVisionTransformer(nn.Module):
 # Configuration
 # ============================================================================
 
-MAX_PIXELS = 60_000_000  # 60‑megapixel ceiling ≈ 8200 × 7300 px
+MAX_PIXELS = 60_000_000  # 60-megapixel ceiling ≈ 8200 × 7300 px
 
 # Vision preprocessing constants
 VISION_MEAN = (0.5, 0.5, 0.5)
@@ -487,13 +487,13 @@ def _make_writeable(arr: np.ndarray) -> np.ndarray:
     if arr.flags.writeable:
         return arr
 
-    # First, try the cheap path — in‑place flag toggle (works for mmap'd arrays
+    # First, try the cheap path — in-place flag toggle (works for mmap'd arrays
     # and some shared memory buffers):
     try:
         arr.setflags(write=True)
         return arr  # success: no data copy
     except ValueError:
-        # Buffer is inherently read‑only (e.g. backed by PyAV / PIL): make copy
+        # Buffer is inherently read-only (e.g. backed by PyAV / PIL): make copy
         return arr.copy()
 
 

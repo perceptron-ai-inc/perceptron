@@ -35,6 +35,7 @@ def test_detect_compile_only(monkeypatch):
     assert res.raw and isinstance(res.raw, dict)
     roles = [item.get("role") for item in res.raw.get("content", [])]
     assert roles and roles[0] == "system"
+    assert any(err.get("code") == "credentials_missing" for err in res.errors)
 
 
 def test_detect_with_examples(monkeypatch):

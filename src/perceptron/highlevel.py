@@ -100,6 +100,66 @@ def caption(
 
 
 # ---------------------------------------------------------------------------
+# Question Answering
+# ---------------------------------------------------------------------------
+
+
+def _question_sequence(
+    image_obj: Any,
+    question_text: str,
+    expects: Optional[str],
+) -> SequenceNode:
+    if expects in {"point", "box", "polygon"}:
+        system_instruction = (
+            "You are a grounded vision assistant. Answer the user's question and cite the relevant "
+            "regions using structured tags."
+        )
+    else:
+        system_instruction = "You are a visual question answering assistant. Provide a direct, concise answer."
+
+    nodes = [system(system_instruction)]
+    hint = _expectation_hint_text(expects)
+    if hint:
+        nodes.append(text(hint))
+    nodes.append(image_node(image_obj))
+    nodes.append(text(question_text))
+    return SequenceNode(nodes)
+
+
+def question(
+    image_obj: Any,
+    question_text: str,
+    *,
+    expects: str = "text",
+    stream: bool = False,
+    **gen_kwargs: Any,
+):
+    """Answer a question about an image, optionally requesting structured outputs."""
+
+    normalized = expects.lower()
+    valid = {"text", "point", "box", "polygon"}
+    if normalized not in valid:
+        raise BadRequestError(f"Unsupported expects value: {expects}")
+
+    structured_expectation: Optional[str] = normalized if normalized in {"point", "box", "polygon"} else None
+    allow_multiple = structured_expectation is not None
+
+    perceive_kwargs: dict[str, Any] = {
+        "stream": stream,
+        "expects": structured_expectation,
+        "allow_multiple": allow_multiple,
+    }
+    perceive_kwargs.update(gen_kwargs)
+    qa_runner = perceive(**perceive_kwargs)
+
+    @qa_runner
+    def _run():
+        return _question_sequence(image_obj, question_text, structured_expectation)
+
+    return _run()
+
+
+# ---------------------------------------------------------------------------
 # OCR
 # ---------------------------------------------------------------------------
 

@@ -169,8 +169,8 @@ perceptron ocr schematic.png --prompt "Extract component labels"
 # Batched detection (writes detections.json)
 perceptron detect ./factory-frames --classes defect,warning
 
-# Chat-style prompt wrapping
-perceptron chat "Summarize anomalies" --system "You are a grounded vision assistant"
+# Grounded question answering
+perceptron question image.jpg "What stands out?" --expects box --format json
 ```
 
 Directory mode disables streaming but logs raw responses and aggregates validation issues per file.
