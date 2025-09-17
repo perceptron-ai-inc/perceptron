@@ -21,9 +21,9 @@ from transformers import AutoTokenizer, AutoConfig
 from loguru import logger
 
 from genesis.data.schema import Document, Text, Image, Role
-from genesis.public.tensorstream.tensor_stream_utils import tensor_stream_token_view, modality_mask
-from genesis.public.tensorstream.tensor_stream import VisionType
-from genesis.public.huggingface.modular_genesis import GenesisProcessor, GenesisForConditionalGeneration
+from perceptron.tensorstream import VisionType
+from perceptron.tensorstream.utils import tensor_stream_token_view, modality_mask
+from huggingface.modular_genesis import GenesisProcessor, GenesisForConditionalGeneration
 from genesis.scripts.core.initializations.convert_perceptron_to_huggingface import convert_perceptron_to_huggingface
 
 

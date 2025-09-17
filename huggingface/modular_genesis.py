@@ -32,7 +32,7 @@ from transformers.models.siglip2.modeling_siglip2 import (
     Siglip2MLP,
 )
 from transformers.models.siglip2.configuration_siglip2 import Siglip2VisionConfig
-from genesis.public.tensorstream.tensor_stream import (
+from perceptron.tensorstream import (
     Event,
     Stream,
     TensorStream,
@@ -41,7 +41,7 @@ from genesis.public.tensorstream.tensor_stream import (
     create_stream,
     group_streams,
 )
-from genesis.public.tensorstream.tensor_stream_utils import (
+from perceptron.tensorstream.utils import (
     compute_mrope_pos_tensor,
     modality_mask,
     reconstruct_tensor_stream_from_compact_dict,

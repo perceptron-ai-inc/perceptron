@@ -18,7 +18,7 @@ def __getattr__(name: str):
         if _TensorStream is not None:
             return _TensorStream
         try:
-            from .tensorstream.tensor_stream import TensorStream as _TS
+            from .tensorstream.tensorstream import TensorStream as _TS
             _TensorStream = _TS
             return _TensorStream
         except Exception as e:  # defer import errors until attribute access

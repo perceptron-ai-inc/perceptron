@@ -4,7 +4,7 @@ from typing import Any
 
 import torch
 
-from .tensor_stream import Event, ModalityType, Stream, TensorStream, create_stream, group_streams
+from .tensorstream import Event, ModalityType, Stream, TensorStream, create_stream, group_streams
 
 
 def compute_mrope_pos_tensor(ts: TensorStream, n_pos_dims: int = 3) -> torch.Tensor:
