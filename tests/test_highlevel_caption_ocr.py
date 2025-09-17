@@ -12,6 +12,15 @@ def test_caption_highlevel_compile_only():
     assert any(err.get("code") == "credentials_missing" for err in res.errors)
 
 
+def test_caption_highlevel_text_expectation():
+    res = caption(PNG_BYTES, expects="text")
+    assert res.raw and isinstance(res.raw, dict)
+    assert res.raw.get("expects") is None
+    content = res.raw.get("content", [])
+    assert all(entry.get("content") != '<hint>BOX</hint>' for entry in content)
+    assert any(err.get("code") == "credentials_missing" for err in res.errors)
+
+
 def test_caption_style_validation():
     try:
         caption(PNG_BYTES, style="unknown")

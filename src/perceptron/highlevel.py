@@ -63,14 +63,14 @@ def _expectation_hint_text(expects: Optional[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _caption_sequence(image_obj: Any, style: str) -> SequenceNode:
+def _caption_sequence(image_obj: Any, style: str, expects: Optional[str]) -> SequenceNode:
     style_map = {
         "concise": "Provide a concise, human-friendly caption for the upcoming image.",
         "detailed": "Provide a detailed caption describing key objects, relationships, and context in the upcoming image.",
     }
     if style not in style_map:
         raise BadRequestError(f"Unsupported caption style: {style}")
-    hint = _expectation_hint_text("box")
+    hint = _expectation_hint_text(expects)
     nodes = []
     if hint:
         nodes.append(text(hint))
@@ -83,18 +83,27 @@ def caption(
     image_obj: Any,
     *,
     style: str = "concise",
+    expects: str = "box",
     stream: bool = False,
     **gen_kwargs: Any,
 ):
     """Generate a caption for an image using predefined best-practice prompts."""
 
-    perceive_kwargs: dict[str, Any] = {"stream": stream, "expects": "box", "allow_multiple": True}
+    normalized = expects.lower() if isinstance(expects, str) else expects
+    valid = {"text", "point", "box", "polygon"}
+    if normalized not in valid:
+        raise BadRequestError(f"Unsupported caption expects value: {expects}")
+
+    structured_expectation: Optional[str] = normalized if normalized in {"point", "box", "polygon"} else None
+    allow_multiple = structured_expectation is not None
+
+    perceive_kwargs: dict[str, Any] = {"stream": stream, "expects": structured_expectation, "allow_multiple": allow_multiple}
     perceive_kwargs.update(gen_kwargs)
     captioner = perceive(**perceive_kwargs)
 
     @captioner
     def _run():
-        return _caption_sequence(image_obj, style)
+        return _caption_sequence(image_obj, style, structured_expectation)
 
     return _run()
 

@@ -33,6 +33,13 @@ def test_caption_command_json_output(monkeypatch):
     assert payload["text"] == "hello"
 
 
+def test_caption_command_text_expectation(monkeypatch):
+    monkeypatch.setattr("perceptron.cli.caption_image", lambda *a, **k: _StubResult("caption"))
+    result = runner.invoke(app, ["caption", "https://example.com/img", "--expects", "text"])
+    assert result.exit_code == 0
+    assert "caption" in result.stdout
+
+
 def test_caption_command_directory(monkeypatch, tmp_path):
     img1 = tmp_path / "one.png"
     img2 = tmp_path / "two.jpg"
@@ -133,6 +140,31 @@ def test_detect_command_directory(monkeypatch, tmp_path):
     assert points and points[0]["type"] == "box"
     assert points[0]["top_left"]["x"] == 1
     assert points[0]["top_left"]["mention"] == "person"
+
+
+def test_detect_command_stream(monkeypatch):
+    events = [
+        {"type": "text.delta", "chunk": "hi"},
+        {"type": "final", "result": {"text": "done", "errors": []}},
+    ]
+
+    def _fake_detect(image, *, classes=None, stream=False):
+        assert stream is True
+        return iter(events)
+
+    captured = {}
+
+    def _fake_stream_render(ev, **kwargs):
+        captured["events"] = list(ev)
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("perceptron.cli.detect_image", _fake_detect)
+    monkeypatch.setattr("perceptron.cli._stream_render", _fake_stream_render)
+
+    result = runner.invoke(app, ["detect", "https://example.com/img", "--stream"])
+    assert result.exit_code == 0
+    assert captured["events"] == events
+    assert captured["kwargs"]["show_points_table"] is True
 
 
 def test_question_command(monkeypatch):

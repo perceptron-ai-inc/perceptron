@@ -45,6 +45,7 @@ def test_stream_text_and_points(monkeypatch):
         chunks = [
             _sse({"choices": [{"delta": {"content": "Hello "}}]}),
             _sse({"choices": [{"delta": {"content": "<point> (1,2) </point>!"}}]}),
+            _sse({"usage": {"prompt_tokens": 12, "completion_tokens": 3}}),
             "data: [DONE]",
         ]
         return _MockResp(chunks, status=200)
@@ -67,6 +68,7 @@ def test_stream_text_and_points(monkeypatch):
     assert types[-1] == "final"
     # Ensure points.delta emitted once after tag closes
     assert any(e.get("type") == "points.delta" for e in events)
+    assert events[-1]["result"]["usage"]["prompt_tokens"] == 12
 
 
 def test_stream_http_error(monkeypatch):

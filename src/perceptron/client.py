@@ -277,6 +277,8 @@ class Client:
         cumulative: str = ""
         emitted_spans: set[tuple[int, int]] = set()
         parsing_enabled: bool = True
+        usage_payload: dict[str, Any] | None = None
+
         try:
             with requests.post(url, headers=headers, data=json.dumps(body), timeout=s.timeout, stream=True) as resp:
                 if resp.status_code != 200:
@@ -299,6 +301,10 @@ class Client:
                         obj = json.loads(data)
                     except Exception:
                         continue
+                    if isinstance(obj, dict) and obj.get("usage") and usage_payload is None:
+                        usage_field = obj.get("usage")
+                        if isinstance(usage_field, dict):
+                            usage_payload = usage_field
                     try:
                         delta = obj["choices"][0]["delta"].get("content")
                     except Exception:
@@ -338,13 +344,15 @@ class Client:
         issues: list[dict] = []
         if not parsing_enabled:
             issues.append({"code": "stream_buffer_overflow", "message": "parsing disabled due to buffer limit"})
+        if usage_payload:
+            result["usage"] = usage_payload
         yield {
             "type": "final",
             "result": {
                 "text": result.get("text"),
                 "points": result.get("points"),
                 "parsed": result.get("parsed"),
-                "usage": None,
+                "usage": result.get("usage"),
                 "errors": issues,
                 "raw": result.get("raw"),
             },
