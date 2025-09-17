@@ -1,11 +1,11 @@
-from .modular_genesis import (
-    GenesisConfig,
-    GenesisProcessor,
-    GenesisForConditionalGeneration,
+from .modular_isaac import (
+    IsaacConfig,
+    IsaacProcessor,
+    IsaacForConditionalGeneration,
 )
 
 __all__ = [
-    "GenesisConfig",
-    "GenesisProcessor",
-    "GenesisForConditionalGeneration",
+    "IsaacConfig",
+    "IsaacProcessor",
+    "IsaacForConditionalGeneration",
 ]

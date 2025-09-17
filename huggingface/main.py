@@ -1,10 +1,10 @@
 """
-Demonstration of HuggingFace Genesis pipeline using modular implementation.
+Demonstration of HuggingFace Perceptron pipeline using modular implementation.
 
 This script shows how to:
 1. Create a multimodal Document with text and images
-2. Process it through GenesisProcessor to create TensorStreams
-3. Run the TensorStream through GenesisForCausalLM model
+2. Process it through IsaacProcessor to create TensorStreams
+3. Run the TensorStream through IsaacForCausalLM model
 4. Generate text continuations
 
 Example usage:
@@ -28,7 +28,7 @@ if REPO_ROOT not in sys.path:
 
 from perceptron.tensorstream import VisionType
 from perceptron.tensorstream.ops import tensor_stream_token_view, modality_mask
-from huggingface.modular_isaac import GenesisProcessor, GenesisForConditionalGeneration
+from huggingface.modular_isaac import IsaacProcessor, IsaacForConditionalGeneration
 
 
 # Create a dummy multimodal input (text + image) without external schema dependencies
@@ -110,9 +110,9 @@ def decode_tensor_stream(tensor_stream, tokenizer):
 
 
 def main():
-    """Main demonstration of the HuggingFace Genesis pipeline."""
+    """Main demonstration of the HuggingFace Perceptron pipeline."""
     logger.info("=" * 60)
-    logger.info("HuggingFace Genesis Modular Implementation Demo")
+    logger.info("HuggingFace Perceptron Modular Implementation Demo")
     logger.info("=" * 60)
 
     hf_path = "/home/akshat/github/genesis/genesis_isaac_dpo_hf_converted_checkpoint"
@@ -120,12 +120,12 @@ def main():
     # Load processor and config from the HF checkpoint
     logger.info(f"Loading processor and config from HF checkpoint: {hf_path}")
     tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=True, use_fast=False)
-    genesis_config = AutoConfig.from_pretrained(hf_path, trust_remote_code=True)
-    processor = GenesisProcessor(tokenizer=tokenizer, config=genesis_config)
+    config = AutoConfig.from_pretrained(hf_path, trust_remote_code=True)
+    processor = IsaacProcessor(tokenizer=tokenizer, config=config)
 
     # Load model from the HF checkpoint
-    logger.info(f"Loading GenesisForConditionalGeneration model from HF checkpoint: {hf_path}")
-    model = GenesisForConditionalGeneration.from_pretrained(hf_path)
+    logger.info(f"Loading ForConditionalGeneration model from HF checkpoint: {hf_path}")
+    model = IsaacForConditionalGeneration.from_pretrained(hf_path)
 
     # Move to appropriate device and dtype
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -140,7 +140,7 @@ def main():
     logger.info(f"Document content: {DUMMY_DOCUMENT}")
 
     # Convert document to messages format
-    messages, images = document_to_messages(DUMMY_DOCUMENT, vision_token=genesis_config.vision_token)
+    messages, images = document_to_messages(DUMMY_DOCUMENT, vision_token=config.vision_token)
     logger.info(f"\nConverted to messages: {messages}")
     logger.info(f"Number of images: {len(images)}")
 
@@ -148,7 +148,7 @@ def main():
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     logger.info(f"\nFormatted text after chat template:\n{text}")
 
-    # Process with GenesisProcessor
+    # Process with IsaacProcessor
     device = next(model.parameters()).device
     inputs = processor(text=text, images=images, return_tensors="pt")
     tensor_stream = inputs["tensor_stream"].to(device)
