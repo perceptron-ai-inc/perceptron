@@ -50,6 +50,18 @@ from .dsl.perceive import perceive, async_perceive, inspect_task, PerceiveResult
 from .annotations import annotate_image
 from .highlevel import caption, ocr, detect, detect_from_coco, question
 
+# Lazy-load selected subpackages to allow attribute-style access like
+# `perceptron.tensorstream` without importing it eagerly (and without forcing
+# optional dependencies like torch unless used).
+def __getattr__(name):
+    if name == "tensorstream":
+        import importlib
+
+        module = importlib.import_module(f"{__name__}.tensorstream")
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 __all__ = [
     # Config
     "configure",
@@ -105,4 +117,6 @@ __all__ = [
     "question",
     "detect_from_coco",
     "__version__",
+    # Lazily exposed subpackages
+    "tensorstream",
 ]
