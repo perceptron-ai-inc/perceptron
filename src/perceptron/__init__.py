@@ -11,7 +11,7 @@ This initial scaffold focuses on the compile/runtime pieces that do not require
 network access. Transport and streaming are added in later phases.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .config import configure, config, settings
 from .client import Client, AsyncClient
