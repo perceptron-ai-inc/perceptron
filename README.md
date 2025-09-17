@@ -1,111 +1,51 @@
 # Perceptron SDK
 
-Isaac 0.1 is Perceptron's first perceptive-language model: a 2B-parameter system built to understand and act in the physical world. Despite being over significantly smaller than incumbent perception stacks, it matches or outperforms far larger models across grounded reasoning, in-context learning, and fine-grained visual analysis. This repository ships the Python SDK and CLI you need to bring Isaac into production workflows today.
-
----
-
-## Why Isaac
-- **Efficient frontier performance** - attain state-of-the-art perception quality with edge-ready latency, power, and cost.
-- **Grounded spatial intelligence** - answer questions with highlighted evidence, resilient to occlusion and clutter.
-- **Few-shot adaptability** - teach new categories or defects inline via prompt examples; no custom detector retraining.
-- **Fine-grained reading** - robust OCR over dense layouts and small text.
-- **Conversational pointing** - every claim stays synchronized with cited visual regions to reduce hallucinations.
-
-> Explore the interactive demo, open weights, and model card on Hugging Face; hosted inference is available via the fal.ai partner endpoint.
-
----
-
-## Feature Highlights
-- **Visual QA, simply trained** - reproducible recipe delivering strong diagram and real-world benchmark scores.
-- **Grounded localization** - precise pointing outputs for automation, inspection, and human-in-the-loop review.
-- **In-context perception** - prompt the model with a few annotated examples to adapt on the fly.
-- **OCR & micro-detail** - dynamic image handling keeps tiny features legible across resolutions.
-- **Auditable reasoning** - conversational pointing couples language and vision turn-by-turn.
-
----
-
-## Quick Performance Snapshot
-- **Grounding & localization:** high-precision pointing under occlusion and clutter.
-- **Visual question answering:** leads the 2B parameter class and competes with much larger systems.
-- **In-context object learning:** matches / exceeds fine-tuned YOLO-style detectors without task-specific retraining.
-
-Full benchmark tables, prompts, and methodology will be published in the upcoming technical report.
-
----
-
-## Get Started Now
-| Resource | Link |
-| --- | --- |
-| Interactive demo | _Upload images and test Isaac in your browser_ |
-| Open weights | Isaac 0.1 (2B) checkpoint on Hugging Face |
-| Model card & docs | Hugging Face hub documentation |
-| Hosted inference | fal.ai partner endpoint (configure via `PERCEPTRON_PROVIDER=fal`) |
-| Python SDK | This repository (`.`) |
-| Technical report | Coming soon |
-
----
-
-## Repository Layout
-- `src/perceptron` – core SDK modules and tensorstream extras
-- `examples` – runnable usage samples
-- `tests` – pytest suite covering the high-level APIs and DSL
+Python SDK and CLI for perceptive-language models. The SDK is provider-agnostic and lets you compose visual + language tasks, run them locally for inspection, or execute them via a configured provider. Choose a provider and optional model per call; keep your application code stable across model updates.
 
 ---
 
 ## Installation
-Perceptron currently ships as a source package. The `perceptron` project on PyPI is unrelated, so install directly from this repository.
+Perceptron currently ships as a source package (the `perceptron` project on PyPI is unrelated). Install directly from this repository.
 
-### Prerequisites
-- Python 3.10+
-- `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv) if you prefer)
+- Prerequisites: Python 3.10+, `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv))
 
-### Install from a local checkout
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
+
+# Optional extras
+python -m pip install -e .[torch]    # TensorStream helpers (requires PyTorch)
+python -m pip install -e .[dev]      # Dev tooling
 ```
 
-The CLI entry point `perceptron` is available as soon as the install finishes.
-
-- Optional TensorStream helpers (requires PyTorch): `python -m pip install -e .[torch]`
-- Development tooling: `python -m pip install -e .[dev]`
-- Non-editable install for packaging/CI: `python -m pip install .`
-
-#### Using `uv`
+Using `uv`:
 ```bash
 uv pip install --editable .
-uv pip install --editable .[torch]   # extras behave the same way
+uv pip install --editable .[torch]
 ```
 
----
-
-## Development
-- Install tooling: `python -m pip install -e .[dev]` (or `uv pip install --editable .[dev]`)
-- Enable git hooks: `pre-commit install`
-- Run all checks locally: `pre-commit run --all-files`
+The CLI entry point `perceptron` is available after install.
 
 ---
 
 ## Configuration
-The SDK is transport-agnostic; the fal.ai endpoint is bundled by default. Additional providers can be registered by extending `perceptron.client._PROVIDER_CONFIG`.
+Set credentials and defaults via environment, programmatically, or the CLI. The SDK ships with a `fal` provider; you can add others by extending `perceptron.client._PROVIDER_CONFIG`.
 
-| Variable | Purpose | Example |
-| --- | --- | --- |
-| `PERCEPTRON_PROVIDER` | Provider identifier (`fal` by default) | `fal` |
-| `PERCEPTRON_API_KEY` | API key supplied to the provider | `sk_live_...` |
-| `PERCEPTRON_BASE_URL` | Optional override for the provider base URL | `https://fal.run` |
-| `FAL_KEY` | Alternative env var consumed when provider=`fal` | `fal_sk_...` |
+- `PERCEPTRON_PROVIDER`: provider identifier (default `fal`)
+- `PERCEPTRON_API_KEY`: API key for the selected provider
+- `PERCEPTRON_BASE_URL`: override provider base URL when needed
+- `FAL_KEY`: alternative env var used when `provider=fal`
 
-Programmatic overrides:
+Programmatic configuration:
 ```python
 from perceptron import configure, config
 
 configure(provider="fal", api_key="sk_live_...", base_url="https://api.example/v1")
 
 with config(max_tokens=512):
-    ...  # run caption/detect helpers with temporary overrides
+    ...  # temporary overrides inside the context
 ```
 
 CLI helper:
@@ -113,7 +53,7 @@ CLI helper:
 perceptron config --provider fal --api-key sk_live_...
 ```
 
-If no provider credentials are found, all helpers return compile-only payloads so you can inspect tasks before executing them remotely.
+No credentials? Helpers return compile-only payloads so you can inspect tasks without sending requests.
 
 ---
 
@@ -121,12 +61,12 @@ If no provider credentials are found, all helpers return compile-only payloads s
 ```python
 from perceptron import caption, detect
 
-# Captioning
-a = caption("/path/to/image.png", style="concise")
-print(a.text)
+# Caption an image (provider default model)
+result = caption("/path/to/image.png", style="concise")
+print(result.text)
 
-# Streaming grounded detections
-for event in detect("local.png", classes=["person", "forklift"], stream=True):
+# Stream grounded detections; optionally select a specific model
+for event in detect("local.png", classes=["person", "forklift"], model="perceptron", stream=True):
     if event["type"] == "text.delta":
         print("chunk", event["chunk"])
     elif event["type"] == "points.delta":
@@ -135,16 +75,15 @@ for event in detect("local.png", classes=["person", "forklift"], stream=True):
         print("final", event["result"]["points"])
 ```
 
-### Few-shot detection from COCO datasets
+### Few-shot detection from COCO
 ```python
 from perceptron import detect_from_coco
 
 runs = detect_from_coco(
-    "/datasets/isaac-demo",
+    "/datasets/demo",
     split="train",
-    shots=4,                # build balanced ICL examples automatically
+    shots=4,                 # build balanced in-context examples automatically
     classes=["defect", "ok"],
-    max_tokens=256,
 )
 
 for sample in runs:
@@ -156,31 +95,24 @@ for sample in runs:
 ---
 
 ## CLI Usage
-Isaac's CLI mirrors the high-level helpers and supports directory batching (JSON summaries emitted alongside input folders).
+The CLI mirrors the high-level helpers and supports directory batching (JSON summaries written alongside input folders).
 
 ```bash
 # Generate captions
 perceptron caption image.jpg
-perceptron caption ./line-inspection --style detailed
+perceptron caption ./images --style detailed
 
 # OCR with a custom prompt
 perceptron ocr schematic.png --prompt "Extract component labels"
 
 # Batched detection (writes detections.json)
-perceptron detect ./factory-frames --classes defect,warning
+perceptron detect ./frames --classes defect,warning
 
 # Chat-style prompt wrapping
 perceptron chat "Summarize anomalies" --system "You are a grounded vision assistant"
 ```
 
-Directory mode disables streaming but logs raw responses and aggregates validation issues per file.
-
----
-
-## Testing & Quality Gates
-- Unit tests: `pytest tests`
-- Linting: `ruff check src tests`
-- Static typing: `ty src`
+Directory mode disables streaming and logs raw responses, plus per-file validation issues.
 
 ---
 
@@ -190,9 +122,21 @@ Directory mode disables streaming but logs raw responses and aggregates validati
 - `detect(image, *, classes=None, examples=None, stream=False, **kwargs)`
 - `detect_from_coco(dataset_dir, *, split=None, classes=None, shots=0, limit=None, **kwargs)`
 
-`detect_from_coco` automatically discovers annotations, constructs balanced in-context examples when `shots > 0`, and returns a list of `CocoDetectResult` objects containing both original COCO metadata and inference results.
+Notes
+- Pass `model="..."`, `provider="..."`, `max_tokens=...`, etc., through `**kwargs` on any helper.
+- `detect_from_coco` discovers annotations, constructs balanced examples when `shots > 0`, and returns `CocoDetectResult` objects.
+- For advanced workflows, build tasks with the typed DSL (`text`, `system`, `image`, `point`, `box`, `polygon`, `collection`) and decorate with `@perceive` / `@async_perceive`. Use the inspector attached to decorated functions to view compiled payloads without executing.
 
-For advanced workflows, compose tasks directly with the typed DSL (`text`, `system`, `image`, `point`, `box`, `polygon`, `collection`) and decorate with `@perceive` / `@async_perceive`. Use `inspect_task(fn, *args)` to view the compiled payload without executing it.
+---
+
+## Models
+Model information lives here, separate from SDK usage. This SDK works with multiple releases and providers.
+
+- Selecting models: pass `model="..."` to helpers or rely on the provider’s default.
+- Current sources: open weights (e.g., on Hugging Face) and hosted inference via partner providers (e.g., `fal`).
+- Provider defaults: the bundled `fal` provider uses `model="perceptron"` by default; override as needed.
+
+Refer to your deployment docs for the latest supported model names, capabilities, and size/performance notes.
 
 ---
 
@@ -206,9 +150,19 @@ For advanced workflows, compose tasks directly with the typed DSL (`text`, `syst
 
 ---
 
-## Contacts & Support
-- Technical inquiries: [support@perceptron.inc](mailto:support@perceptron.inc)
-- Commercial engagements: [sales@perceptron.inc](mailto:sales@perceptron.inc)
-- Careers: [join-us@perceptron.inc](mailto:join-us@perceptron.inc)
+## Development
+- Install tooling: `python -m pip install -e .[dev]` (or `uv pip install --editable .[dev]`)
+- Enable git hooks: `pre-commit install`
+- Run all checks: `pre-commit run --all-files`
 
-Isaac 0.1 is just the beginning. We're partnering with enterprises in manufacturing, logistics, and security - and we're already building the next generation of models to push the frontier of physical AI. Let us know what you ship with it.
+Repository layout
+- `src/perceptron` – core SDK and DSL
+- `examples` – runnable usage samples
+- `tests` – high-level API and DSL tests
+
+---
+
+## Contacts & Support
+- Technical: [support@perceptron.inc](mailto:support@perceptron.inc)
+- Commercial: [sales@perceptron.inc](mailto:sales@perceptron.inc)
+- Careers: [join-us@perceptron.inc](mailto:join-us@perceptron.inc)
