@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
+import time
+from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import typer
-from rich.console import Console
+from rich.console import Console, Group
+from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from . import caption as caption_image
 from . import detect as detect_image
 from . import ocr as ocr_image
-from .client import Client
+from . import question as question_image
 from .pointing.types import BoundingBox, Collection, Polygon, SinglePoint
 
 console = Console()
@@ -38,6 +43,18 @@ _OUTPUT_FILENAMES = {
     "ocr": "ocr.json",
     "detect": "detections.json",
 }
+
+
+class OutputFormat(str, Enum):
+    TEXT = "text"
+    JSON = "json"
+
+
+class ExpectationType(str, Enum):
+    TEXT = "text"
+    POINT = "point"
+    BOX = "box"
+    POLYGON = "polygon"
 
 
 def _resolve_image(image: str) -> str | bytes:
@@ -107,6 +124,49 @@ def _serialize_points(points: Optional[List[Any]]) -> Optional[List[Any]]:
     if not points:
         return None
     return [_serialize_annotation(point) for point in points]
+
+
+def _serialize_parsed(parsed: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+    if not parsed:
+        return None
+    serialized: List[Dict[str, Any]] = []
+    for segment in parsed:
+        if not isinstance(segment, dict):
+            serialized.append({"kind": "unknown", "value": str(segment)})
+            continue
+        seg_copy = dict(segment)
+        kind = seg_copy.get("kind")
+        if kind in {"point", "box", "polygon", "collection"} and "value" in seg_copy:
+            try:
+                seg_copy["value"] = _serialize_annotation(seg_copy["value"])
+            except Exception:
+                seg_copy["value"] = str(seg_copy.get("value"))
+        serialized.append(seg_copy)
+    return serialized
+
+
+def _result_payload(result: Any, *, include_raw: bool) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    text_value = getattr(result, "text", None)
+    if text_value is not None:
+        payload["text"] = text_value
+    points = _serialize_points(getattr(result, "points", None))
+    if points is not None:
+        payload["points"] = points
+    parsed = getattr(result, "parsed", None)
+    serialized_parsed = _serialize_parsed(parsed)
+    if serialized_parsed is not None:
+        payload["parsed"] = serialized_parsed
+    usage = getattr(result, "usage", None)
+    if usage:
+        payload["usage"] = usage
+    errors = getattr(result, "errors", None) or []
+    payload["errors"] = errors
+    if include_raw:
+        raw = getattr(result, "raw", None)
+        if raw is not None:
+            payload["raw"] = raw
+    return payload
 
 
 def _process_directory(
@@ -193,8 +253,12 @@ def _process_directory(
         console.print(Panel(table, title="Errors", border_style="red"))
 
 
-def _caption_payload(result: Any) -> str:
-    return getattr(result, "text", None) or ""
+def _caption_payload(result: Any) -> Any:
+    text_value = getattr(result, "text", None) or ""
+    points = _serialize_points(getattr(result, "points", None))
+    if points:
+        return {"text": text_value, "points": points}
+    return text_value
 
 
 def _ocr_payload(result: Any) -> str:
@@ -224,6 +288,282 @@ def _print_errors(errors):
     for err in errors:
         table.add_row(str(err.get("code")), str(err.get("message")))
     console.print(Panel(table, title="Errors", border_style="red"))
+
+
+def _describe_point(point: Any) -> tuple[str, str, str]:
+    """Return a tuple describing the point for streaming displays."""
+
+    if isinstance(point, BoundingBox):
+        coords = f"({point.top_left.x},{point.top_left.y}) → ({point.bottom_right.x},{point.bottom_right.y})"
+        return ("box", coords, point.mention or "")
+    if isinstance(point, SinglePoint):
+        coords = f"({point.x},{point.y})"
+        return ("point", coords, point.mention or "")
+    if isinstance(point, Polygon):
+        coords = ", ".join(f"({p.x},{p.y})" for p in point.hull[:4])
+        if len(point.hull) > 4:
+            coords += ", …"
+        return ("polygon", coords, point.mention or "")
+    if isinstance(point, Collection):
+        return ("collection", f"{len(point.points)} items", point.mention or "")
+    return (type(point).__name__, str(point), getattr(point, "mention", "") or "")
+
+
+def _build_points_table(points: Iterable[Any]) -> Table:
+    table = Table(title="Points", show_header=True, header_style="bold blue")
+    table.add_column("type")
+    table.add_column("coords")
+    table.add_column("mention")
+    for point in points:
+        kind, coords, mention = _describe_point(point)
+        table.add_row(kind, coords, mention)
+    return table
+
+
+def _dedupe_errors(errors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen: set[tuple[Any, Any]] = set()
+    unique: List[Dict[str, Any]] = []
+    for err in errors:
+        code = err.get("code")
+        message = err.get("message")
+        key = (code, message)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(err)
+    return unique
+
+
+def _coerce_result_dict(result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "text": result.get("text"),
+        "points": result.get("points"),
+        "parsed": result.get("parsed"),
+        "usage": result.get("usage"),
+        "errors": result.get("errors") or [],
+        "raw": result.get("raw"),
+    }
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        if isinstance(value, bool):  # avoid True -> 1
+            return 1 if value else 0
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_usage(usage: Any) -> Dict[str, Any]:
+    if isinstance(usage, dict):
+        return usage
+    if hasattr(usage, "_asdict"):
+        return dict(usage._asdict())  # type: ignore[attr-defined]
+    if hasattr(usage, "__dict__"):
+        return dict(getattr(usage, "__dict__"))
+    return {}
+
+
+def _resolve_usage_tokens(usage: Optional[Dict[str, Any]]) -> tuple[Optional[int], Optional[int]]:
+    if not usage:
+        return (None, None)
+    usage_map = _normalize_usage(usage)
+    prompt_keys = ["prompt_tokens", "input_tokens", "prompt"]
+    completion_keys = ["completion_tokens", "output_tokens", "completion"]
+    tokens_in = None
+    tokens_out = None
+    for key in prompt_keys:
+        tokens_in = _coerce_int(usage_map.get(key))
+        if tokens_in is not None:
+            break
+    for key in completion_keys:
+        tokens_out = _coerce_int(usage_map.get(key))
+        if tokens_out is not None:
+            break
+    return (tokens_in, tokens_out)
+
+
+def _stream_render(
+    events: Iterable[Dict[str, Any]],
+    *,
+    title: str,
+    output_format: OutputFormat,
+    show_raw: bool,
+    show_points_table: bool,
+) -> None:
+    """Render streaming events inside a live-updating panel."""
+
+    text_buffer: List[str] = []
+    points_buffer: List[Any] = []
+    errors: List[Dict[str, Any]] = []
+    final_result: Dict[str, Any] | None = None
+    usage_info: Optional[Dict[str, Any]] = None
+
+    start_ts = time.perf_counter()
+    first_token_delta: Optional[float] = None
+    last_token_ts: Optional[float] = None
+    latency_samples: List[float] = []
+    delta_event_count = 0
+    end_ts: Optional[float] = None
+
+    def current_panel() -> Panel:
+        body: List[Any] = []
+        text_content = "".join(text_buffer)
+        text_render = Text(text_content or "<waiting for response…>")
+        if not text_content:
+            text_render.stylize("dim")
+        body.append(text_render)
+        if points_buffer:
+            if show_points_table:
+                body.append(_build_points_table(points_buffer))
+            else:
+                summary = Text()
+                for idx, point in enumerate(points_buffer, 1):
+                    kind, coords, mention = _describe_point(point)
+                    line = f"{idx}. {kind}: {coords}"
+                    if mention:
+                        line += f" ({mention})"
+                    summary.append(line + "\n")
+                body.append(summary)
+        # metrics summary
+        now = time.perf_counter()
+        metrics_parts: List[str] = []
+        if first_token_delta is not None:
+            metrics_parts.append(f"TTFT {first_token_delta * 1000:.0f} ms")
+        else:
+            metrics_parts.append("TTFT —")
+
+        usage_tokens_in, usage_tokens_out = _resolve_usage_tokens(usage_info)
+        if usage_tokens_out is not None and first_token_delta is not None:
+            reference = end_ts or now
+            effective = max(reference - (start_ts + first_token_delta), 0.0)
+            avg_latency = effective * 1000 / max(usage_tokens_out, 1)
+            metrics_parts.append(f"Avg {avg_latency:.0f} ms/token")
+        elif latency_samples:
+            avg_latency = sum(latency_samples) / len(latency_samples) * 1000
+            metrics_parts.append(f"Avg {avg_latency:.0f} ms/chunk")
+        else:
+            metrics_parts.append("Avg —")
+
+        tokens_in_display = (
+            str(usage_tokens_in)
+            if usage_tokens_in is not None
+            else ("—" if usage_info is None else "—")
+        )
+        if usage_tokens_out is not None:
+            tokens_out_display = str(usage_tokens_out)
+        else:
+            tokens_out_display = f"~{delta_event_count}" if delta_event_count else "—"
+        metrics_parts.append(f"Tokens in {tokens_in_display}")
+        metrics_parts.append(f"Tokens out {tokens_out_display}")
+
+        metrics_text = Text(" | ".join(metrics_parts), style="dim")
+        body.append(metrics_text)
+
+        content = body[0] if len(body) == 1 else Group(*body)
+        return Panel(content, title=title, border_style="cyan")
+
+    live_panel = current_panel()
+    with Live(live_panel, console=console, refresh_per_second=12) as live:
+        for event in events:
+            event_type = event.get("type")
+            if event_type == "text.delta":
+                chunk = event.get("chunk") or ""
+                text_buffer.append(chunk)
+                delta_event_count += 1
+                now = time.perf_counter()
+                if first_token_delta is None:
+                    first_token_delta = now - start_ts
+                if last_token_ts is not None:
+                    latency_samples.append(now - last_token_ts)
+                last_token_ts = now
+            elif event_type == "points.delta":
+                pts = event.get("points") or []
+                if pts:
+                    points_buffer.extend(pts)
+            elif event_type == "error":
+                message = str(event.get("message") or "unknown error")
+                errors.append({"code": "stream_error", "message": message})
+                end_ts = time.perf_counter()
+                break
+            elif event_type == "final":
+                final_result = event.get("result") or {}
+                end_ts = time.perf_counter()
+                if final_result.get("text") is not None:
+                    text_buffer = [final_result.get("text") or ""]
+                if final_result.get("points") is not None:
+                    points_buffer = list(final_result.get("points") or [])
+                final_errs = final_result.get("errors") or []
+                if final_errs:
+                    errors.extend(final_errs)
+                if final_result.get("usage"):
+                    usage_info = _normalize_usage(final_result.get("usage"))
+            live.update(current_panel())
+
+    if end_ts is None:
+        end_ts = time.perf_counter()
+
+    if final_result is None:
+        final_result = {
+            "text": "".join(text_buffer) or None,
+            "points": points_buffer or None,
+            "parsed": None,
+            "usage": usage_info,
+            "errors": _dedupe_errors(errors),
+            "raw": None,
+        }
+    else:
+        # ensure buffers win if final result lacked data
+        if final_result.get("text") is None:
+            final_result["text"] = "".join(text_buffer) or None
+        if not final_result.get("points") and points_buffer:
+            final_result["points"] = points_buffer
+        merged_errors = list(errors) if errors else []
+        final_errs = final_result.get("errors") or []
+        if final_errs:
+            merged_errors.extend(final_errs)
+        final_result["errors"] = _dedupe_errors(merged_errors)
+        if not final_result.get("usage") and usage_info:
+            final_result["usage"] = usage_info
+
+    coerced = _coerce_result_dict(final_result)
+    result_ns = SimpleNamespace(**coerced)
+
+    if output_format is OutputFormat.JSON:
+        console.print_json(data=_result_payload(result_ns, include_raw=show_raw))
+    else:
+        if coerced["errors"]:
+            _print_errors(coerced["errors"])
+        if show_raw and coerced.get("raw") is not None:
+            console.print(coerced["raw"])
+
+def _render_result(
+    result: Any,
+    *,
+    title: str,
+    output_format: OutputFormat,
+    show_raw: bool,
+    show_points_table: bool = False,
+):
+    if output_format is OutputFormat.JSON:
+        payload = _result_payload(result, include_raw=show_raw)
+        console.print_json(data=payload)
+        return
+
+    points_serialized = _serialize_points(getattr(result, "points", None))
+    console.print(Panel(result.text or "<no text>", title=title, border_style="green"))
+    if show_points_table and getattr(result, "points", None):
+        table = Table(title="Detections", show_header=True, header_style="bold blue")
+        table.add_column("Bounding Box")
+        table.add_column("Mention")
+        for point in result.points or []:
+            table.add_row(str(point), getattr(point, "mention", ""))
+        console.print(table)
+    elif points_serialized:
+        console.print_json(data={"points": points_serialized})
+    _print_errors(getattr(result, "errors", []))
+    if show_raw and getattr(result, "raw", None):
+        console.print(result.raw)
 
 
 @app.command()
@@ -258,6 +598,19 @@ def caption(
     style: str = typer.Option("concise", help="Captioning style."),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
+    expects: ExpectationType = typer.Option(
+        ExpectationType.BOX,
+        "--expects",
+        case_sensitive=False,
+        help="Expected output structure (text, point, box, or polygon).",
+    ),
 ):
     """Generate captions using the high-level helper."""
 
@@ -268,7 +621,7 @@ def caption(
             command_name="caption",
             stream=stream,
             show_raw=show_raw,
-            runner=lambda data: caption_image(data, style=style),
+            runner=lambda data: caption_image(data, style=style, expects=expects.value),
             payload_factory=_caption_payload,
         )
         return
@@ -278,17 +631,26 @@ def caption(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    expects_value = expects.value
+
     if stream:
-        console.print(Panel("Streaming caption", title="Caption", border_style="green"))
-        for event in caption_image(img, style=style, stream=True):
-            console.print(event)
+        _stream_render(
+            caption_image(img, style=style, expects=expects_value, stream=True),
+            title="Caption",
+            output_format=output_format,
+            show_raw=show_raw,
+            show_points_table=expects is ExpectationType.BOX,
+        )
         return
 
-    res = caption_image(img, style=style)
-    console.print(Panel(res.text or "<no text>", title="Caption", border_style="green"))
-    _print_errors(res.errors)
-    if show_raw:
-        console.print(res.raw)
+    res = caption_image(img, style=style, expects=expects_value)
+    _render_result(
+        res,
+        title="Caption",
+        output_format=output_format,
+        show_raw=show_raw,
+        show_points_table=expects is ExpectationType.BOX,
+    )
 
 
 @app.command()
@@ -296,6 +658,13 @@ def ocr(
     image: str = typer.Argument(..., help="Image path or URL."),
     prompt: Optional[str] = typer.Option(None, help="Optional instruction override."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
 ):
     """Run OCR via the high-level helper."""
 
@@ -313,10 +682,12 @@ def ocr(
 
     img = _resolve_image(image)
     res = ocr_image(img, prompt=prompt)
-    console.print(Panel(res.text or "<no text>", title="OCR", border_style="green"))
-    _print_errors(res.errors)
-    if show_raw:
-        console.print(res.raw)
+    _render_result(
+        res,
+        title="OCR",
+        output_format=output_format,
+        show_raw=show_raw,
+    )
 
 
 @app.command()
@@ -324,6 +695,14 @@ def detect(
     image: str = typer.Argument(..., help="Image path or URL."),
     classes: Optional[str] = typer.Option(None, help="Comma-separated class list."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
+    stream: bool = typer.Option(False, help="Stream incremental output."),
 ):
     """Run detection via the high-level helper."""
 
@@ -341,49 +720,77 @@ def detect(
         return
 
     img = _resolve_image(image)
+    if stream:
+        _stream_render(
+            detect_image(img, classes=class_list, stream=True),
+            title="Detect",
+            output_format=output_format,
+            show_raw=show_raw,
+            show_points_table=True,
+        )
+        return
     res = detect_image(img, classes=class_list)
-    console.print(Panel(res.text or "<no text>", title="Detect", border_style="green"))
-    if res.points:
-        table = Table(title="Detections", show_header=True, header_style="bold blue")
-        table.add_column("Bounding Box")
-        table.add_column("Mention")
-        for point in res.points:
-            table.add_row(str(point), getattr(point, "mention", ""))
-        console.print(table)
-    _print_errors(res.errors)
-    if show_raw:
-        console.print(res.raw)
+    _render_result(
+        res,
+        title="Detect",
+        output_format=output_format,
+        show_raw=show_raw,
+        show_points_table=True,
+    )
 
 
 @app.command()
-def chat(
-    user: str = typer.Argument(..., help="User message."),
-    system: Optional[str] = typer.Option(None, help="System instruction."),
-    provider: Optional[str] = typer.Option(None, help="Override provider for this call."),
-    temperature: float = typer.Option(0.0, help="Sampling temperature."),
+def question(
+    image: str = typer.Argument(..., help="Image path or URL."),
+    prompt: str = typer.Argument(..., help="Question to answer about the image."),
+    expects: ExpectationType = typer.Option(
+        ExpectationType.TEXT,
+        "--expects",
+        case_sensitive=False,
+        help="Expected output structure (text, point, box, or polygon).",
+    ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
+    show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--format",
+        "-f",
+        case_sensitive=False,
+        help="Output format (text or json).",
+    ),
 ):
-    """Send a low-level chat-style request."""
+    """Answer a question about an image."""
 
-    task_content = []
-    if system:
-        task_content.append({"type": "text", "role": "system", "content": system})
-    task_content.append({"type": "text", "role": "user", "content": user})
-    task = {"content": task_content}
-    client = Client()
+    path = Path(image)
+    if path.is_dir():
+        raise typer.BadParameter("Directory mode is not supported for 'question'.")
+
+    try:
+        img = _resolve_image(image)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    expects_value = expects.value
 
     if stream:
-        console.print(Panel("Streaming chat", title="Chat", border_style="cyan"))
-        for event in client.stream(task, provider=provider, temperature=temperature):
-            console.print(event)
+        _stream_render(
+            question_image(img, prompt, expects=expects_value, stream=True),
+            title="Question",
+            output_format=output_format,
+            show_raw=show_raw,
+            show_points_table=expects is ExpectationType.BOX,
+        )
         return
 
-    res = client.generate(task, provider=provider, temperature=temperature)
-    console.print(Panel(res.get("text") or "<no text>", title="Chat", border_style="cyan"))
-    if res.get("raw"):
-        console.print(res["raw"])
-
-
+    res = question_image(img, prompt, expects=expects_value)
+    show_points = expects in {ExpectationType.POINT, ExpectationType.BOX, ExpectationType.POLYGON}
+    _render_result(
+        res,
+        title="Question",
+        output_format=output_format,
+        show_raw=show_raw,
+        show_points_table=show_points and expects is ExpectationType.BOX,
+    )
 def main():  # pragma: no cover
     app()
 

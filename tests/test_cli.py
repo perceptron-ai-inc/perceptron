@@ -25,6 +25,21 @@ def test_caption_command(monkeypatch, tmp_path):
     assert "hello" in result.stdout
 
 
+def test_caption_command_json_output(monkeypatch):
+    monkeypatch.setattr("perceptron.cli.caption_image", lambda *a, **k: _StubResult("hello"))
+    result = runner.invoke(app, ["caption", "https://example.com/img", "--format", "json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["text"] == "hello"
+
+
+def test_caption_command_text_expectation(monkeypatch):
+    monkeypatch.setattr("perceptron.cli.caption_image", lambda *a, **k: _StubResult("caption"))
+    result = runner.invoke(app, ["caption", "https://example.com/img", "--expects", "text"])
+    assert result.exit_code == 0
+    assert "caption" in result.stdout
+
+
 def test_caption_command_directory(monkeypatch, tmp_path):
     img1 = tmp_path / "one.png"
     img2 = tmp_path / "two.jpg"
@@ -127,15 +142,64 @@ def test_detect_command_directory(monkeypatch, tmp_path):
     assert points[0]["top_left"]["mention"] == "person"
 
 
-def test_chat_command(monkeypatch):
-    class _StubClient:
-        def generate(self, task, **kwargs):
-            return {"text": "hello", "raw": {}}
+def test_detect_command_stream(monkeypatch):
+    events = [
+        {"type": "text.delta", "chunk": "hi"},
+        {"type": "final", "result": {"text": "done", "errors": []}},
+    ]
 
-    monkeypatch.setattr("perceptron.cli.Client", _StubClient)
-    result = runner.invoke(app, ["chat", "hi there", "--system", "You are kind."])
+    def _fake_detect(image, *, classes=None, stream=False):
+        assert stream is True
+        return iter(events)
+
+    captured = {}
+
+    def _fake_stream_render(ev, **kwargs):
+        captured["events"] = list(ev)
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("perceptron.cli.detect_image", _fake_detect)
+    monkeypatch.setattr("perceptron.cli._stream_render", _fake_stream_render)
+
+    result = runner.invoke(app, ["detect", "https://example.com/img", "--stream"])
     assert result.exit_code == 0
-    assert "hello" in result.stdout
+    assert captured["events"] == events
+    assert captured["kwargs"]["show_points_table"] is True
+
+
+def test_question_command(monkeypatch):
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: _StubResult("cat"))
+    result = runner.invoke(app, ["question", "https://example.com/img", "What is shown?"])
+    assert result.exit_code == 0
+    assert "cat" in result.stdout
+
+
+def test_question_command_box_json(monkeypatch):
+    res = _StubResult("box answer")
+    res.points = [
+        BoundingBox(
+            top_left=SinglePoint(1, 2, mention="item"),
+            bottom_right=SinglePoint(3, 4),
+            mention="item",
+        )
+    ]
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: res)
+    result = runner.invoke(
+        app,
+        [
+            "question",
+            "https://example.com/img",
+            "Where is the item?",
+            "--expects",
+            "box",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["text"] == "box answer"
+    assert payload["points"][0]["type"] == "box"
 
 
 def test_config_command():

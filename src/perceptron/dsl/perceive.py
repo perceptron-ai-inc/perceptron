@@ -1,15 +1,15 @@
 """DSL compiler and `@perceive` decorator.
 
 Compiles typed nodes (text/image/point/box/polygon) into a Task shape and
-optionally executes it via the Client. Performs compile‑time validation of
-anchoring and bounds, returning issues (non‑strict) or raising (strict).
+optionally executes it via the Client. Performs compile-time validation of
+anchoring and bounds, returning issues (non-strict) or raising (strict).
 
 PerceiveResult
 - text: final text (if executed)
 - points: list of parsed pointing objects if `expects` set and present
 - parsed: ordered segments mixing text and all tags with spans
 - errors: semantic/validation issues from compilation/streaming
-- raw: provider response or compiled Task for compile‑only
+- raw: provider response or compiled Task for compile-only
 """
 
 from __future__ import annotations
@@ -271,10 +271,26 @@ def perceive(
             # return the compiled task without executing a request.
             if not stream:
                 if resolved_provider is None:
-                    # No configured provider → compile-only
-                    return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=issues, raw=task)
+                    # No configured provider → compile-only with credential hint
+                    errors_with_hint = [*issues, _credentials_issue(provider_name)]
+                    return PerceiveResult(
+                        text=None,
+                        points=None,
+                        parsed=None,
+                        usage=None,
+                        errors=errors_with_hint,
+                        raw=task,
+                    )
                 if not _has_credentials(provider_name, env):
-                    return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=issues, raw=task)
+                    errors_with_hint = [*issues, _credentials_issue(provider_name)]
+                    return PerceiveResult(
+                        text=None,
+                        points=None,
+                        parsed=None,
+                        usage=None,
+                        errors=errors_with_hint,
+                        raw=task,
+                    )
 
             if stream:
                 # Delegate to client.stream; pass through events
@@ -403,9 +419,11 @@ def async_perceive(
             provider_name = resolved_provider or "fal"
 
             if resolved_provider is None:
-                return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=issues, raw=task)
+                errors_with_hint = [*issues, _credentials_issue(provider_name)]
+                return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=errors_with_hint, raw=task)
             if not _has_credentials(provider_name, env):
-                return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=issues, raw=task)
+                errors_with_hint = [*issues, _credentials_issue(provider_name)]
+                return PerceiveResult(text=None, points=None, parsed=None, usage=None, errors=errors_with_hint, raw=task)
 
             resp = await client.generate(
                 task,
@@ -444,6 +462,22 @@ def inspect_task(callable_obj: Callable[..., Any], *args: Any, **kwargs: Any):
 
 
 __all__ = ["perceive", "async_perceive", "PerceiveResult", "inspect_task"]
+
+
+def _credentials_issue(provider_name: str) -> dict[str, str]:
+    if provider_name == "fal":
+        message = (
+            "No credentials found for provider 'fal'. Export PERCEPTRON_PROVIDER=fal and "
+            "set PERCEPTRON_API_KEY or FAL_KEY (see `perceptron config`)."
+        )
+    else:
+        message = (
+            f"No credentials found for provider '{provider_name}'. Set PERCEPTRON_PROVIDER and "
+            "the appropriate API key before running."
+        )
+    return {"code": "credentials_missing", "message": message}
+
+
 def _has_credentials(provider_name: str, env) -> bool:
     if provider_name == "fal":
         return bool(env.api_key or os.getenv("FAL_KEY") or os.getenv("PERCEPTRON_API_KEY"))
