@@ -8,12 +8,11 @@ Python SDK and CLI for perceptive-language models. The SDK is provider-agnostic 
 - Prerequisites: Python 3.10+, `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv))
 
 ```bash
-python -m pip install --upgrade pip
-python -m pip install perceptron
+pip install perceptron
 
 # Optional extras
-python -m pip install "perceptron[torch]"   # TensorStream helpers (requires PyTorch)
-python -m pip install "perceptron[dev]"     # Dev tools (ruff, pytest, pre-commit)
+pip install "perceptron[torch]"   # TensorStream helpers (requires PyTorch)
+pip install "perceptron[dev]"     # Dev tools (ruff, pytest, pre-commit)
 ```
 
 Using `uv`:
