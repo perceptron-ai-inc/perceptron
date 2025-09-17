@@ -129,17 +129,6 @@ Notes
 
 ---
 
-## Models
-Model information lives here, separate from SDK usage. This SDK works with multiple releases and providers.
-
-- Selecting models: pass `model="..."` to helpers or rely on the provider’s default.
-- Current sources: open weights (e.g., on Hugging Face) and hosted inference via partner providers (e.g., `fal`).
-- Provider defaults: the bundled `fal` provider uses `model="perceptron"` by default; override as needed.
-
-Refer to your deployment docs for the latest supported model names, capabilities, and size/performance notes.
-
----
-
 ## Troubleshooting
 | Symptom | Likely Cause | Resolution |
 | --- | --- | --- |
