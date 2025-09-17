@@ -69,6 +69,13 @@ TensorStream helpers depend on PyTorch; install the optional extra with `pip ins
 
 ---
 
+## Development
+- Install tooling: `pip install perceptron[dev]` (or `uv pip install --editable .[dev]`)
+- Enable git hooks: `pre-commit install`
+- Run all checks locally: `pre-commit run --all-files`
+
+---
+
 ## Configuration
 The SDK is transport-agnostic; the fal.ai endpoint is bundled by default. Additional providers can be registered by extending `perceptron.client._PROVIDER_CONFIG`.
 
