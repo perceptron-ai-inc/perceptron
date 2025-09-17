@@ -126,6 +126,25 @@ def _serialize_points(points: Optional[List[Any]]) -> Optional[List[Any]]:
     return [_serialize_annotation(point) for point in points]
 
 
+def _serialize_parsed(parsed: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+    if not parsed:
+        return None
+    serialized: List[Dict[str, Any]] = []
+    for segment in parsed:
+        if not isinstance(segment, dict):
+            serialized.append({"kind": "unknown", "value": str(segment)})
+            continue
+        seg_copy = dict(segment)
+        kind = seg_copy.get("kind")
+        if kind in {"point", "box", "polygon", "collection"} and "value" in seg_copy:
+            try:
+                seg_copy["value"] = _serialize_annotation(seg_copy["value"])
+            except Exception:
+                seg_copy["value"] = str(seg_copy.get("value"))
+        serialized.append(seg_copy)
+    return serialized
+
+
 def _result_payload(result: Any, *, include_raw: bool) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     text_value = getattr(result, "text", None)
@@ -135,8 +154,9 @@ def _result_payload(result: Any, *, include_raw: bool) -> Dict[str, Any]:
     if points is not None:
         payload["points"] = points
     parsed = getattr(result, "parsed", None)
-    if parsed:
-        payload["parsed"] = parsed
+    serialized_parsed = _serialize_parsed(parsed)
+    if serialized_parsed is not None:
+        payload["parsed"] = serialized_parsed
     usage = getattr(result, "usage", None)
     if usage:
         payload["usage"] = usage
