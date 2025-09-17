@@ -109,7 +109,7 @@ def _inject_expectation_hint(task: dict, expects: Optional[str]) -> dict:
 _PROVIDER_CONFIG = {
     "fal": {
         "base_url": "https://fal.run",
-        "path": "/perceptron/genesis/openai/v1/chat/completions",
+        "path": "/perceptron/isaac-01/openai/v1/chat/completions",
         "auth_header": "Authorization",
         "auth_prefix": "Key ",
         "env_keys": ["FAL_KEY", "PERCEPTRON_API_KEY"],
