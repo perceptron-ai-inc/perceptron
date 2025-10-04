@@ -29,7 +29,7 @@ if REPO_ROOT not in sys.path:
 
 from perceptron.tensorstream import VisionType
 from perceptron.tensorstream.ops import tensor_stream_token_view, modality_mask
-from huggingface.modular_isaac import IsaacProcessor
+from huggingface.modular_isaac import IsaacProcessor, IsaacForConditionalGeneration
 from perceptron.pointing.parser import extract_points
 
 
@@ -201,7 +201,8 @@ def main():
 
     # Load model from the HF checkpoint using AutoModelForCausalLM
     logger.info(f"Loading AutoModelForCausalLM from HF checkpoint: {hf_path}")
-    model = AutoModelForCausalLM.from_pretrained(hf_path, trust_remote_code=True)
+    model = IsaacForConditionalGeneration.from_pretrained(hf_path, trust_remote_code=True, attn_implementation="sdpa", vision_attn_implementation="sdpa")
+
 
     # Move to appropriate device and dtype
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -211,7 +212,7 @@ def main():
 
     logger.info(f"Model loaded on {device} with dtype {dtype}")
 
-# Process the dummy document using chat templates
+    # Process the dummy document using chat templates
     logger.info("\nProcessing dummy document:")
     logger.info(f"Document content: {DUMMY_DOCUMENT}")
 
