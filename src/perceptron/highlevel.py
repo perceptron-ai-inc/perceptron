@@ -59,6 +59,8 @@ def _prompt_profile_from_kwargs(gen_kwargs: Mapping[str, Any]) -> tuple[HighLeve
     provider_key = provider_name.lower() if isinstance(provider_name, str) else provider_name
     provider_cfg = _PROVIDER_CONFIG.get(provider_key or "") or {}
     requested_model = gen_kwargs.get("model")
+    if requested_model is None:
+        requested_model = env.model
     resolved_model = _select_model(provider_cfg, requested_model, provider_name=provider_key or "fal")
     if resolved_model is None:
         resolved_model = provider_cfg.get("default_model")

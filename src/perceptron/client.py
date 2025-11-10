@@ -328,6 +328,8 @@ class Client:
         top_k = gen_kwargs.pop("top_k", s.top_k)
 
         task, url, headers, provider_cfg = _prepare_transport(s, provider_cfg, task, expects)
+        if "model" not in gen_kwargs and s.model is not None:
+            gen_kwargs["model"] = s.model
         messages = _task_to_openai_messages(task)
         model = _pop_and_resolve_model(provider_cfg, gen_kwargs)
         body = {
@@ -389,6 +391,8 @@ class Client:
             yield {"type": "error", "message": str(exc)}
             return
         messages = _task_to_openai_messages(task)
+        if "model" not in gen_kwargs and s.model is not None:
+            gen_kwargs["model"] = s.model
         model = _pop_and_resolve_model(provider_cfg, gen_kwargs)
         body = {
             "model": model,
@@ -518,6 +522,8 @@ class AsyncClient(Client):
         prepared_task, url, headers, provider_cfg = _prepare_transport(s, provider_cfg, task, expects)
 
         messages = _task_to_openai_messages(prepared_task)
+        if "model" not in gen_kwargs and s.model is not None:
+            gen_kwargs["model"] = s.model
         model = _pop_and_resolve_model(provider_cfg, gen_kwargs)
         body = {
             "model": model,
@@ -577,6 +583,8 @@ class AsyncClient(Client):
                 return
 
             messages = _task_to_openai_messages(prepared_task)
+            if "model" not in gen_kwargs and s.model is not None:
+                gen_kwargs["model"] = s.model
             model = _pop_and_resolve_model(resolved_cfg, gen_kwargs)
             body = {
                 "model": model,

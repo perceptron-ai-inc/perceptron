@@ -17,6 +17,7 @@ class Settings:
     base_url: str | None = None
     api_key: str | None = None
     provider: str | None = None  # currently "fal"; extensible for custom transports
+    model: str | None = None
 
     timeout: float = 60.0
     retries: int = 3
@@ -50,6 +51,7 @@ def _from_env(s: Settings) -> Settings:
     base_url = s.base_url if "base_url" in _explicit_fields else os.getenv("PERCEPTRON_BASE_URL", s.base_url)
     api_key = s.api_key if "api_key" in _explicit_fields else os.getenv("PERCEPTRON_API_KEY", s.api_key)
     provider = s.provider if "provider" in _explicit_fields else os.getenv("PERCEPTRON_PROVIDER", s.provider)
+    model = s.model if "model" in _explicit_fields else os.getenv("PERCEPTRON_MODEL", s.model)
 
     # Providers - only apply default logic if provider wasn't explicitly set
     if (
@@ -63,6 +65,7 @@ def _from_env(s: Settings) -> Settings:
         base_url=base_url,
         api_key=api_key,
         provider=provider,
+        model=model,
         timeout=s.timeout,
         retries=s.retries,
         strict=s.strict,
