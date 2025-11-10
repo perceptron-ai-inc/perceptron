@@ -24,7 +24,7 @@ from perceptron import (
     scale_points_to_pixels,
     text,
 )
-from perceptron.errors import RateLimitError, SDKError
+from perceptron.errors import AnchorError, BadRequestError, RateLimitError, SDKError
 
 ASSETS_DIR = Path(__file__).parent / "assets" / "docs"
 
@@ -259,6 +259,36 @@ def test_docs_error_handling_metadata():
     rate_err = RateLimitError("slow down", retry_after=1.5, details={"request_id": "req-456"})
     assert rate_err.details["retry_after"] == 1.5
     assert rate_err.details["request_id"] == "req-456"
+
+
+def test_docs_error_invalid_image_decision_tree(tmp_path):
+    """`guides/error-messages`: invalid_image branch emits actionable metadata."""
+
+    bad_path = tmp_path / "not_image.bin"
+    bad_path.write_text("not an image", encoding="utf-8")
+
+    with pytest.raises(BadRequestError) as excinfo:
+        caption(str(bad_path), expects="text")
+
+    err = excinfo.value
+    assert err.code == "invalid_image"
+    assert err.details["origin"].endswith("not_image.bin")
+    assert err.details["reason"] in {"decoder_failed", "unknown_format"}
+
+
+def test_docs_error_anchor_strict_decision_tree():
+    """`guides/error-messages`: anchor_missing branch stays reproducible via pytest."""
+
+    @perceive(expects="box", strict=True)
+    def broken_prompt():
+        return text("Mark the defect") + box(0, 0, 10, 10)
+
+    with pytest.raises(AnchorError) as excinfo:
+        broken_prompt()
+
+    err = excinfo.value
+    assert err.code == "anchor_missing"
+    assert err.details["code"] == "anchor_missing"
 
 
 @pytest.mark.integration

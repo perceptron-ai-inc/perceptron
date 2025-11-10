@@ -36,7 +36,7 @@ except Exception:  # pragma: no cover
 
 from ..client import _PROVIDER_CONFIG, AsyncClient, Client
 from ..config import settings
-from ..errors import AnchorError, ExpectationError
+from ..errors import AnchorError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
 from ..pointing.parser import PointParser_serialize
 from ..pointing.types import BoundingBox, Polygon, SinglePoint
@@ -59,6 +59,47 @@ from .nodes import (
 from .nodes import (
     PolygonTag as PolygonTagNode,
 )
+
+_IMAGE_SIGNATURES = (
+    b"\x89PNG\r\n\x1a\n",
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",
+    b"GIF89a",
+    b"BM",  # BMP
+    b"II*\x00",  # TIFF (little endian)
+    b"MM\x00*",  # TIFF (big endian)
+)
+
+_WEBP_SIGNATURE_LENGTH = 12
+
+
+def _is_webp(data: bytes) -> bool:
+    return len(data) >= _WEBP_SIGNATURE_LENGTH and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+
+
+def _looks_like_image(data: bytes) -> bool:
+    return any(data.startswith(sig) for sig in _IMAGE_SIGNATURES) or _is_webp(data)
+
+
+def _validate_image_bytes(data: bytes, *, origin: str) -> dict[str, Any]:
+    """Ensure the payload is an actual bitmap; raise otherwise."""
+
+    meta: dict[str, Any] = {}
+    pil_exc: Exception | None = None
+    if PILImage is not None:
+        try:
+            with PILImage.open(BytesIO(data)) as im:
+                meta["width"], meta["height"] = im.size
+                return meta
+        except Exception as exc:  # Let imghdr double-check before failing
+            pil_exc = exc
+    if not _looks_like_image(data):
+        reason = "decoder_failed" if pil_exc is not None else "unknown_format"
+        details = {"origin": origin, "reason": reason}
+        raise BadRequestError(
+            "Image payload is not a decodable bitmap", code="invalid_image", details=details
+        ) from pil_exc
+    return meta
 
 
 def _encode_bytes(data: bytes) -> tuple[str, dict[str, Any]]:
@@ -87,12 +128,7 @@ def _to_b64_image(obj: Any) -> tuple[str, dict]:
         p = Path(obj)
         with open(p, "rb") as f:
             data = f.read()
-        if PILImage is not None:
-            try:
-                with PILImage.open(p) as im:
-                    meta["width"], meta["height"] = im.size
-            except Exception:
-                pass
+        meta = _validate_image_bytes(data, origin=str(p))
         b64 = base64.b64encode(data).decode("ascii")
         return b64, meta
     if isinstance(obj, bytes):
@@ -178,7 +214,7 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                         "message": "Tag missing image= in multi-image context",
                     }
                     if strict:
-                        raise AnchorError(issue["message"])
+                        raise AnchorError(issue["message"], code=issue.get("code"), details=issue)
                     issues.append(issue)
             elif isinstance(ref, ImageNode):
                 dims = resolve_dims(ref)
@@ -188,7 +224,7 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                     "message": "image= must reference an image(...) node",
                 }
                 if strict:
-                    raise AnchorError(issue["message"])
+                    raise AnchorError(issue["message"], code=issue.get("code"), details=issue)
                 issues.append(issue)
 
             if isinstance(node, PointTagNode):
@@ -201,7 +237,7 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                             "message": f"point ({obj.x},{obj.y}) outside image bounds ({w}x{h})",
                         }
                         if strict:
-                            raise ExpectationError(issue["message"])
+                            raise ExpectationError(issue["message"], code=issue.get("code"), details=issue)
                         issues.append(issue)
                 tag = PointParser_serialize(obj)
             elif isinstance(node, BoxTagNode):
@@ -222,7 +258,7 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                             "message": f"box coords out of bounds or invalid for image ({w}x{h})",
                         }
                         if strict:
-                            raise ExpectationError(issue["message"])
+                            raise ExpectationError(issue["message"], code=issue.get("code"), details=issue)
                         issues.append(issue)
                 tag = PointParser_serialize(obj)
             else:
@@ -240,7 +276,7 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                                 "message": f"polygon contains point ({p.x},{p.y}) outside image bounds ({w}x{h})",
                             }
                             if strict:
-                                raise ExpectationError(issue["message"])
+                                raise ExpectationError(issue["message"], code=issue.get("code"), details=issue)
                             issues.append(issue)
                 tag = PointParser_serialize(obj)
             content.append({"type": "text", "role": "user", "content": tag})
