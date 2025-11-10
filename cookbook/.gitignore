@@ -1,0 +1,46 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Jupyter/IPython checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+*/.vscode/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+
+# Generated data/artifacts
+*.bak
+*.orig
+*_annotated.*
+
+# Notebook-derived scripts
+quickstart/quickstart_isaac/quickstart_isaac.py
+quickstart/quickstart_qwen/quickstart_qwen.py
+recipes/capabilities/object-detection/object-detection.py
+recipes/capabilities/visual-qa/visual-qa.py
+recipes/tutorials/isaac_0.1_frame_by_frame/isaac_0.1_frame_by_frame.py
+recipes/capabilities/in-context-learning/in-context-learning.py
+recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.py
+
+# Tutorial-generated artifacts
+recipes/tutorials/**/frames/
+recipes/tutorials/**/frames_annotated/
+recipes/tutorials/**/*_annotated.mp4
