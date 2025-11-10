@@ -37,6 +37,7 @@ except Exception:  # pragma: no cover
 from ..client import _PROVIDER_CONFIG, AsyncClient, Client
 from ..config import settings
 from ..errors import AnchorError, ExpectationError
+from ..pointing.geometry import scale_points_to_pixels
 from ..pointing.parser import PointParser_serialize
 from ..pointing.types import BoundingBox, Polygon, SinglePoint
 from .nodes import (
@@ -258,6 +259,11 @@ class PerceiveResult:
     usage: dict | None
     errors: list[dict]
     raw: Any
+
+    def points_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[Any] | None:
+        """Return a pixel-space copy of ``points`` given the image dimensions."""
+
+        return scale_points_to_pixels(self.points, width=width, height=height, clamp=clamp)
 
 
 def perceive(

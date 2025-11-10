@@ -32,6 +32,7 @@ from .errors import (
     TransportError,
 )
 from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
+from .pointing.geometry import scale_points_to_pixels
 from .pointing.parser import (
     PointParser,
     ReasoningExtraction,
@@ -111,6 +112,7 @@ __all__ = [
     "polygon",
     "pt",
     "question",
+    "scale_points_to_pixels",
     "settings",
     "strip_tags",
     "system",

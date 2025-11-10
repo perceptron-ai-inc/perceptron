@@ -1,14 +1,17 @@
 import os
+from pathlib import Path
 
 import pytest
+from PIL import Image
 
-from perceptron import annotate_image, bbox, detect
+from perceptron import annotate_image, bbox, detect, scale_points_to_pixels
 from perceptron import config as cfg
 from perceptron.pointing.types import BoundingBox
 
 pytestmark = pytest.mark.integration
 
 _API_KEY = os.getenv("PERCEPTRON_API_KEY")
+_TARGET_IMAGE = Path("examples/icl_detection/input.png")
 
 requires_perceptron_key = pytest.mark.skipif(
     not _API_KEY,
@@ -55,7 +58,7 @@ def test_detect_examples_pipeline_hits_backend():
     examples = _build_examples()
     with cfg(provider="perceptron", api_key=_API_KEY):
         result = detect(
-            "examples/icl_detection/input.png",
+            str(_TARGET_IMAGE),
             classes=["classA", "classB"],
             examples=examples,
             temperature=0.0,
@@ -66,7 +69,14 @@ def test_detect_examples_pipeline_hits_backend():
     assert result.raw.get("choices"), "Expected backend to return choices"
     assert result.points, "Backend did not return any bounding boxes"
 
+    with Image.open(_TARGET_IMAGE) as im:
+        width, height = im.size
+
     expected_box = bbox(38, 91, 934, 962, mention="classB")
-    best_match = max(result.points, key=lambda pt: _intersection_over_union(pt, expected_box))
-    iou = _intersection_over_union(best_match, expected_box)
+    expected_pixels = scale_points_to_pixels([expected_box], width=width, height=height)[0]
+    pixel_predictions = result.points_to_pixels(width, height)
+    assert pixel_predictions, "Point scaling produced no boxes"
+
+    best_match = max(pixel_predictions, key=lambda pt: _intersection_over_union(pt, expected_pixels))
+    iou = _intersection_over_union(best_match, expected_pixels)
     assert iou >= 0.4, f"Predicted box too far from ground truth (IoU={iou:.3f})"

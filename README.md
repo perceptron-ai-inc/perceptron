@@ -123,6 +123,28 @@ Notes
 - `detect_from_coco` discovers annotations, constructs balanced examples when `shots > 0`, and returns `CocoDetectResult` objects.
 - For advanced workflows, build tasks with the typed DSL (`text`, `system`, `image`, `point`, `box`, `polygon`, `collection`) and decorate with `@perceive` / `@async_perceive`.
 
+### Scaling normalized coordinates
+Structured outputs (points/boxes/polygons) use a normalized 0–1000 grid. Convert them to pixel coordinates once you know the rendered image size:
+
+```python
+from PIL import Image
+from perceptron import detect, scale_points_to_pixels
+
+result = detect("frame.png", classes=["forklift"])
+width, height = Image.open("frame.png").size
+
+# Option 1: use the helper function
+pixel_space = scale_points_to_pixels(result.points, width=width, height=height)
+
+# Option 2: call the convenience method on PerceiveResult
+pixel_space = result.points_to_pixels(width, height)
+
+for box in pixel_space or []:
+    print(box.mention, box.top_left.x, box.top_left.y, box.bottom_right.x, box.bottom_right.y)
+```
+
+Feed normalized coordinates back into the model for in-context learning; only scale when you need to render or compute metrics.
+
 ### Using the DSL with `@perceive`
 ```python
 from perceptron import perceive, image, text
