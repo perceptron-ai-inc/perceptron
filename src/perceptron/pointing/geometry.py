@@ -26,7 +26,7 @@ def _normalize_dimensions(width: int | float, height: int | float) -> tuple[int,
 
 
 def _scale_component(value: int | float, dimension: int, clamp: bool) -> int:
-    scaled = int(round((float(value) / NORMALIZED_COORD_MAX) * dimension))
+    scaled = round((float(value) / NORMALIZED_COORD_MAX) * dimension)
     if not clamp:
         return scaled
     upper = dimension - 1
@@ -85,7 +85,7 @@ def _scale_annotation(annotation: Annotation, dims: tuple[int, int], clamp: bool
 
 
 def scale_point_to_pixels(point: SinglePoint, *, width: int, height: int, clamp: bool = True) -> SinglePoint:
-    """Scale a single normalized point (0–1000 grid) into pixel coordinates."""
+    """Scale a single normalized point (0-1000 grid) into pixel coordinates."""
 
     dims = _normalize_dimensions(width, height)
     return _scale_point(point, dims, clamp)
@@ -119,7 +119,7 @@ def scale_points_to_pixels(
     height: int,
     clamp: bool = True,
 ) -> list[Annotation] | None:
-    """Scale structured annotations from the normalized 0–1000 grid into pixel space.
+    """Scale structured annotations from the normalized 0-1000 grid into pixel space.
 
     Args:
         points: Sequence of annotations (as returned by ``PerceiveResult.points``).
@@ -140,9 +140,9 @@ def scale_points_to_pixels(
 
 __all__ = [
     "NORMALIZED_COORD_MAX",
-    "scale_point_to_pixels",
     "scale_box_to_pixels",
-    "scale_polygon_to_pixels",
     "scale_collection_to_pixels",
+    "scale_point_to_pixels",
     "scale_points_to_pixels",
+    "scale_polygon_to_pixels",
 ]
