@@ -32,6 +32,8 @@ from .errors import (
 )
 from .expectations import expectation_hint_text
 from .pointing.parser import extract_points, extract_reasoning, parse_text
+from . import reasoning as reasoning_parser
+from .reasoning import Reasoning
 
 
 @dataclass
@@ -50,14 +52,18 @@ class _StreamProcessor:
         client_core: _ClientCore,
         expects: str | None,
         parse_points: bool,
+        parse_reasoning: bool = True,
         max_buffer_bytes: int | None,
     ) -> None:
         self._client_core = client_core
         self._expects = expects
         self._parse_points = parse_points and expects in {"point", "box", "polygon"}
+        self._parse_reasoning = parse_reasoning
         self._max_buffer_bytes = max_buffer_bytes
         self._cumulative: str = ""
         self._emitted_spans: set[tuple[int, int]] = set()
+        self._emitted_reasoning_spans: set[tuple[int, int]] = set()
+        self._last_reasoning_length: int = 0
         self._parsing_enabled = True
         self._usage_payload: dict[str, Any] | None = None
 
@@ -87,6 +93,8 @@ class _StreamProcessor:
                 self._parsing_enabled = False
         if self._parse_points and self._parsing_enabled and isinstance(self._cumulative, str):
             events.extend(self._point_events())
+        if self._parse_reasoning and self._parsing_enabled and isinstance(self._cumulative, str):
+            events.extend(self._reasoning_events())
         return events
 
     def finalize(self) -> dict[str, Any]:
@@ -112,6 +120,7 @@ class _StreamProcessor:
             "type": "final",
             "result": {
                 "text": result.get("text"),
+                "reasoning": result.get("reasoning"),
                 "points": result.get("points"),
                 "parsed": result.get("parsed"),
                 "usage": self._usage_payload,
@@ -148,6 +157,31 @@ class _StreamProcessor:
                     "span": span_info,
                 }
             )
+        return events
+
+    def _reasoning_events(self) -> list[dict[str, Any]]:
+        """Extract reasoning content and emit delta events for new content."""
+        events: list[dict[str, Any]] = []
+        reasoning = reasoning_parser.extract_reasoning(self._cumulative)
+
+        if reasoning is None:
+            return events
+
+        # Check if we have NEW reasoning content
+        current_length = len(reasoning.content)
+        if current_length > self._last_reasoning_length:
+            # Extract just the new part
+            new_content = reasoning.content[self._last_reasoning_length:]
+            self._last_reasoning_length = current_length
+
+            events.append(
+                {
+                    "type": "reasoning.delta",
+                    "content": new_content,
+                    "total_length": current_length,
+                }
+            )
+
         return events
 
 
@@ -453,19 +487,20 @@ class _ClientCore:
                 setattr(self._settings, k, v)
 
     @staticmethod
-    def _clean_text_with_reasoning(content: Any, payload: dict | None = None) -> tuple[Any, list[str] | None]:
+    def _clean_text_with_reasoning(content: Any, payload: dict | None = None) -> tuple[Any, Reasoning | None]:
         if not isinstance(content, str):
             return content, None
-        extraction = extract_reasoning(content)
-        reasoning = extraction.reasoning
-        cleaned = extraction.text if extraction.text is not None else content
+        # Use new reasoning parser
+        reasoning = reasoning_parser.extract_reasoning(content)
+        cleaned = reasoning_parser.strip_reasoning(content)
         if payload:
             try:
                 message = payload.get("choices", [{}])[0].get("message")
                 if isinstance(message, dict):
                     message["content"] = cleaned
                     if reasoning:
-                        message["reasoning_content"] = reasoning
+                        # Store reasoning content for backward compatibility
+                        message["reasoning_content"] = reasoning.content
                     elif "reasoning_content" in message:
                         message["reasoning_content"] = None
             except Exception:
