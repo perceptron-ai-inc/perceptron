@@ -36,7 +36,11 @@ jobs:
 
       - name: Install notebook deps
         run: |
-          uv pip install nbformat nbclient
+          uv pip install nbformat nbclient ipykernel
+
+      - name: Register ipykernel
+        run: |
+          uv run python -m ipykernel install --name python3 --sys-prefix
 
       - name: Run cookbook notebooks
         run: uv run python tools/run_notebooks.py --timeout 900
