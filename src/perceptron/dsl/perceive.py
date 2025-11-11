@@ -605,8 +605,7 @@ __all__ = ["PerceiveResult", "async_perceive", "inspect_task", "perceive"]
 def _credentials_issue(provider_name: str) -> dict[str, str]:
     if provider_name == "fal":
         message = (
-            "No credentials found for provider 'fal'. Export PERCEPTRON_PROVIDER=fal and "
-            "set PERCEPTRON_API_KEY or FAL_KEY (see `perceptron config`)."
+            "No credentials found for provider 'fal'. Set and validate api_key (e.g., PERCEPTRON_API_KEY or FAL_KEY) before running."
         )
     else:
         message = f"No credentials found for provider '{provider_name}'. Set and validate api_key before running."
