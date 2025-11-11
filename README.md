@@ -139,7 +139,9 @@ Tools exposed today:
 - `ask_image` – wraps `perceptron.question`
 - `set_defaults` – forwards to `perceptron.configure` so you can change provider/model/API keys at runtime
 
-All tools accept image paths or URLs, forward optional `provider`/`model` overrides, and return normalized text + geometry outputs ready for MCP clients to consume. Use standard MCP tooling (Claude Desktop, MCP Inspector, etc.) to register the server by pointing to the `perceptron-mcp` command (stdio) or the module `perceptron_mcp.server` if you prefer Python entry points.
+**Multi-Image Support**: All image tools (`caption_image`, `detect_objects`, `ocr_extract`, `ask_image`) now accept either a single image path/URL or a list of images. When multiple images are provided, the server executes requests in parallel and returns a list of results. This enables batch processing and multi-image reasoning tasks (e.g., "Which of these images contains more people?").
+
+All tools forward optional `provider`/`model` overrides, and return normalized text + geometry outputs ready for MCP clients to consume. Use standard MCP tooling (Claude Desktop, MCP Inspector, etc.) to register the server by pointing to the `perceptron-mcp` command (stdio) or the module `perceptron_mcp.server` if you prefer Python entry points.
 
 ---
 
