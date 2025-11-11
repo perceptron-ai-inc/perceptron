@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .annotations import canonicalize_text_collections, serialize_annotations
+from .annotations import annotate_image, canonicalize_text_collections, serialize_annotations
 from .client import _PROVIDER_CONFIG, _select_model
 from .config import settings
 from .dsl.nodes import (
@@ -73,23 +73,35 @@ def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | No
     normalized: list[_NormalizedExample] = []
     order_lookup = {label: idx for idx, label in enumerate(class_order)} if class_order else None
     for example in examples:
-        if isinstance(example, dict) and "image" in example:
-            image_obj = example["image"]
-            prompt = canonicalize_text_collections(example.get("prompt"))
-            tags = serialize_annotations(
-                example.get("boxes"),
-                example.get("polygons"),
-                example.get("points"),
-                example.get("collections"),
-                order_lookup,
-            )
-            if not tags:
-                raise BadRequestError("Detection examples must include at least one annotation")
-            normalized.append(_NormalizedExample(image=image_obj, prompt=prompt, tags=tags))
-        else:
+        if not isinstance(example, Mapping) or "image" not in example:
             raise BadRequestError(
                 "Detection examples must be dicts with 'image' and annotation lists (boxes/polygons/points)"
             )
+        image_obj = example["image"]
+        prompt = canonicalize_text_collections(example.get("prompt"))
+
+        annotations_payload = example.get("annotations")
+        if annotations_payload is None:
+            annotations_payload = []
+            for key in ("boxes", "polygons", "points", "collections"):
+                values = example.get(key)
+                if values:
+                    annotations_payload.extend(values)
+
+        if not annotations_payload:
+            raise BadRequestError("Detection examples must include at least one annotation")
+
+        annotated = annotate_image(image_obj, annotations_payload)
+        tags = serialize_annotations(
+            annotated.get("boxes"),
+            annotated.get("polygons"),
+            annotated.get("points"),
+            annotated.get("collections"),
+            order_lookup,
+        )
+        if not tags:
+            raise BadRequestError("Detection examples must include at least one annotation")
+        normalized.append(_NormalizedExample(image=image_obj, prompt=prompt, tags=tags))
     return normalized
 
 
