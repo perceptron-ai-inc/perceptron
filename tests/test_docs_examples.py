@@ -71,7 +71,7 @@ def test_docs_perceive_basics_examples():
 
     describe_img = _doc_asset("truck_scene.jpg")
     day_img = _doc_asset("suburban_street.webp")
-    night_img = _doc_asset("studio_scene.webp")
+    night_img = _doc_asset("ocean_scene.webp")
 
     @perceive()
     def describe(image_path):
@@ -142,9 +142,9 @@ def test_docs_capabilities_ocr_example():
 def test_docs_capabilities_visual_qa_example():
     """`capabilities/visual-qa` snippet with question helper."""
 
-    frame_path = _doc_asset("studio_scene.webp")
+    frame_path = _doc_asset("ocean_scene.webp")
 
-    question_text = "What stands out in this studio scene?"
+    question_text = "What stands out in this ocean scene?"
     with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
         result = question(frame_path, question_text, expects="box")
 
