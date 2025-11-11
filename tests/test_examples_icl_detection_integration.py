@@ -1,13 +1,12 @@
 import os
-from pathlib import Path
 
 import pytest
 from PIL import Image
 
+from cookbook.utils import cookbook_asset
 from perceptron import annotate_image, bbox, detect, scale_points_to_pixels
 from perceptron import config as cfg
 from perceptron.pointing.types import BoundingBox
-from cookbook.utils import cookbook_asset
 
 pytestmark = pytest.mark.integration
 

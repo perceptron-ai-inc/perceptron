@@ -1,20 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
 
-__all__ = ["cookbook_assets_root", "cookbook_asset"]
+__all__ = ["cookbook_asset", "cookbook_assets_root"]
 
 
 def _candidate_paths() -> Iterable[Path]:
     """Yield directories to probe for the shared assets folder."""
 
     anchors: list[Path] = [Path.cwd()]
-    try:
+    with suppress(NameError):  # pragma: no cover - __file__ should always exist
         anchors.append(Path(__file__).resolve())
-    except NameError:  # pragma: no cover - __file__ should always exist
-        pass
 
     seen: set[Path] = set()
     for anchor in anchors:

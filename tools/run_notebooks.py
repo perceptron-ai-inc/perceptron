@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ from pathlib import Path
 import nbformat
 from nbclient import NotebookClient
 from nbclient.exceptions import CellExecutionError
+
+logger = logging.getLogger(__name__)
 
 
 def discover_notebooks(root: Path) -> list[Path]:
@@ -51,35 +54,37 @@ def main() -> int:
     if not os.getenv("PERCEPTRON_API_KEY"):
         parser.error("PERCEPTRON_API_KEY must be set to run the cookbooks against the backend")
 
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     nb_paths = discover_notebooks(args.root)
     if not nb_paths:
         parser.error(f"No notebooks found under {args.root}")
 
     failures: list[tuple[Path, Exception | str]] = []
     for path in nb_paths:
-        print(f"Executing {path}...")
+        logger.info("Executing %s...", path)
         try:
             run_notebook(path, timeout=args.timeout)
         except CellExecutionError as exc:
-            print(f"FAILED: {path}\n{exc}")
+            logger.error("FAILED: %s\n%s", path, exc)
             failures.append((path, exc))
             if args.fail_fast:
                 break
         except Exception as exc:  # pragma: no cover - defensive logging
-            print(f"FAILED: {path}\n{exc}")
+            logger.error("FAILED: %s\n%s", path, exc)
             failures.append((path, exc))
             if args.fail_fast:
                 break
         else:
-            print(f"SUCCESS: {path}")
+            logger.info("SUCCESS: %s", path)
 
     if failures:
-        print(f"\n{len(failures)} notebook(s) failed:")
+        logger.error("%d notebook(s) failed:", len(failures))
         for path, exc in failures:
-            print(f" - {path}: {exc}")
+            logger.error(" - %s: %s", path, exc)
         return 1
 
-    print("\nAll notebooks executed successfully.")
+    logger.info("All notebooks executed successfully.")
     return 0
 
 
