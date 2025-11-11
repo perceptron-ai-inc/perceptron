@@ -1,0 +1,35 @@
+name: Cookbook Notebooks
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  notebooks:
+    runs-on: ubuntu-latest
+    env:
+      PERCEPTRON_API_KEY: ${{ secrets.PERCEPTRON_API_KEY }}
+      PERCEPTRON_BASE_URL: ${{ secrets.PERCEPTRON_BASE_URL }}
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Ensure secrets are configured
+        run: |
+          if [ -z "${PERCEPTRON_API_KEY}" ]; then
+            echo "PERCEPTRON_API_KEY secret is not set. Configure it to run notebook tests." >&2
+            exit 1
+          fi
+          if [ -z "${PERCEPTRON_BASE_URL}" ]; then
+            echo "PERCEPTRON_BASE_URL secret is not set. Configure it to run notebook tests." >&2
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v1
+
+      - name: Run cookbook notebooks
+        run: uv run python tools/run_notebooks.py --timeout 900
