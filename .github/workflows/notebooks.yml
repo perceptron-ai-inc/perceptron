@@ -36,7 +36,7 @@ jobs:
 
       - name: Install notebook deps
         run: |
-          uv pip install nbformat nbclient ipykernel
+          uv pip install nbformat nbclient ipykernel opencv-python tqdm pillow
 
       - name: Register ipykernel
         run: |
