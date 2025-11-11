@@ -31,6 +31,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v1
 
+      - name: Create virtualenv
+        run: uv venv
+
       - name: Install notebook deps
         run: |
           uv pip install nbformat nbclient
