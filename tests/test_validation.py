@@ -58,9 +58,8 @@ def test_anchoring_multi_image_missing_anchor(monkeypatch):
         im2 = image(PILImage.new("RGB", (8, 8)))
         return im1 + im2 + point(1, 1)
 
-    with cfg(api_key="test-key", provider="fal"):
-        with pytest.raises(AnchorError):
-            fn_strict()
+    with cfg(api_key="test-key", provider="fal"), pytest.raises(AnchorError):
+        fn_strict()
 
 
 def test_bounds_point_out_of_bounds(monkeypatch):
@@ -82,9 +81,8 @@ def test_bounds_point_out_of_bounds(monkeypatch):
         im = image(PILImage.new("RGB", (8, 8)))
         return im + point(9, 9, image=im)
 
-    with cfg(api_key="test-key", provider="fal"):
-        with pytest.raises(ExpectationError):
-            fn_strict()
+    with cfg(api_key="test-key", provider="fal"), pytest.raises(ExpectationError):
+        fn_strict()
 
 
 def test_bounds_box_out_of_bounds(monkeypatch):
@@ -106,6 +104,5 @@ def test_bounds_box_out_of_bounds(monkeypatch):
         im = image(PILImage.new("RGB", (8, 8)))
         return im + box(0, 0, 10, 10, image=im)
 
-    with cfg(api_key="test-key", provider="fal"):
-        with pytest.raises(ExpectationError):
-            fn_strict()
+    with cfg(api_key="test-key", provider="fal"), pytest.raises(ExpectationError):
+        fn_strict()
