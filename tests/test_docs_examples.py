@@ -103,6 +103,30 @@ def test_docs_perceive_basics_examples():
 
 
 @pytest.mark.integration
+def test_docs_perceive_direct_invocation_examples():
+    """README direct-call examples using live backend."""
+
+    scene_path = _doc_asset("truck_scene.jpg")
+
+    with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
+        text_only = perceive(image(scene_path) + text("What's happening in this scene?"), expects="text")
+        boxed = perceive(
+            [
+                image(scene_path),
+                text("Highlight the key vehicle."),
+            ],
+            expects="box",
+        )
+
+    assert isinstance(text_only.text, str)
+    assert text_only.text.strip() != ""
+    assert boxed.points is not None and len(boxed.points) >= 1
+    for box_result in boxed.points:
+        assert 0 <= box_result.top_left.x < box_result.bottom_right.x <= 1000
+        assert 0 <= box_result.top_left.y < box_result.bottom_right.y <= 1000
+
+
+@pytest.mark.integration
 def test_docs_capabilities_object_detection_example():
     """`capabilities/object-detection` PPE example on live API."""
 
