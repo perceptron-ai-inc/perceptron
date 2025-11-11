@@ -1,6 +1,9 @@
 import asyncio
 
+import pytest
+
 from perceptron import async_perceive
+from perceptron.errors import AuthError
 from perceptron.dsl.nodes import image, text
 
 
@@ -79,11 +82,15 @@ def test_async_perceive_compile_only(monkeypatch):
     def describe(img):
         return image(img) + text("Hello")
 
-    res = asyncio.run(describe(b"bytes"))
-    assert res.text is None
-    assert isinstance(res.raw, dict)
-    assert res.raw["content"][0]["type"] == "image"
-    assert any(err.get("code") == "credentials_missing" for err in res.errors)
+    with pytest.raises(AuthError) as excinfo:
+        asyncio.run(describe(b"bytes"))
+
+    details = excinfo.value.details or {}
+    task = details.get("task")
+    assert task and isinstance(task, dict)
+    assert task["content"][0]["type"] == "image"
+    errors = details.get("errors") or []
+    assert any(err.get("code") == "credentials_missing" for err in errors)
 
 
 def test_async_perceive_supports_async_function(monkeypatch):

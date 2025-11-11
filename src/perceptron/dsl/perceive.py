@@ -36,7 +36,7 @@ except Exception:  # pragma: no cover
 
 from ..client import _PROVIDER_CONFIG, AsyncClient, Client
 from ..config import settings
-from ..errors import AnchorError, BadRequestError, ExpectationError
+from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
 from ..pointing.parser import PointParser_serialize
 from ..pointing.types import BoundingBox, Polygon, SinglePoint
@@ -341,17 +341,13 @@ def _maybe_compile_only_result(
     issues: list[dict],
     task: dict,
 ):
-    if stream:
-        return None
     if resolved_provider is None or not _has_credentials(provider_name, env):
         errors_with_hint = [*issues, _credentials_issue(provider_name)]
-        return PerceiveResult(
-            text=None,
-            points=None,
-            parsed=None,
-            usage=None,
-            errors=errors_with_hint,
-            raw=task,
+        issue = errors_with_hint[-1]
+        raise AuthError(
+            issue["message"],
+            code=issue.get("code"),
+            details={"task": task, "errors": errors_with_hint, "stream": stream, "provider": provider_name},
         )
     return None
 
@@ -613,10 +609,7 @@ def _credentials_issue(provider_name: str) -> dict[str, str]:
             "set PERCEPTRON_API_KEY or FAL_KEY (see `perceptron config`)."
         )
     else:
-        message = (
-            f"No credentials found for provider '{provider_name}'. Set PERCEPTRON_PROVIDER and "
-            "the appropriate API key before running."
-        )
+        message = f"No credentials found for provider '{provider_name}'. Set and validate api_key before running."
     return {"code": "credentials_missing", "message": message}
 
 

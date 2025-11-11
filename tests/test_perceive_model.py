@@ -1,6 +1,9 @@
 import asyncio
 
+import pytest
+
 from perceptron import async_perceive, perceive
+from perceptron.errors import AuthError
 from perceptron.dsl.nodes import image, text
 
 
@@ -132,3 +135,21 @@ def test_async_perceive_stream_passes_model(monkeypatch):
     collected = asyncio.run(_collect())
     assert collected[-1]["type"] == "final"
     assert _StubAsyncStreamClient.last_kwargs["model"] == "async-stream"
+
+
+def test_perceive_missing_credentials_raises(monkeypatch):
+    monkeypatch.delenv("PERCEPTRON_PROVIDER", raising=False)
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    monkeypatch.delenv("PERCEPTRON_API_KEY", raising=False)
+
+    @perceive()
+    def describe(img):
+        return image(img) + text("Describe")
+
+    with pytest.raises(AuthError) as excinfo:
+        describe(b"bytes")
+
+    details = excinfo.value.details or {}
+    task = details.get("task")
+    assert task and isinstance(task, dict)
+    assert task["content"][0]["type"] == "image"

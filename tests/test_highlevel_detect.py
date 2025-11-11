@@ -10,7 +10,7 @@ from perceptron.pointing.types import SinglePoint, bbox, collection
 
 class _StubClient:
     def generate(self, task, **kwargs):
-        return {"text": "", "raw": {"choices": []}}
+        return {"text": "", "points": None, "parsed": None, "raw": task}
 
     def stream(self, task, **kwargs):
         yield {"type": "text.delta", "chunk": "hello"}
@@ -31,13 +31,13 @@ class _FakeResponse:
 def test_detect_compile_only(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
 
-    # Run in compile-only mode by clearing credentials
-    with cfg(api_key=None, provider=None):
+    # Execute with stubbed client to inspect compiled task without API calls
+    with cfg(api_key="test-key", provider="fal"):
         res = detect(b"\x89PNG\r\n\x1a\n" + b"0" * 10, classes=["person"], max_tokens=16)
     assert res.raw and isinstance(res.raw, dict)
     roles = [item.get("role") for item in res.raw.get("content", [])]
     assert roles and roles[0] == "system"
-    assert any(err.get("code") == "credentials_missing" for err in res.errors)
+    assert res.errors == []
 
 
 def test_detect_with_examples(monkeypatch):
@@ -47,8 +47,8 @@ def test_detect_with_examples(monkeypatch):
         b"\x89PNG\r\n\x1a\n" + b"0" * 12,
         [bbox(1, 2, 3, 4, mention="car")],
     )
-    # Run in compile-only mode by clearing credentials
-    with cfg(api_key=None, provider=None):
+    # Execute with stubbed client to inspect compiled task without API calls
+    with cfg(api_key="test-key", provider="fal"):
         res = detect(b"\x89PNG\r\n\x1a\n" + b"1" * 12, classes=["car"], examples=[example])
     content = res.raw.get("content", [])
     # Should include example turns before target image
@@ -72,15 +72,16 @@ def test_detect_with_collection_examples(monkeypatch):
         ],
     )
 
-    # Run in compile-only mode by clearing credentials
-    with cfg(api_key=None, provider=None):
+    # Execute with stubbed client to inspect compiled task without API calls
+    with cfg(api_key="test-key", provider="fal"):
         res = detect(b"\x89PNG\r\n\x1a\n" + b"4" * 12, classes=["group"], examples=[example])
     content = res.raw.get("content", [])
     assistants = [item for item in content if item.get("role") == "assistant"]
     assert assistants and "<collection" in assistants[0]["content"]
 
 
-def test_detect_canonicalizes_collection_order():
+def test_detect_canonicalizes_collection_order(monkeypatch):
+    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
     example = annotate_image(
         b"img",
         {
@@ -89,8 +90,8 @@ def test_detect_canonicalizes_collection_order():
         },
     )
 
-    # Run in compile-only mode by clearing credentials
-    with cfg(api_key=None, provider=None):
+    # Execute with stubbed client to inspect compiled task without API calls
+    with cfg(api_key="test-key", provider="fal"):
         res = detect(b"target", classes=["person", "car"], examples=[example])
 
     assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
@@ -98,7 +99,8 @@ def test_detect_canonicalizes_collection_order():
     assert content.index('mention="person"') < content.index('mention="car"')
 
 
-def test_detect_sorts_collection_children():
+def test_detect_sorts_collection_children(monkeypatch):
+    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
     example = annotate_image(
         b"img",
         [
@@ -112,8 +114,8 @@ def test_detect_sorts_collection_children():
         ],
     )
 
-    # Run in compile-only mode by clearing credentials
-    with cfg(api_key=None, provider=None):
+    # Execute with stubbed client to inspect compiled task without API calls
+    with cfg(api_key="test-key", provider="fal"):
         res = detect(b"target", classes=["group"], examples=[example])
 
     assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
@@ -155,15 +157,16 @@ def test_annotate_image_sorts_mapping_collections():
     assert mentions == ["a", "z"]
 
 
-def test_prompt_collection_canonicalization():
+def test_prompt_collection_canonicalization(monkeypatch):
+    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
     example = {
         "image": b"img",
         "collections": [collection([bbox(5, 5, 10, 10)], mention="group")],
         "prompt": 'context <collection mention="group"> <point_box> (20,20) (30,30) </point_box> <point_box> (10,10) (15,15) </point_box> </collection>',
     }
 
-    # Run in compile-only mode by clearing credentials
-    with cfg(api_key=None, provider=None):
+    # Execute with stubbed client to inspect compiled task without API calls
+    with cfg(api_key="test-key", provider="fal"):
         res = detect(b"target", classes=["group"], examples=[example])
 
     prompt_text = next(
@@ -175,7 +178,8 @@ def test_prompt_collection_canonicalization():
 def test_detect_stream(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "stream", _StubClient.stream)
 
-    events = list(detect(b"\x89PNG\r\n\x1a\n" + b"2" * 12, classes=None, stream=True))
+    with cfg(api_key="test-key", provider="fal"):
+        events = list(detect(b"\x89PNG\r\n\x1a\n" + b"2" * 12, classes=None, stream=True))
     assert events[0]["type"] == "text.delta"
     assert events[-1]["type"] == "final"
 
