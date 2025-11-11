@@ -6,11 +6,12 @@ anchoring and bounds, returning issues (non-strict) or raising (strict).
 
 PerceiveResult
 - text: final text (if executed)
-- reasoning: extracted reasoning from <think> tags
 - points: list of parsed pointing objects if `expects` set and present
 - parsed: ordered segments mixing text and all tags with spans
+- usage: token usage statistics
 - errors: semantic/validation issues from compilation/streaming
 - raw: provider response or compiled Task for compile-only
+- reasoning: extracted reasoning from <think> tags (optional, defaults to None)
 """
 
 from __future__ import annotations
@@ -292,12 +293,12 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
 @dataclass
 class PerceiveResult:
     text: str | None
-    reasoning: Reasoning | None
     points: list[Any] | None
     parsed: list[dict] | None
     usage: dict | None
     errors: list[dict]
     raw: Any
+    reasoning: Reasoning | None = None
 
     def points_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[Any] | None:
         """Return a pixel-space copy of ``points`` given the image dimensions."""
@@ -350,12 +351,12 @@ def _maybe_compile_only_result(
         errors_with_hint = [*issues, _credentials_issue(provider_name)]
         return PerceiveResult(
             text=None,
-            reasoning=None,
             points=None,
             parsed=None,
             usage=None,
             errors=errors_with_hint,
             raw=task,
+            reasoning=None,
         )
     return None
 
@@ -367,12 +368,12 @@ def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveRe
     parsed = resp.get("parsed")
     return PerceiveResult(
         text=text,
-        reasoning=reasoning,
         points=points,
         parsed=parsed,
         usage=None,
         errors=issues,
         raw=resp.get("raw"),
+        reasoning=reasoning,
     )
 
 
