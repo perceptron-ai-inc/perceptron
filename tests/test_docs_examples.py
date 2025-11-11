@@ -44,6 +44,12 @@ def _live_config_kwargs() -> dict[str, str | None]:
     return {"provider": "perceptron", "api_key": api_key, "base_url": base_url}
 
 
+def test_live_config_requires_api_key(monkeypatch):
+    monkeypatch.delenv("PERCEPTRON_API_KEY", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        _live_config_kwargs()
+
+
 @pytest.mark.integration
 def test_docs_capabilities_captioning_example():
     """`capabilities/captioning` snippet covering text + grounded variants."""

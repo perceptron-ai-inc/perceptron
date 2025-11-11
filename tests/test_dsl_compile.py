@@ -1,6 +1,7 @@
 import pytest
 
 from perceptron import box, image, inspect_task, perceive, text
+from perceptron import config as cfg
 
 
 class _StubClient:

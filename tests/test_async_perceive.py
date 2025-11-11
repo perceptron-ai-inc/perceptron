@@ -105,3 +105,29 @@ def test_async_perceive_supports_async_function(monkeypatch):
 
     res = asyncio.run(describe(b"bytes"))
     assert res.text == "hello async"
+
+
+def test_async_perceive_direct_call(monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "test")
+    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubAsyncClient)
+
+    async def _run():
+        return await async_perceive(image(b"img") + text("Describe"))
+
+    result = asyncio.run(_run())
+    assert result.text == "hello async"
+
+
+def test_async_perceive_direct_stream(monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "test")
+    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubStreamAsyncClient)
+
+    async def _collect():
+        events_local = []
+        async for ev in async_perceive(image(b"img") + text("Describe"), stream=True):
+            events_local.append(ev)
+        return events_local
+
+    events = asyncio.run(_collect())
+    assert events[-1]["type"] == "final"
+    assert any(ev["type"] == "text.delta" for ev in events)
