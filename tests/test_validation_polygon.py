@@ -43,5 +43,6 @@ def test_polygon_oob_strict(monkeypatch):
         im = image(PILImage.new("RGB", (8, 8)))
         return im + polygon([(2, 2), (6, 2), (20, 6)], image=im)
 
-    with cfg(api_key="test-key", provider="fal"), pytest.raises(ExpectationError):
-        fn()
+    with cfg(api_key="test-key", provider="fal"):
+        with pytest.raises(ExpectationError):
+            fn()

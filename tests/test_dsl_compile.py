@@ -24,27 +24,6 @@ def _patch_direct_client(monkeypatch):
     return _StubClient
 
 
-class _StubClient:
-    last_task = None
-    last_kwargs = None
-
-    def __init__(self, **kwargs):  # pylint: disable=unused-argument
-        pass
-
-    def generate(self, task, **kwargs):  # pylint: disable=unused-argument
-        type(self).last_task = task
-        type(self).last_kwargs = kwargs
-        return {"text": "", "points": None, "parsed": None, "raw": task}
-
-
-def _patch_direct_client(monkeypatch):
-    _StubClient.last_task = None
-    _StubClient.last_kwargs = None
-    monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.Client", _StubClient)
-    return _StubClient
-
-
 @perceive(max_tokens=32)
 def describe_region(img):
     im = image(img)
