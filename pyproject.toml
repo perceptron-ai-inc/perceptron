@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 perceptron = "perceptron.cli:app"
+perceptron-mcp = "perceptron_mcp.server:main"
 
 [project.optional-dependencies]
 dev = [
@@ -33,6 +34,9 @@ dev = [
 ]
 torch = [
     "torch>=2.0",
+]
+mcp = [
+    "mcp>=0.1.0",
 ]
 
 [tool.setuptools.package-dir]
@@ -50,7 +54,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["perceptron"]
+source = ["perceptron", "perceptron_mcp"]
 omit = [
     "src/perceptron/tensorstream/*", # exclude tensorstream submodule, covered in internal tests
 ]

@@ -113,6 +113,36 @@ Directory mode disables streaming and logs raw responses, plus per-file validati
 
 ---
 
+## MCP Server (experimental)
+Install the optional MCP extra alongside the SDK:
+
+```bash
+pip install "perceptron[mcp]"
+```
+
+This pulls in the official MCP Python SDK, which provides the `mcp` CLI and the `FastMCP` server runtime for exposing tools/resources.
+
+Run the bundled server:
+
+```bash
+perceptron-mcp
+# or run via python
+python -m perceptron_mcp.server
+# MCP CLI helper for local iteration
+mcp dev perceptron_mcp/server.py
+```
+
+Tools exposed today:
+- `caption_image` – wraps `perceptron.caption`
+- `detect_objects` – wraps `perceptron.detect`
+- `ocr_extract` – wraps `perceptron.ocr`
+- `ask_image` – wraps `perceptron.question`
+- `set_defaults` – forwards to `perceptron.configure` so you can change provider/model/API keys at runtime
+
+All tools accept image paths or URLs, forward optional `provider`/`model` overrides, and return normalized text + geometry outputs ready for MCP clients to consume. Use standard MCP tooling (Claude Desktop, MCP Inspector, etc.) to register the server by pointing to the `perceptron-mcp` command (stdio) or the module `perceptron_mcp.server` if you prefer Python entry points.
+
+---
+
 ## High-Level APIs
 - `caption(image, *, style="concise", stream=False, **kwargs)`
 - `ocr(image, *, prompt=None, stream=False, **kwargs)`
