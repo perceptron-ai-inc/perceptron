@@ -51,6 +51,9 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["perceptron"]
+omit = [
+    "src/perceptron/tensorstream/*", # exclude tensorstream submodule, covered in internal tests
+]
 
 [tool.coverage.paths]
 perceptron = [
