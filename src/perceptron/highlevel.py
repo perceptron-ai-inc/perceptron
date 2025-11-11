@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,7 @@ from .dsl.nodes import (
 )
 from .dsl.perceive import perceive
 from .errors import BadRequestError
+from .expectations import expectation_hint_text, resolve_structured_expectation
 from .pointing.types import bbox
 from .prompting import (
     CaptionPromptTemplate,
@@ -92,10 +93,21 @@ def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | No
     return normalized
 
 
-def _expectation_hint_text(expects: str | None) -> str | None:
-    if expects in {"point", "box", "polygon"}:
-        return f"<hint>{expects.upper()}</hint>"
-    return None
+def _run_perceive_sequence(
+    *,
+    builder: Callable[[], SequenceNode],
+    perceive_base_kwargs: Mapping[str, Any],
+    gen_kwargs: dict[str, Any],
+):
+    perceive_kwargs = dict(perceive_base_kwargs)
+    perceive_kwargs.update(gen_kwargs)
+    runner = perceive(**perceive_kwargs)
+
+    @runner
+    def _run():
+        return builder()
+
+    return _run()
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +124,7 @@ def _caption_sequence(
     style_map = template.style_prompts
     if style not in style_map:
         raise BadRequestError(f"Unsupported caption style: {style}")
-    hint = _expectation_hint_text(expects)
+    hint = expectation_hint_text(expects)
     nodes = []
     if template.system_instruction:
         nodes.append(system(template.system_instruction))
@@ -135,27 +147,19 @@ def caption(
 
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     caption_template = profile.caption
-    normalized = expects.lower() if isinstance(expects, str) else expects
-    valid = {"text", "point", "box", "polygon"}
-    if normalized not in valid:
-        raise BadRequestError(f"Unsupported caption expects value: {expects}")
+    structured_expectation, allow_multiple = resolve_structured_expectation(expects, context="caption expects value")
 
-    structured_expectation: str | None = normalized if normalized in {"point", "box", "polygon"} else None
-    allow_multiple = structured_expectation is not None
-
-    perceive_kwargs: dict[str, Any] = {
+    base_kwargs = {
         "stream": stream,
         "expects": structured_expectation,
         "allow_multiple": allow_multiple,
     }
-    perceive_kwargs.update(gen_kwargs)
-    captioner = perceive(**perceive_kwargs)
 
-    @captioner
-    def _run():
-        return _caption_sequence(image_obj, style, structured_expectation, caption_template)
-
-    return _run()
+    return _run_perceive_sequence(
+        builder=lambda: _caption_sequence(image_obj, style, structured_expectation, caption_template),
+        perceive_base_kwargs=base_kwargs,
+        gen_kwargs=gen_kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +181,7 @@ def _question_sequence(
     nodes: list = []
     if system_instruction:
         nodes.append(system(system_instruction))
-    hint = _expectation_hint_text(expects)
+    hint = expectation_hint_text(expects)
     if hint:
         nodes.append(text(hint))
     nodes.append(image_node(image_obj))
@@ -197,27 +201,19 @@ def question(
 
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     question_template = profile.question
-    normalized = expects.lower()
-    valid = {"text", "point", "box", "polygon"}
-    if normalized not in valid:
-        raise BadRequestError(f"Unsupported expects value: {expects}")
+    structured_expectation, allow_multiple = resolve_structured_expectation(expects, context="expects value")
 
-    structured_expectation: str | None = normalized if normalized in {"point", "box", "polygon"} else None
-    allow_multiple = structured_expectation is not None
-
-    perceive_kwargs: dict[str, Any] = {
+    base_kwargs = {
         "stream": stream,
         "expects": structured_expectation,
         "allow_multiple": allow_multiple,
     }
-    perceive_kwargs.update(gen_kwargs)
-    qa_runner = perceive(**perceive_kwargs)
 
-    @qa_runner
-    def _run():
-        return _question_sequence(image_obj, question_text, structured_expectation, question_template)
-
-    return _run()
+    return _run_perceive_sequence(
+        builder=lambda: _question_sequence(image_obj, question_text, structured_expectation, question_template),
+        perceive_base_kwargs=base_kwargs,
+        gen_kwargs=gen_kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -259,19 +255,17 @@ def _run_ocr(
                 f"OCR mode '{mode}' is not configured for model '{model_label}'. Available modes: {available_display}."
             )
         effective_prompt = ocr_template.prompts.get(mode)
-    perceive_kwargs: dict[str, Any] = {
+    base_kwargs = {
         "stream": stream,
         "expects": None,
         "allow_multiple": False,
     }
-    perceive_kwargs.update(gen_kwargs)
-    reader = perceive(**perceive_kwargs)
 
-    @reader
-    def _run():
-        return _ocr_sequence(image_obj, effective_prompt, ocr_template)
-
-    return _run()
+    return _run_perceive_sequence(
+        builder=lambda: _ocr_sequence(image_obj, effective_prompt, ocr_template),
+        perceive_base_kwargs=base_kwargs,
+        gen_kwargs=gen_kwargs,
+    )
 
 
 def ocr(
@@ -360,23 +354,20 @@ def detect(  # noqa: PLR0913
 
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     detect_template = profile.detect
-    perceive_kwargs: dict[str, Any] = {
-        "expects": "box",
+    base_kwargs: dict[str, Any] = {
         "stream": stream,
+        "expects": "box",
         "allow_multiple": True,
         "max_outputs": max_outputs,
     }
     if strict is not None:
-        perceive_kwargs["strict"] = strict
-    perceive_kwargs.update(gen_kwargs)
+        base_kwargs["strict"] = strict
 
-    detector = perceive(**perceive_kwargs)
-
-    @detector
-    def _run():
-        return _detect_sequence(image_obj, classes=classes, examples=examples, template=detect_template)
-
-    return _run()
+    return _run_perceive_sequence(
+        builder=lambda: _detect_sequence(image_obj, classes=classes, examples=examples, template=detect_template),
+        perceive_base_kwargs=base_kwargs,
+        gen_kwargs=gen_kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
