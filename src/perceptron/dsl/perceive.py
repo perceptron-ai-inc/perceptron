@@ -349,7 +349,6 @@ def _maybe_compile_only_result(
             code=issue.get("code"),
             details={"task": task, "errors": errors_with_hint, "stream": stream, "provider": provider_name},
         )
-    return None
 
 
 def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:

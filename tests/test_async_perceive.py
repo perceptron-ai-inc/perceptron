@@ -5,6 +5,7 @@ import pytest
 from perceptron import async_perceive
 from perceptron.errors import AuthError
 from perceptron.dsl.nodes import image, text
+from perceptron.errors import AuthError
 
 
 class _StubAsyncClient:
