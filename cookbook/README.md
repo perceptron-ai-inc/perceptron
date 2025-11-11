@@ -14,7 +14,7 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 Each quickstart demonstrates:
 
 1. Exporting `PERCEPTRON_API_KEY`.
-2. Installing the SDK (`pip install --upgrade perceptron pillow`).
+2. Installing the SDK (`uv pip install --upgrade perceptron pillow`).
 3. Configuring the client via `os.environ.get("PERCEPTRON_API_KEY", "<placeholder>")`.
 4. Wrapping the call in a reusable `@perceive` helper.
 
@@ -50,16 +50,38 @@ Tutorials include reusable utilities for decoding/encoding video, batching Perce
 ## Running Notebooks Locally
 
 ```bash
-cd cookbook
-python -m venv .venv
+uv venv .venv
 source .venv/bin/activate            # or .venv\\Scripts\\activate on Windows
-pip install --upgrade perceptron pillow opencv-python tqdm
+uv pip install --upgrade perceptron pillow opencv-python tqdm
 export PERCEPTRON_API_KEY="..."
-jupyter lab
+uv run jupyter lab  # launch from the repo root so `cookbook.utils` imports succeed
 ```
 
 - Every notebook/script raises a helpful error if `PERCEPTRON_API_KEY` is missing or still set to the placeholder.
-- To execute headlessly, run `jupyter nbconvert --to notebook --execute path/to/notebook.ipynb`.
+- To execute headlessly, run `uv run jupyter nbconvert --to notebook --execute path/to/notebook.ipynb`.
+
+Or execute the entire suite (requires valid credentials) with:
+
+```bash
+PERCEPTRON_API_KEY="..." PERCEPTRON_BASE_URL="https://staging-api.perceptron.build/v1" \
+uv run python tools/run_notebooks.py --timeout 900
+```
+
+---
+
+## Shared Assets + Legacy Examples
+
+Centrally import the helper instead:
+
+```python
+from cookbook.utils import cookbook_asset
+
+scene = cookbook_asset("capabilities", "detection", "ppe_line.webp")
+```
+
+Make sure you run Python from the repo root (or add the repo root to `PYTHONPATH`) so `import cookbook.utils` resolves.
+
+> Integration tests and docs share the `_shared/assets/in-context-learning/multi` shots. Load them via `cookbook_asset("in-context-learning", "multi", ...)` to stay in sync.
 
 ---
 

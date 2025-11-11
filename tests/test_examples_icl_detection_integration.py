@@ -7,11 +7,12 @@ from PIL import Image
 from perceptron import annotate_image, bbox, detect, scale_points_to_pixels
 from perceptron import config as cfg
 from perceptron.pointing.types import BoundingBox
+from cookbook.utils import cookbook_asset
 
 pytestmark = pytest.mark.integration
 
 _API_KEY = os.getenv("PERCEPTRON_API_KEY")
-_TARGET_IMAGE = Path("examples/icl_detection/input.png")
+_TARGET_IMAGE = cookbook_asset("in-context-learning", "multi", "cat_dog_input.png")
 
 requires_perceptron_key = pytest.mark.skipif(
     not _API_KEY,
@@ -21,11 +22,11 @@ requires_perceptron_key = pytest.mark.skipif(
 
 def _build_examples():
     cat_example = annotate_image(
-        "examples/icl_detection/classA.jpg",
+        str(cookbook_asset("in-context-learning", "multi", "classA.jpg")),
         [bbox(316, 136, 703, 906, mention="classA")],
     )
     dog_example = annotate_image(
-        "examples/icl_detection/classB.webp",
+        str(cookbook_asset("in-context-learning", "multi", "classB.webp")),
         [bbox(161, 48, 666, 980, mention="classB")],
     )
     return [cat_example, dog_example]

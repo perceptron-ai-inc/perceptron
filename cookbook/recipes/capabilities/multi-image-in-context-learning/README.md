@@ -14,14 +14,19 @@ Each includes a normalized bounding box in the 0–1000 grid.
 
 ```python
 from perceptron import annotate_image, bbox
+from cookbook.utils import cookbook_asset
+
+CAT_IMAGE = cookbook_asset("in-context-learning", "multi", "classA.jpg")
+DOG_IMAGE = cookbook_asset("in-context-learning", "multi", "classB.webp")
+TARGET_IMAGE = cookbook_asset("in-context-learning", "multi", "cat_dog_input.png")
 
 cat_example = annotate_image(
-    'classA.jpg',
+    CAT_IMAGE,
     {'classA': [bbox(316, 136, 703, 906, mention='classA')]},
 )
 
 dog_example = annotate_image(
-    'classB.webp',
+    DOG_IMAGE,
     {'classB': [bbox(161, 48, 666, 980, mention='classB')]},
 )
 ```
@@ -31,7 +36,7 @@ dog_example = annotate_image(
 from perceptron import detect
 
 result = detect(
-    'input.png',
+    TARGET_IMAGE,
     classes=['classA', 'classB'],
     examples=[cat_example, dog_example],
 )
@@ -43,4 +48,4 @@ for box in result.points or []:
 > Bounding boxes use Perceptron’s **1–1000** coordinate system. Convert to pixel space before drawing overlays or computing metrics.
 
 ## Step 3 — Visualize the predictions
-Use Pillow (as shown in the accompanying `.py`/`.ipynb`) to draw the returned boxes on `cat_dog_input.png` and save `cat_dog_input_annotated.png` for quick inspection.
+Use Pillow (as shown in the accompanying `.py`/`.ipynb`) to draw the returned boxes on `cat_dog_input.png` and save `cat_dog_input_annotated.png` for quick inspection. When running scripts, call `cookbook_asset("in-context-learning", "multi", "cat_dog_input.png")` so you always pick up the canonical test asset.

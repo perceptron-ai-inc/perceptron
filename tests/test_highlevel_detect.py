@@ -1,5 +1,6 @@
 import json
 
+from cookbook.utils import cookbook_asset
 from perceptron import annotate_image, detect, detect_from_coco
 from perceptron import client as client_mod
 from perceptron import config as cfg
@@ -323,18 +324,18 @@ def test_examples_icl_detection_sequence(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "generate", _mock_generate)
 
     cat_example = annotate_image(
-        "examples/icl_detection/classA.jpg",
+        str(cookbook_asset("in-context-learning", "multi", "classA.jpg")),
         {"classA": [bbox(316, 136, 703, 906, mention="classA")]},
     )
 
     dog_example = annotate_image(
-        "examples/icl_detection/classB.webp",
+        str(cookbook_asset("in-context-learning", "multi", "classB.webp")),
         {"classB": [bbox(161, 48, 666, 980, mention="classB")]},
     )
 
     with cfg(provider="perceptron", api_key="test-key"):
         res = detect(
-            "examples/icl_detection/input.png",
+            str(cookbook_asset("in-context-learning", "multi", "cat_dog_input.png")),
             classes=["classA", "classB"],
             examples=[cat_example, dog_example],
         )

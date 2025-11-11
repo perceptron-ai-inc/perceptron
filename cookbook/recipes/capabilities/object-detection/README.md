@@ -3,14 +3,19 @@
 Prompt for the objects you care about and Isaac returns grounded geometry in Perceptron's normalized 1–1000 grid. This example spots hard hats and safety vests on a production line.
 
 ```python
-from perceptron import perceive, image, text
+from perceptron import image, perceive, text
+from cookbook.utils import cookbook_asset
+
+SCENE_PATH = cookbook_asset("capabilities", "detection", "ppe_line.webp")
+
 
 @perceive(expects="box", allow_multiple=True)
 def detect_ppe(frame_path):
     scene = image(frame_path)
     return scene + text("Find every safety helmet and high-visibility vest. Return one bounding box per item.")
 
-result = detect_ppe("ppe_line.webp")
+
+result = detect_ppe(str(SCENE_PATH))
 print(result.text)
 print(result.points)
 ```

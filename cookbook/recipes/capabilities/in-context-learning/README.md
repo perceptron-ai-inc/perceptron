@@ -9,11 +9,15 @@ Run `detect` once on the cake-mixer exemplar to harvest a normalized bounding bo
 
 ```python
 from perceptron import annotate_image, bbox, detect
+from cookbook.utils import cookbook_asset
 
-bootstrap = detect('cake_mixer_example.webp', classes=['objectCategory1'])
+EXEMPLAR = cookbook_asset("in-context-learning", "single", "cake_mixer_example.webp")
+TARGET = cookbook_asset("in-context-learning", "single", "find_kitchen_item.webp")
+
+bootstrap = detect(EXEMPLAR, classes=['objectCategory1'])
 first_box = bootstrap.points[0]
 example_shot = annotate_image(
-    'cake_mixer_example.webp',
+    EXEMPLAR,
     {
         'objectCategory1': [
             bbox(
@@ -33,7 +37,7 @@ example_shot = annotate_image(
 from perceptron import detect
 
 result = detect(
-    'find_kitchen_item.webp',
+    TARGET,
     classes=['objectCategory1'],
     examples=[example_shot],
 )

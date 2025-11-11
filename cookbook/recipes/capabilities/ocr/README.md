@@ -4,15 +4,18 @@ Use the OCR helper when you need structured transcriptions driven by your own in
 
 ```python
 from perceptron import ocr
+from cookbook.utils import cookbook_asset
 
-result = ocr("grocery_labels.webp", prompt="Extract product name and price")
+LABELS = cookbook_asset("capabilities", "ocr", "grocery_labels.webp")
+
+result = ocr(LABELS, prompt="Extract product name and price")
 print(result.text)
 ```
 
 The CLI provides the same experience:
 
 ```bash
-perceptron ocr grocery_labels.webp --prompt "Extract component labels"
+perceptron ocr cookbook/_shared/assets/capabilities/ocr/grocery_labels.webp --prompt "Extract component labels"
 ```
 
 Pair OCR output with detection or Q&A helpers to validate the surrounding visuals.

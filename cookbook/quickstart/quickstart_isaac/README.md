@@ -32,26 +32,19 @@ pip install --upgrade perceptron pillow
 Save this as `example.py` or run it inside the notebook:
 
 ```python
-import os
 from pathlib import Path
 
 from perceptron import configure, image, perceive, text
 from PIL import Image, ImageDraw
+from cookbook.utils import cookbook_asset
 
-api_key = os.environ.get("PERCEPTRON_API_KEY", "<your Perceptron API key if not set as an env var>")
-if not api_key or api_key.startswith("<"):
-    raise RuntimeError("Set PERCEPTRON_API_KEY or replace the placeholder in this example.")
-
-BASE_URL = "https://api.perceptron.inc"
-
+# Assume PERCEPTRON_API_KEY is already exported; configure() reads it automatically.
 configure(
     provider="perceptron",
-    api_key=api_key,
-    base_url=BASE_URL,
     # model="isaac-0.1",  # Enable once the SDK supports the model argument.
 )
 
-IMAGE_PATH = Path("../_shared/assets/quickstart/isaac/truck_scene.jpg")
+IMAGE_PATH = cookbook_asset("quickstart", "isaac", "truck_scene.jpg")
 
 @perceive(expects="box", allow_multiple=True)
 def detect_boxes(frame_path):
@@ -84,6 +77,7 @@ print("Annotated image saved to truck_scene_annotated.jpg")
 python example.py
 ```
 A file named `truck_scene_annotated.jpg` appears with the detected boxes.
+> Tip: Run the script from the repo root (for example, `python cookbook/quickstart/quickstart_isaac/example.py`) so `import cookbook.utils` can locate the shared assets.
 
 ## Explore more
 - [Captioning](../recipes/capabilities/captioning/README.md)
