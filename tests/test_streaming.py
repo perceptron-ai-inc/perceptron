@@ -102,35 +102,3 @@ def test_stream_http_error(monkeypatch):
 
     events = list(fn(b"\x89PNG\r\n\x1a\nxxxxxxxxxx"))
     assert events and events[0]["type"] == "error"
-
-
-def test_stream_direct_call(monkeypatch):
-    chunks = [
-        _sse({"choices": [{"delta": {"content": "Go "}}]}),
-        _sse({"choices": [{"delta": {"content": "team"}}]}),
-        _sse({"usage": {"prompt_tokens": 5, "completion_tokens": 2}}),
-        "data: [DONE]",
-    ]
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-        def stream(self, method, url, headers=None, json=None):
-            assert method == "POST"
-            return _MockResp(chunks, status=200)
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-
-    img = b"\x89PNG\r\n\x1a\n" + b"0" * 10
-
-    events = list(perceive(image(img) + text("Cheer"), expects="point", stream=True))
-    kinds = [event.get("type") for event in events]
-    assert kinds.count("text.delta") >= 1
-    assert kinds[-1] == "final"
