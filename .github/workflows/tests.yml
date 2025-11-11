@@ -30,15 +30,28 @@ jobs:
           python -m pip install .[dev]
 
       - name: Run tests with coverage
-        run: pytest
+        id: pytest
+        continue-on-error: true
+        run: pytest --junitxml=junit.xml -o junit_family=legacy
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload coverage artifact
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: python-coverage
           path: coverage.xml
           retention-days: 7
           if-no-files-found: error
+
+      - name: Fail if tests failed
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
 
   coverage:
     runs-on: ubuntu-latest

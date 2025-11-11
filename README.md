@@ -1,4 +1,5 @@
 # Perceptron SDK
+[![codecov](https://codecov.io/github/perceptron-ai-inc/perceptron/graph/badge.svg?token=HW6JASKQJR)](https://codecov.io/github/perceptron-ai-inc/perceptron)
 
 Python SDK and CLI for perceptive-language models. The SDK is provider-agnostic and lets you compose visual + language tasks, run them locally for inspection, or execute them via a configured provider. Choose a provider and optional model per call; keep your application code stable across model updates.
 
