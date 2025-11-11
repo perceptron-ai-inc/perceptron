@@ -24,6 +24,7 @@ perceptron = "perceptron.cli:app"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     "pre-commit>=3.5",
     "ruff==0.13.0",
     "ty==0.0.1-alpha.20",
@@ -42,8 +43,26 @@ where = ["src"]
 include = ["perceptron*"]
 
 [tool.pytest.ini_options]
+addopts = "--cov=perceptron --cov-report=term-missing --cov-report=xml"
 markers = [
     "integration: tests that call live Perceptron providers (require PERCEPTRON_API_KEY)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["perceptron"]
+
+[tool.coverage.paths]
+perceptron = [
+    "src/perceptron",
+    "*/site-packages/perceptron",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "if TYPE_CHECKING:",
 ]
 
 [tool.ruff]

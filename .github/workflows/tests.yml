@@ -9,6 +9,8 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Check out
@@ -27,5 +29,39 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .[dev]
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests with coverage
+        run: pytest
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: coverage.xml
+          retention-days: 7
+          if-no-files-found: error
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: tests
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-coverage
+          path: coverage
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: coverage/coverage.xml
+          flags: sdk-tests
+          fail_ci_if_error: true
+          verbose: true

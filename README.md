@@ -180,6 +180,8 @@ Set `stream=True` in the decorator to receive incremental events (`text.delta`, 
 - Install tooling: `python -m pip install -e .[dev]` (or `uv pip install --editable .[dev]`)
 - Enable git hooks: `pre-commit install`
 - Run all checks: `pre-commit run --all-files`
+- Run tests with coverage: `pytest` (prints a term summary and writes `coverage.xml`; generate HTML via `coverage html`)
+- Coverage is published from CI via Codecov using GitHub OIDC (no long-lived tokens). Install the Codecov GitHub App for this repo/org; private forks can export `CODECOV_TOKEN` to upload from their own CI runs.
 
 Repository layout
 - `src/perceptron` – core SDK and DSL
