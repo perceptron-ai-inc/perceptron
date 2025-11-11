@@ -512,6 +512,83 @@ def _execute_sync_task(
     return _perceive_result_from_response(resp, issues)
 
 
+async def _execute_async_generate_task(
+    *,
+    task: dict,
+    issues: list[dict],
+    provider_override: str | None,
+    model_override: str | None,
+    expects: str | None,
+    allow_multiple: bool,
+    max_outputs: int | None,
+    temperature: float,
+    max_tokens: int,
+    top_p: float,
+    top_k: int | None,
+):
+    compile_only, client_kwargs = _prepare_execution_context(
+        task=task,
+        issues=issues,
+        stream=False,
+        provider_override=provider_override,
+        model_override=model_override,
+        expects=expects,
+        allow_multiple=allow_multiple,
+        max_outputs=max_outputs,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+    )
+    if compile_only is not None:
+        return compile_only
+
+    client = AsyncClient()
+    resp = await client.generate(task, **client_kwargs)
+    return _perceive_result_from_response(resp, issues)
+
+
+async def _execute_async_stream_task(
+    *,
+    task: dict,
+    issues: list[dict],
+    parse_points: bool,
+    provider_override: str | None,
+    model_override: str | None,
+    expects: str | None,
+    allow_multiple: bool,
+    max_outputs: int | None,
+    temperature: float,
+    max_tokens: int,
+    top_p: float,
+    top_k: int | None,
+):
+    compile_only, client_kwargs = _prepare_execution_context(
+        task=task,
+        issues=issues,
+        stream=True,
+        provider_override=provider_override,
+        model_override=model_override,
+        expects=expects,
+        allow_multiple=allow_multiple,
+        max_outputs=max_outputs,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+    )
+    if compile_only is not None:
+        return
+
+    client = AsyncClient()
+    async for event in client.stream(
+        task,
+        parse_points=parse_points,
+        **client_kwargs,
+    ):
+        yield event
+
+
 def perceive(
     *nodes_or_fn: Any,
     visual_reasoning: str | None = None,
@@ -589,7 +666,7 @@ def perceive(
 
 
 def async_perceive(
-    *,
+    *nodes_or_fn: Any,
     visual_reasoning: str | None = None,
     expects: str | None = None,
     model: str | None = None,
@@ -603,7 +680,7 @@ def async_perceive(
     max_outputs: int | None = 1,
     stream: bool = False,
 ):
-    """Async counterpart to ``perceive`` using :class:`AsyncClient`."""
+    """Async counterpart to ``perceive`` (decorator or direct helper)."""
 
     parse_points = _expects_structured(expects)
 
@@ -616,10 +693,10 @@ def async_perceive(
             def _call(*args: Any, **kwargs: Any):
                 async def _generator():
                     task, issues = await _inspect_async(*args, **kwargs)
-                    compile_only, client_kwargs = _prepare_execution_context(
+                    async for event in _execute_async_stream_task(
                         task=task,
                         issues=issues,
-                        stream=True,
+                        parse_points=parse_points,
                         provider_override=provider,
                         model_override=model,
                         expects=expects,
@@ -629,14 +706,6 @@ def async_perceive(
                         max_tokens=max_tokens,
                         top_p=top_p,
                         top_k=top_k,
-                    )
-                    if compile_only is not None:
-                        return
-                    client = AsyncClient()
-                    async for event in client.stream(
-                        task,
-                        parse_points=parse_points,
-                        **client_kwargs,
                     ):
                         yield event
 
@@ -648,10 +717,9 @@ def async_perceive(
 
         async def _call(*args: Any, **kwargs: Any):
             task, issues = await _inspect_async(*args, **kwargs)
-            compile_only, client_kwargs = _prepare_execution_context(
+            return await _execute_async_generate_task(
                 task=task,
                 issues=issues,
-                stream=False,
                 provider_override=provider,
                 model_override=model,
                 expects=expects,
@@ -662,18 +730,49 @@ def async_perceive(
                 top_p=top_p,
                 top_k=top_k,
             )
-            if compile_only is not None:
-                return compile_only
-
-            client = AsyncClient()
-            resp = await client.generate(task, **client_kwargs)
-            return _perceive_result_from_response(resp, issues)
 
         _call.__perceptron_inspector__ = _inspect_async  # type: ignore[attr-defined]
 
         return _call
 
-    return wrapper
+    if not nodes_or_fn:
+        return wrapper
+
+    if len(nodes_or_fn) == 1 and callable(nodes_or_fn[0]):
+        return wrapper(nodes_or_fn[0])
+
+    nodes = _normalize_direct_nodes(nodes_or_fn)
+    task, issues = _compile(nodes, expects=expects, strict=strict)
+
+    if stream:
+        return _execute_async_stream_task(
+            task=task,
+            issues=issues,
+            parse_points=parse_points,
+            provider_override=provider,
+            model_override=model,
+            expects=expects,
+            allow_multiple=allow_multiple,
+            max_outputs=max_outputs,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            top_k=top_k,
+        )
+
+    return _execute_async_generate_task(
+        task=task,
+        issues=issues,
+        provider_override=provider,
+        model_override=model,
+        expects=expects,
+        allow_multiple=allow_multiple,
+        max_outputs=max_outputs,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+    )
 
 
 def inspect_task(callable_obj: Callable[..., Any], *args: Any, **kwargs: Any):
