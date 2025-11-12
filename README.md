@@ -13,7 +13,7 @@
 <p align="center">
   <a href="https://www.perceptron.inc/" target="_blank"><strong>Website</strong></a> ·
   <a href="https://docs.perceptron.inc" target="_blank"><strong>Docs</strong></a> ·
-  <a href="https://discord.gg/perceptron" target="_blank"><strong>Community</strong></a>
+  <a href="https://discord.gg/fgBeaACQzE" target="_blank"><strong>Community</strong></a>
 </p>
 
 ---
