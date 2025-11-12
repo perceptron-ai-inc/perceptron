@@ -8,8 +8,10 @@ PerceiveResult
 - text: final text (if executed)
 - points: list of parsed pointing objects if `expects` set and present
 - parsed: ordered segments mixing text and all tags with spans
+- usage: token usage statistics
 - errors: semantic/validation issues from compilation/streaming
 - raw: provider response or compiled Task for compile-only
+- reasoning: extracted reasoning from <think> tags (optional, defaults to None)
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
 from ..pointing.parser import PointParser_serialize
 from ..pointing.types import BoundingBox, Polygon, SinglePoint
+from ..reasoning import Reasoning
 from .nodes import (
     Agent,
     DSLNode,
@@ -295,6 +298,7 @@ class PerceiveResult:
     usage: dict | None
     errors: list[dict]
     raw: Any
+    reasoning: Reasoning | None = None
 
     def points_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[Any] | None:
         """Return a pixel-space copy of ``points`` given the image dimensions."""
@@ -353,6 +357,7 @@ def _maybe_compile_only_result(
 
 def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:
     text = resp.get("text")
+    reasoning = resp.get("reasoning")
     points = resp.get("points")
     parsed = resp.get("parsed")
     return PerceiveResult(
@@ -362,6 +367,7 @@ def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveRe
         usage=None,
         errors=issues,
         raw=resp.get("raw"),
+        reasoning=reasoning,
     )
 
 
