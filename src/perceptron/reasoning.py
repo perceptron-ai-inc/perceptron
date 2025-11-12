@@ -3,21 +3,25 @@ Reasoning extraction and parsing utilities.
 
 Supported tags:
 - <think> reasoning content here </think>
+- Points inside reasoning: <point>, <point_box>, <polygon>, <collection>
 
 Data structures:
-- Reasoning: dataclass holding reasoning content
+- Reasoning: dataclass holding reasoning content and parsed segments
 
 Functions:
-- extract_reasoning(text) → single Reasoning object with concatenated content
+- extract_reasoning(text) → single Reasoning object with concatenated content and parsed points
 - strip_reasoning(text) → remove all <think> tags
 - parse_text(text) → ordered segments: text and reasoning with spans
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(eq=True)
@@ -27,15 +31,47 @@ class Reasoning:
 
     Attributes:
         content: The accumulated reasoning text from all <think> tags
+        parsed_segments: Optional list of parsed segments (text, points, etc.) from the reasoning content
     """
     content: str
+    parsed_segments: list[dict[str, Any]] | None = None
 
 
 # Regex pattern for <think> tags (case-insensitive, dotall for multiline)
 _THINK_TAG = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
 
 
-def extract_reasoning(text: str) -> Reasoning | None:
+def _parse_points_in_content(content: str) -> list[dict[str, Any]] | None:
+    """
+    Helper function to parse point/box/polygon tags inside reasoning content.
+
+    Args:
+        content: Text content to parse for pointing tags
+
+    Returns:
+        List of parsed segments if pointing tags found, None otherwise
+    """
+    try:
+        # Import here to avoid circular dependency
+        from .pointing.parser import parse_text as parse_pointing_text
+
+        parsed_segments = parse_pointing_text(content)
+        # Only include if there are actual point/box/polygon/collection segments
+        if not any(seg.get("kind") in {"point", "box", "polygon", "collection"} for seg in parsed_segments):
+            return None
+        return parsed_segments
+    except ImportError as e:
+        logger.warning("Failed to import pointing parser: %s", e)
+        return None
+    except (ValueError, TypeError, KeyError) as e:
+        logger.warning("Failed to parse pointing tags in reasoning content: %s", e)
+        return None
+    except Exception as e:
+        logger.error("Unexpected error parsing pointing tags: %s", e)
+        return None
+
+
+def extract_reasoning(text: str, parse_points: bool = True) -> Reasoning | None:
     """
     Extract all <think> tag content and return as single Reasoning object.
 
@@ -44,15 +80,20 @@ def extract_reasoning(text: str) -> Reasoning | None:
 
     Args:
         text: Text containing potential <think> tags
+        parse_points: If True, parse point/box/polygon tags inside reasoning content
 
     Returns:
-        Reasoning object with concatenated content, or None if no tags found
+        Reasoning object with concatenated content and optionally parsed segments, or None if no tags found
 
     Example:
         >>> text = "First <think>reason 1</think> then <think>reason 2</think>"
         >>> reasoning = extract_reasoning(text)
         >>> reasoning.content
         'reason 1\\nreason 2'
+
+        >>> text = "<think>The point is at <point>(10,20)</point></think>"
+        >>> reasoning = extract_reasoning(text, parse_points=True)
+        >>> reasoning.parsed_segments  # Contains parsed point data
     """
     if not isinstance(text, str):
         return None
@@ -67,7 +108,13 @@ def extract_reasoning(text: str) -> Reasoning | None:
 
     # Concatenate all reasoning parts with newlines
     content = "\n".join(reasoning_parts)
-    return Reasoning(content=content)
+
+    # Parse points inside reasoning content if requested
+    parsed_segments = None
+    if parse_points:
+        parsed_segments = _parse_points_in_content(content)
+
+    return Reasoning(content=content, parsed_segments=parsed_segments)
 
 
 def strip_reasoning(text: str) -> str:
@@ -86,7 +133,7 @@ def strip_reasoning(text: str) -> str:
         'Answer:  42'
     """
     if not isinstance(text, str):
-        return text
+        return str(text) if text is not None else ""
 
     # Remove all <think> tags
     cleaned = _THINK_TAG.sub("", text)
@@ -95,15 +142,17 @@ def strip_reasoning(text: str) -> str:
     return cleaned
 
 
-def parse_text(text: str) -> list[dict[str, Any]]:
+def parse_text(text: str, parse_points: bool = True) -> list[dict[str, Any]]:
     """
     Parse text into ordered segments of text and reasoning with position tracking.
 
     Returns list of segments alternating between text and reasoning, with spans
-    indicating their position in the original text.
+    indicating their position in the original text. Reasoning content can contain
+    parsed point/box/polygon tags.
 
     Args:
         text: Text to parse
+        parse_points: If True, parse point/box/polygon tags inside reasoning content
 
     Returns:
         List of segment dictionaries with keys:
@@ -120,6 +169,10 @@ def parse_text(text: str) -> list[dict[str, Any]]:
         >>> segments[1]
         {"kind": "reasoning", "value": Reasoning(content="reasoning"),
              "span": {"start": 6, "end": 28}}
+
+        >>> text = "Text <think>Point at <point>(10,20)</point></think> more"
+        >>> segments = parse_text(text, parse_points=True)
+        >>> segments[1]["value"].parsed_segments  # Contains parsed point data
     """
     if not isinstance(text, str):
         return [{"kind": "text", "text": str(text), "span": {"start": 0, "end": len(str(text))}}]
@@ -136,12 +189,17 @@ def parse_text(text: str) -> list[dict[str, Any]]:
                 "span": {"start": idx, "end": match.start()}
             })
 
-        # Add reasoning segment
+        # Add reasoning segment with point parsing
         content = match.group(1).strip()
         if content:  # Only add non-empty reasoning
+            # Parse points inside reasoning content if requested
+            parsed_segments = None
+            if parse_points:
+                parsed_segments = _parse_points_in_content(content)
+
             segments.append({
                 "kind": "reasoning",
-                "value": Reasoning(content=content),
+                "value": Reasoning(content=content, parsed_segments=parsed_segments),
                 "span": {"start": match.start(), "end": match.end()}
             })
 
