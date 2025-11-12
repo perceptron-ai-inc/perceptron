@@ -3,7 +3,6 @@ import asyncio
 import pytest
 
 from perceptron import async_perceive, perceive
-from perceptron.errors import AuthError
 from perceptron.dsl.nodes import image, text
 from perceptron.errors import AuthError
 
