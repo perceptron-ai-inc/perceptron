@@ -38,7 +38,7 @@ except Exception:  # pragma: no cover
 
 from ..client import _PROVIDER_CONFIG, AsyncClient, Client
 from ..config import settings
-from ..errors import AnchorError, BadRequestError, ExpectationError
+from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
 from ..pointing.parser import PointParser_serialize
 from ..pointing.types import BoundingBox, Polygon, SinglePoint
@@ -345,20 +345,14 @@ def _maybe_compile_only_result(
     issues: list[dict],
     task: dict,
 ):
-    if stream:
-        return None
     if resolved_provider is None or not _has_credentials(provider_name, env):
         errors_with_hint = [*issues, _credentials_issue(provider_name)]
-        return PerceiveResult(
-            text=None,
-            points=None,
-            parsed=None,
-            usage=None,
-            errors=errors_with_hint,
-            raw=task,
-            reasoning=None,
+        issue = errors_with_hint[-1]
+        raise AuthError(
+            issue["message"],
+            code=issue.get("code"),
+            details={"task": task, "errors": errors_with_hint, "stream": stream, "provider": provider_name},
         )
-    return None
 
 
 def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:
@@ -440,8 +434,91 @@ def _expects_structured(expects: str | None) -> bool:
     return expects in {"point", "box", "polygon"}
 
 
-def perceive(
+def _collect_nodes(value: Any, acc: list[DSLNode]) -> None:
+    if isinstance(value, Sequence):
+        for node in value.nodes:
+            _collect_nodes(node, acc)
+        return
+    if isinstance(value, DSLNode):
+        acc.append(value)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_nodes(item, acc)
+        return
+    raise TypeError(
+        "perceive direct invocation expects DSL nodes (text/image/...) or sequences; "
+        f"received unsupported type {type(value)!r}"
+    )
+
+
+def _normalize_direct_nodes(values: tuple[Any, ...]) -> DSLNode | Sequence:
+    if not values:
+        raise TypeError("perceive direct invocation requires at least one DSL node")
+    flat: list[DSLNode] = []
+    for value in values:
+        _collect_nodes(value, flat)
+    if not flat:
+        raise TypeError("perceive direct invocation did not receive any DSL nodes")
+    if len(flat) == 1:
+        return flat[0]
+    return Sequence(flat)
+
+
+def _execute_sync_task(
     *,
+    task: dict,
+    issues: list[dict],
+    parse_points: bool,
+    stream: bool,
+    provider_override: str | None,
+    model_override: str | None,
+    expects: str | None,
+    allow_multiple: bool,
+    max_outputs: int | None,
+    temperature: float,
+    max_tokens: int,
+    top_p: float,
+    top_k: int | None,
+):
+    compile_only, client_kwargs = _prepare_execution_context(
+        task=task,
+        issues=issues,
+        stream=stream,
+        provider_override=provider_override,
+        model_override=model_override,
+        expects=expects,
+        allow_multiple=allow_multiple,
+        max_outputs=max_outputs,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+    )
+    if compile_only is not None:
+        return compile_only
+
+    client = Client()
+    if stream:
+        return client.stream(
+            task,
+            parse_points=parse_points,
+            **client_kwargs,
+        )
+
+    try:
+        resp = client.generate(task, **client_kwargs)
+    except TypeError:
+        gen = getattr(type(client), "generate", None)
+        if callable(gen):
+            resp = gen(task, **client_kwargs)
+        else:
+            raise
+    return _perceive_result_from_response(resp, issues)
+
+
+def perceive(
+    *nodes_or_fn: Any,
     visual_reasoning: str | None = None,
     expects: str | None = None,
     model: str | None = None,
@@ -455,10 +532,12 @@ def perceive(
     max_outputs: int | None = 1,
     stream: bool = False,
 ):
-    """Decorator for building Tasks from DSL nodes.
+    """Decorator (or direct helper) for building Tasks from DSL nodes.
 
-    Executes via the default Client unless compile-only fallback is triggered
-    (no provider configured or the selected provider lacks credentials).
+    When called without nodes it returns a decorator; when passed nodes directly
+    it immediately compiles and executes them. Executes via the default Client
+    unless compile-only fallback is triggered (no provider configured or the
+    selected provider lacks credentials).
     """
 
     parse_points = _expects_structured(expects)
@@ -469,9 +548,10 @@ def perceive(
 
         def _call(*args: Any, **kwargs: Any):
             task, issues = _inspect(*args, **kwargs)
-            compile_only, client_kwargs = _prepare_execution_context(
+            return _execute_sync_task(
                 task=task,
                 issues=issues,
+                parse_points=parse_points,
                 stream=stream,
                 provider_override=provider,
                 model_override=model,
@@ -483,33 +563,34 @@ def perceive(
                 top_p=top_p,
                 top_k=top_k,
             )
-            if compile_only is not None:
-                return compile_only
-
-            client = Client()
-            if stream:
-                return client.stream(
-                    task,
-                    parse_points=parse_points,
-                    **client_kwargs,
-                )
-
-            try:
-                resp = client.generate(task, **client_kwargs)
-            except TypeError:
-                # Support tests that monkeypatch Client.generate as a @staticmethod
-                gen = getattr(type(client), "generate", None)
-                if callable(gen):
-                    resp = gen(task, **client_kwargs)
-                else:
-                    raise
-            return _perceive_result_from_response(resp, issues)
 
         _call.__perceptron_inspector__ = _inspect  # type: ignore[attr-defined]
 
         return _call
 
-    return wrapper
+    if not nodes_or_fn:
+        return wrapper
+
+    if len(nodes_or_fn) == 1 and callable(nodes_or_fn[0]):
+        return wrapper(nodes_or_fn[0])
+
+    nodes = _normalize_direct_nodes(nodes_or_fn)
+    task, issues = _compile(nodes, expects=expects, strict=strict)
+    return _execute_sync_task(
+        task=task,
+        issues=issues,
+        parse_points=parse_points,
+        stream=stream,
+        provider_override=provider,
+        model_override=model,
+        expects=expects,
+        allow_multiple=allow_multiple,
+        max_outputs=max_outputs,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+    )
 
 
 def async_perceive(
@@ -615,15 +696,9 @@ __all__ = ["PerceiveResult", "async_perceive", "inspect_task", "perceive"]
 
 def _credentials_issue(provider_name: str) -> dict[str, str]:
     if provider_name == "fal":
-        message = (
-            "No credentials found for provider 'fal'. Export PERCEPTRON_PROVIDER=fal and "
-            "set PERCEPTRON_API_KEY or FAL_KEY (see `perceptron config`)."
-        )
+        message = "No credentials found for provider 'fal'. Set and validate api_key (e.g., PERCEPTRON_API_KEY or FAL_KEY) before running."
     else:
-        message = (
-            f"No credentials found for provider '{provider_name}'. Set PERCEPTRON_PROVIDER and "
-            "the appropriate API key before running."
-        )
+        message = f"No credentials found for provider '{provider_name}'. Set and validate api_key before running."
     return {"code": "credentials_missing", "message": message}
 
 

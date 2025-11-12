@@ -1,6 +1,7 @@
 import pytest
 
 from perceptron import client as client_mod
+from perceptron import config as cfg
 from perceptron import image, perceive, polygon
 from perceptron.errors import ExpectationError
 
@@ -27,7 +28,8 @@ def test_polygon_oob_non_strict(monkeypatch):
         # One vertex out-of-bounds
         return im + polygon([(2, 2), (6, 2), (20, 6)], image=im)
 
-    res = fn()
+    with cfg(api_key="test-key", provider="fal"):
+        res = fn()
     assert any(e.get("code") == "bounds_out_of_range" for e in res.errors)
 
 
@@ -41,5 +43,6 @@ def test_polygon_oob_strict(monkeypatch):
         im = image(PILImage.new("RGB", (8, 8)))
         return im + polygon([(2, 2), (6, 2), (20, 6)], image=im)
 
-    with pytest.raises(ExpectationError):
-        fn()
+    with cfg(api_key="test-key", provider="fal"):
+        with pytest.raises(ExpectationError):
+            fn()

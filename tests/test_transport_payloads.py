@@ -1,4 +1,4 @@
-from perceptron import agent, box, image, perceive, text
+from perceptron import agent, box, image, inspect_task, perceive, text
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.pointing.parser import PointParser
@@ -23,10 +23,8 @@ def _icl_prompt():
 
 
 def test_task_roles_and_message_conversion():
-    # Run in compile-only mode by clearing credentials
-    with cfg(api_key=None, provider=None):
-        res = _icl_prompt()
-    task = res.raw
+    task, issues = inspect_task(_icl_prompt)
+    assert issues == []
     # Verify roles in compiled task
     roles = [item.get("role") for item in task.get("content", []) if item.get("type") == "text"]
     assert roles.count("assistant") == 1
@@ -118,19 +116,18 @@ def test_fal_payload_structure(monkeypatch):
     assert res.points and res.points[0].top_left.x == 1
 
 
-def test_image_url_passthrough(monkeypatch):
+def test_image_url_passthrough():
     @perceive()
     def fn():
         return image("https://example.com/sample.png")
 
-    # Compile-only (no provider configured)
-    with cfg(api_key=None, provider=None):
-        res = fn()
-    assert res.raw and isinstance(res.raw, dict)
-    content = res.raw.get("content", [])
+    task, issues = inspect_task(fn)
+    assert issues == []
+    assert task and isinstance(task, dict)
+    content = task.get("content", [])
     assert content and content[0].get("content") == "https://example.com/sample.png"
 
-    messages = client_mod._task_to_openai_messages(res.raw)
+    messages = client_mod._task_to_openai_messages(task)
     assert messages and messages[0]["role"] == "user"
     parts = messages[0]["content"]
     assert isinstance(parts, list)

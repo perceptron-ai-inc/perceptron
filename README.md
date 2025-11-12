@@ -163,6 +163,17 @@ for box in result.points or []:
 print(describe_landmark.inspect("./landmark.jpg"))
 ```
 
+Need something ad-hoc? Call `perceive` directly with DSL nodes (a sequence, a
+single node, or even a list/tuple of nodes):
+
+```python
+from perceptron import image, perceive, text
+
+result = perceive(image("./frame.png") + text("What's in this scene?"), expects="text")
+# Equivalent list-based form
+alt = perceive([image("./frame.png"), text("Where is the forklift?")], expects="box")
+```
+
 Set `stream=True` in the decorator to receive incremental events (`text.delta`, `points.delta`, `final`). Swap `expects` to `text`, `point`, or `polygon` when you need alternate structures.
 
 ---
