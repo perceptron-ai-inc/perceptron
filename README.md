@@ -41,6 +41,18 @@ Ask for whatever you need in natural language—"find safety violations", "locat
 
 ## Installation
 
+- Prerequisites: Python 3.10+ and `pip` 23+ (or [`uv`](https://github.com/astral-sh/uv))
+- Works with standard `pip` if you don't use `uv`.
+
+```bash
+pip install perceptron
+
+# Optional extras
+pip install "perceptron[torch]"   # Tensor utilities (requires PyTorch)
+pip install "perceptron[dev]"     # Ruff, pytest, pre-commit
+```
+
+Using `uv`:
 ```bash
 uv pip install perceptron
 
@@ -51,7 +63,7 @@ uv pip install "perceptron[torch]"
 uv pip install "perceptron[dev]"
 ```
 
-The CLI entry point `perceptron` is available after install. Works with regular `pip` too if you don't use [`uv`](https://github.com/astral-sh/uv).
+The CLI entry point `perceptron` is available after install.
 
 ## Quick Start
 
@@ -77,23 +89,34 @@ No credentials? The SDK returns compile-only payloads when API keys are missing,
 
 ## Configuration
 
-**Environment variables:**
+Set credentials once via environment, code, or the CLI. The SDK ships with the Perceptron backend enabled by default, and you can add or swap providers (e.g., `fal`) by extending `perceptron.client._PROVIDER_CONFIG`.
+
+**Environment variables (pick what you need):**
+- `PERCEPTRON_PROVIDER` – provider identifier (`perceptron` by default)
+- `PERCEPTRON_API_KEY` – API key for the selected provider
+- Provider-specific keys (e.g., `FAL_KEY`) when targeting alternates
+
 ```bash
-export PERCEPTRON_PROVIDER=fal        # or your custom provider
-export PERCEPTRON_API_KEY=sk_live_... # or FAL_KEY for fal provider
+export PERCEPTRON_PROVIDER=perceptron
+export PERCEPTRON_API_KEY=sk_live_...
 ```
 
 **Programmatic:**
 ```python
-from perceptron import configure
+from perceptron import configure, config
 
-configure(provider="fal", api_key="sk_live_...")
+configure(provider="perceptron", api_key="sk_live_...")
+
+with config(max_tokens=512):
+    ...  # temporary overrides while inside the context
 ```
 
 **CLI:**
 ```bash
-perceptron config --provider fal --api-key sk_live_...
+perceptron config --provider perceptron --api-key sk_live_...
 ```
+
+No credentials? Helpers return compile-only payloads so you can inspect tasks before sending requests.
 
 ---
 
@@ -142,6 +165,13 @@ for event in detect("frame.png", classes=["person"], stream=True):
         result = event["result"]
 ```
 
+### High-level helper surface
+- `caption(image, *, style="concise", stream=False, **kwargs)` – describe or summarize images.
+- `detect(image, *, classes=None, examples=None, stream=False, **kwargs)` – grounded detection with points/boxes/polygons.
+- `ocr(image, *, prompt=None, stream=False, **kwargs)` – text extraction with optional instructions.
+- `detect_from_coco(dataset_dir, *, split=None, classes=None, shots=0, limit=None, **kwargs)` – auto-build few-shot prompts from datasets.
+- `perceive(nodes, *, expects="text", stream=False, **kwargs)` / `@perceive` – compose arbitrary multimodal workflows with the DSL.
+
 ---
 
 ## CLI Usage
@@ -162,6 +192,8 @@ perceptron detect ./frames --classes forklift,person,pallet
 # Visual Q&A with grounding
 perceptron question scene.jpg "Where is the safety equipment?" --expects box
 ```
+
+Directory mode disables streaming, writes JSON summaries (`detections.json`) alongside the input folder, and logs per-file validation issues for easier auditing.
 
 ## Advanced Usage
 
@@ -187,12 +219,15 @@ Outputs use normalized 0-1000 coordinates. Convert to pixels for rendering or me
 
 ```python
 from PIL import Image
-from perceptron import detect
+from perceptron import detect, scale_points_to_pixels
 
 result = detect("frame.png", classes=["forklift"])
 width, height = Image.open("frame.png").size
 
-# Scale to pixel space
+# Option 1: helper function
+pixel_boxes = scale_points_to_pixels(result.points, width=width, height=height)
+
+# Option 2: convenience method on PerceiveResult
 pixel_boxes = result.points_to_pixels(width, height)
 
 for box in pixel_boxes or []:
@@ -229,17 +264,12 @@ Available DSL nodes: `image`, `text`, `system`, `point`, `box`, `polygon`, `coll
 
 ## Troubleshooting
 
-**Compile-only results (no text returned)**
-Missing API credentials. Set `FAL_KEY` or `PERCEPTRON_API_KEY` environment variables, or call `configure(api_key="...")`.
-
-**Stream buffer overflow warnings**
-Long streaming responses exceeded buffer size. Increase via `configure(max_buffer_bytes=...)`.
-
-**Empty detections in directory mode**
-No supported image files found. Supported extensions: `.jpg`, `.png`, `.webp`, `.gif`, `.bmp`, `.tif`, `.tiff`, `.heic`, `.heif`.
-
-**Bounding box coordinate errors**
-Validate that input annotations are consistent and images are properly attached to requests.
+| Symptom | Likely cause | Resolution |
+| --- | --- | --- |
+| Compile-only result (no text) | Missing provider credentials | Export `PERCEPTRON_API_KEY` / `FAL_KEY` or call `configure(api_key=...)`. |
+| `stream_buffer_overflow` warning | Streaming responses exceeded buffer | Raise `max_buffer_bytes` via `configure(...)` or disable streaming. |
+| Empty detections in directory mode | No supported image extensions discovered | Limit inputs to `.jpg`, `.png`, `.webp`, `.gif`, `.bmp`, `.tif`, `.tiff`, `.heic`, `.heif`. |
+| Bounding-box coordinate errors | Inconsistent annotations or detached image payload | Validate annotation bounds and ensure each request attaches the relevant image. |
 
 ---
 
