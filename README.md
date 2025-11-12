@@ -1,11 +1,16 @@
-# Perceptron SDK
-
-[![Tests](https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml/badge.svg)](https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml) [![codecov](https://codecov.io/github/perceptron-ai-inc/perceptron/graph/badge.svg?token=HW6JASKQJR)](https://codecov.io/github/perceptron-ai-inc/perceptron)
-
 <p align="center">
   <a href="https://www.perceptron.inc/" target="_blank" rel="noopener">
     <img src="./assets/banner-light.svg" alt="Perceptron" width="680" />
   </a>
+</p>
+
+<div align="center">
+  <h3>The platform for physical AI</h3>
+</div>
+
+<p align="center">
+  <a href="https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml"><img src="https://github.com/perceptron-ai-inc/perceptron/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <a href="https://codecov.io/github/perceptron-ai-inc/perceptron"><img src="https://codecov.io/github/perceptron-ai-inc/perceptron/graph/badge.svg?token=HW6JASKQJR" alt="codecov"></a>
 </p>
 
 **Perceptron is the Python SDK for building with perceptive-language models like Isaac 0.1.** Designed for physical AI applications—robotics, manufacturing, logistics, and security—it provides a unified interface for grounded perception: detection, localization, OCR, and visual Q&A with structured outputs ready for robotics, analytics, and edge deployment. Route tasks to specialized models, swap providers per call, and compose complex multimodal flows with a typed DSL. Efficient enough for edge deployment, flexible enough for any real-world task.
@@ -31,9 +36,6 @@ Isaac 0.1 matches models 50x its size while delivering edge-ready latencies and 
 
 **Prompt for anything, control the output type**
 Ask for whatever you need in natural language—"find safety violations", "locate damaged components", "identify obstacles"—and specify the output format: bounding boxes, points, polygons, or text. The flexibility of language models with the structure your application needs.
-
-**Provider-agnostic architecture**
-Swap between providers and models without rewriting code. Start with `fal`, add custom endpoints, or route different task types to different backends based on latency, cost, or accuracy requirements.
 
 ---
 
