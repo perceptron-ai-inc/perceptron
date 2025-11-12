@@ -54,6 +54,7 @@ def test_docs_capabilities_captioning_example():
         text_only = caption(img_path, style="concise", expects="text")
         boxes = caption(img_path, style="detailed", expects="box")
 
+
     assert isinstance(text_only.text, str)
     assert text_only.text.strip() != ""
     assert "choices" in boxes.raw
