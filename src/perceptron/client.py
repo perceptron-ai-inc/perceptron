@@ -66,6 +66,7 @@ class _StreamProcessor:
         self._last_reasoning_length: int = 0
         self._parsing_enabled = True
         self._usage_payload: dict[str, Any] | None = None
+        self._api_reasoning_content: str = ""  # Accumulate reasoning_content from API
 
     def handle_payload(self, obj: Any) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -75,7 +76,12 @@ class _StreamProcessor:
         if isinstance(usage_field, dict) and self._usage_payload is None:
             self._usage_payload = usage_field
         try:
-            delta = obj["choices"][0]["delta"].get("content")
+            delta_obj = obj["choices"][0]["delta"]
+            delta = delta_obj.get("content")
+            # Check for reasoning_content from API (chat completion spec)
+            reasoning_delta = delta_obj.get("reasoning_content")
+            if reasoning_delta:
+                self._api_reasoning_content += reasoning_delta
         except Exception:
             delta = None
         if not delta:
@@ -98,8 +104,11 @@ class _StreamProcessor:
         return events
 
     def finalize(self) -> dict[str, Any]:
-        cleaned_text, reasoning_final = self._client_core._clean_text_with_reasoning(self._cumulative)
+        cleaned_text, reasoning_from_tags = self._client_core._clean_text_with_reasoning(self._cumulative)
         result: dict[str, Any] = {"text": cleaned_text, "raw": None}
+
+        # Combine reasoning from <think> tags and API reasoning_content
+        reasoning_final = self._client_core._combine_reasoning_sources(reasoning_from_tags, self._api_reasoning_content)
         if reasoning_final:
             result["reasoning"] = reasoning_final
         expects = self._expects
@@ -487,6 +496,26 @@ class _ClientCore:
                 setattr(self._settings, k, v)
 
     @staticmethod
+    def _combine_reasoning_sources(reasoning_from_tags: Reasoning | None, api_reasoning_content: str) -> Reasoning | None:
+        """Combine reasoning from <think> tags and API reasoning_content field."""
+        parts = []
+
+        # Add API reasoning_content if present
+        if api_reasoning_content:
+            parts.append(api_reasoning_content.strip())
+
+        # Add reasoning from <think> tags if present
+        if reasoning_from_tags:
+            parts.append(reasoning_from_tags.content)
+
+        if not parts:
+            return None
+
+        # Combine with newlines
+        combined_content = "\n".join(parts)
+        return Reasoning(content=combined_content)
+
+    @staticmethod
     def _clean_text_with_reasoning(content: Any, payload: dict | None = None) -> tuple[Any, Reasoning | None]:
         if not isinstance(content, str):
             return content, None
@@ -542,8 +571,16 @@ class _ClientCore:
         return _PreparedInvocation(url=url, headers=headers, body=body, expects=expects, provider_cfg=resolved_cfg)
 
     def _build_result(self, data: dict[str, Any], expects: str | None) -> dict[str, Any]:
-        content = data.get("choices", [{}])[0].get("message", {}).get("content")
-        content, reasoning = self._clean_text_with_reasoning(content, data)
+        message = data.get("choices", [{}])[0].get("message", {})
+        content = message.get("content")
+        content, reasoning_from_tags = self._clean_text_with_reasoning(content, data)
+
+        # Check for reasoning_content from API (chat completion spec)
+        api_reasoning_content = message.get("reasoning_content", "")
+
+        # Combine reasoning from both sources
+        reasoning = self._combine_reasoning_sources(reasoning_from_tags, api_reasoning_content)
+
         result: dict[str, Any] = {"text": content, "raw": data}
         if reasoning:
             result["reasoning"] = reasoning

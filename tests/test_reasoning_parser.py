@@ -276,3 +276,119 @@ def test_parse_text_preserves_document_structure():
             reconstructed += text[span["start"]:span["end"]]
 
     assert reconstructed == text
+
+
+def test_combine_reasoning_sources():
+    """Test combining reasoning from API reasoning_content and <think> tags."""
+    from perceptron.client import _ClientCore
+
+    # Test with both sources
+    api_reasoning = "API reasoning content"
+    tag_reasoning = Reasoning(content="Tag reasoning content")
+    combined = _ClientCore._combine_reasoning_sources(tag_reasoning, api_reasoning)
+    assert combined is not None
+    assert "API reasoning content" in combined.content
+    assert "Tag reasoning content" in combined.content
+    assert combined.content == "API reasoning content\nTag reasoning content"
+
+    # Test with only API reasoning
+    combined = _ClientCore._combine_reasoning_sources(None, api_reasoning)
+    assert combined is not None
+    assert combined.content == "API reasoning content"
+
+    # Test with only tag reasoning
+    combined = _ClientCore._combine_reasoning_sources(tag_reasoning, "")
+    assert combined is not None
+    assert combined.content == "Tag reasoning content"
+
+    # Test with neither
+    combined = _ClientCore._combine_reasoning_sources(None, "")
+    assert combined is None
+
+
+def test_stream_processor_handles_api_reasoning_content():
+    """Test that StreamProcessor correctly handles reasoning_content from API."""
+    from perceptron.client import _ClientCore, _StreamProcessor
+
+    # Create a mock client core
+    client_core = _ClientCore()
+
+    # Create stream processor
+    processor = _StreamProcessor(
+        client_core=client_core,
+        expects=None,
+        parse_points=False,
+        parse_reasoning=True,
+        max_buffer_bytes=None,
+    )
+
+    # Simulate API payloads with reasoning_content
+    payload1 = {
+        "choices": [{
+            "delta": {
+                "content": "The answer is ",
+                "reasoning_content": "Let me think: "
+            }
+        }]
+    }
+    payload2 = {
+        "choices": [{
+            "delta": {
+                "content": "42",
+                "reasoning_content": "First step, then second step"
+            }
+        }]
+    }
+
+    # Process payloads
+    processor.handle_payload(payload1)
+    processor.handle_payload(payload2)
+
+    # Finalize and check result
+    final_event = processor.finalize()
+    result = final_event["result"]
+
+    # Check text is correct
+    assert result["text"] == "The answer is 42"
+
+    # Check reasoning_content was accumulated
+    assert result["reasoning"] is not None
+    assert "Let me think: First step, then second step" in result["reasoning"].content
+
+
+def test_stream_processor_combines_api_and_tag_reasoning():
+    """Test that StreamProcessor combines API reasoning_content with <think> tags."""
+    from perceptron.client import _ClientCore, _StreamProcessor
+
+    client_core = _ClientCore()
+    processor = _StreamProcessor(
+        client_core=client_core,
+        expects=None,
+        parse_points=False,
+        parse_reasoning=True,
+        max_buffer_bytes=None,
+    )
+
+    # Simulate payload with both API reasoning_content and <think> tags
+    payload = {
+        "choices": [{
+            "delta": {
+                "content": "Answer: <think>tag reasoning</think> 42",
+                "reasoning_content": "API reasoning"
+            }
+        }]
+    }
+
+    processor.handle_payload(payload)
+    final_event = processor.finalize()
+    result = final_event["result"]
+
+    # Check both types of reasoning are present
+    assert result["reasoning"] is not None
+    assert "API reasoning" in result["reasoning"].content
+    assert "tag reasoning" in result["reasoning"].content
+
+    # Check text has <think> tags removed
+    assert "Answer:" in result["text"]
+    assert "42" in result["text"]
+    assert "<think>" not in result["text"]
