@@ -69,7 +69,8 @@ class _StreamProcessor:
         if isinstance(usage_field, dict) and self._usage_payload is None:
             self._usage_payload = usage_field
         try:
-            delta = obj["choices"][0]["delta"].get("content")
+            delta_obj = obj["choices"][0]["delta"]
+            delta = delta_obj.get("content") or delta_obj.get("reasoning_content")
         except Exception:
             delta = None
         if not delta:
@@ -507,7 +508,8 @@ class _ClientCore:
         return _PreparedInvocation(url=url, headers=headers, body=body, expects=expects, provider_cfg=resolved_cfg)
 
     def _build_result(self, data: dict[str, Any], expects: str | None) -> dict[str, Any]:
-        content = data.get("choices", [{}])[0].get("message", {}).get("content")
+        message = data.get("choices", [{}])[0].get("message", {})
+        content = message.get("content") or message.get("reasoning_content")
         content, reasoning = self._clean_text_with_reasoning(content, data)
         result: dict[str, Any] = {"text": content, "raw": data}
         if reasoning:
