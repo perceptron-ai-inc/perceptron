@@ -8,7 +8,7 @@
   </a>
 </p>
 
-**Perceptron is a Python SDK for vision-language tasks in physical-world applications.** It provides a unified interface for detection, captioning, OCR, and visual Q&A—with structured outputs ready for robotics, analytics, and edge deployment. Route tasks to specialized models, swap providers per call, and compose complex multimodal flows with a typed DSL.
+**Perceptron is the Python SDK for building with perceptive-language models like Isaac 0.1.** Designed for physical AI applications—robotics, manufacturing, logistics, and security—it provides a unified interface for grounded perception: detection, localization, OCR, and visual Q&A with structured outputs ready for robotics, analytics, and edge deployment. Route tasks to specialized models, swap providers per call, and compose complex multimodal flows with a typed DSL. Efficient enough for edge deployment, flexible enough for any real-world task.
 
 <p align="center">
   <a href="https://www.perceptron.inc/" target="_blank"><strong>Website</strong></a> ·
@@ -20,17 +20,20 @@
 
 ## Why Perceptron?
 
-**Specialized for physical-world perception**
-While general-purpose vision APIs excel at consumer content, Perceptron targets industrial and robotics use cases: defect detection, safety monitoring, warehouse automation, and autonomous navigation.
+**Grounded, spatial intelligence**
+Get precise localization and grounded answers with conversational pointing—every claim is visually cited. Ask "what's broken in this machine?" and get highlighted regions with robust spatial reasoning that handles occlusions, relationships, and object interactions.
 
-**Structured outputs out of the box**
-Get bounding boxes, polygons, and points in normalized coordinates—no prompt engineering to coerce JSON from text responses. Results are ready for tracking algorithms, visualization, and metric computation.
+**In-context learning for perception**
+Show a few annotated examples (defects, safety conditions, custom categories) in your prompt and the model adapts—no YOLO-style fine-tuning or custom detector stacks required. Learn novel tasks from a handful of examples.
+
+**Efficient frontier for real-world deployment**
+Isaac 0.1 matches models 50x its size while delivering edge-ready latencies and drastically lower serving costs. Perception workloads are continuous and latency-sensitive—Perceptron is built for the efficient frontier where capability meets real-world constraints.
+
+**Prompt for anything, control the output type**
+Ask for whatever you need in natural language—"find safety violations", "locate damaged components", "identify obstacles"—and specify the output format: bounding boxes, points, polygons, or text. The flexibility of language models with the structure your application needs.
 
 **Provider-agnostic architecture**
 Swap between providers and models without rewriting code. Start with `fal`, add custom endpoints, or route different task types to different backends based on latency, cost, or accuracy requirements.
-
-**Local-first development**
-Dry-run tasks without credentials to inspect compiled payloads. Build and test multimodal flows offline, then deploy with confidence.
 
 ---
 
