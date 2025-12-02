@@ -20,6 +20,7 @@ from dataclasses import dataclass, replace
 from html import escape, unescape
 from typing import Any, Literal
 
+from ..errors import ParseError
 from .types import BoundingBox, Collection, Polygon, SinglePoint
 
 BOX_MIN_POINTS = 2
@@ -51,7 +52,11 @@ def _parse_attrs(tag_open: str) -> dict[str, str]:
 def _parse_point_body(body: str) -> SinglePoint:
     m = re.search(_PT, body)
     if not m:
-        raise ValueError("invalid point coords")
+        raise ParseError(
+            f"Malformed <point> tag: expected coordinates like (x,y) but got: {body!r}",
+            code="invalid_point_coords",
+            details={"body": body},
+        )
     x, y = int(m.group(1)), int(m.group(2))
     return SinglePoint(x, y)
 
@@ -59,7 +64,11 @@ def _parse_point_body(body: str) -> SinglePoint:
 def _parse_box_body(body: str) -> BoundingBox:
     pts = list(re.finditer(_PT, body))
     if len(pts) < BOX_MIN_POINTS:
-        raise ValueError("invalid box coords")
+        raise ParseError(
+            f"Malformed <point_box> tag: expected 2 coordinates like (x1,y1) (x2,y2) but got: {body!r}",
+            code="invalid_box_coords",
+            details={"body": body},
+        )
     x1, y1 = int(pts[0].group(1)), int(pts[0].group(2))
     x2, y2 = int(pts[1].group(1)), int(pts[1].group(2))
     return BoundingBox(SinglePoint(x1, y1), SinglePoint(x2, y2))
@@ -68,7 +77,11 @@ def _parse_box_body(body: str) -> BoundingBox:
 def _parse_polygon_body(body: str) -> Polygon:
     pts = [SinglePoint(int(m.group(1)), int(m.group(2))) for m in re.finditer(_PT, body)]
     if len(pts) < POLYGON_MIN_POINTS:
-        raise ValueError("invalid polygon coords")
+        raise ParseError(
+            f"Malformed <polygon> tag: expected at least 3 coordinates but got {len(pts)}: {body!r}",
+            code="invalid_polygon_coords",
+            details={"body": body, "points_found": len(pts)},
+        )
     return Polygon(hull=pts)
 
 

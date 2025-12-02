@@ -57,3 +57,9 @@ class AnchorError(SDKError):
     """Anchoring rules violated (e.g., missing image= in multi-image)."""
 
     pass
+
+
+class ParseError(SDKError):
+    """Failed to parse model response (e.g., malformed point/box tags)."""
+
+    pass

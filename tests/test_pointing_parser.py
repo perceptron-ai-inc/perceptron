@@ -1,3 +1,6 @@
+import pytest
+
+from perceptron.errors import ParseError
 from perceptron.pointing.parser import (
     PointParser,
     ReasoningStreamCleaner,
@@ -135,3 +138,76 @@ def test_reasoning_stream_cleaner_handles_partial_chunks():
     chunk3, reasons3 = cleaner.consume("!")
     assert chunk3 == "!"
     assert reasons3 == []
+
+
+class TestParseErrorOnMalformedTags:
+    """Tests for ParseError raised when model returns malformed tags."""
+
+    def test_point_tag_with_empty_body_raises_parse_error(self):
+        text = '<point mention="some label"> </point>'
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text)
+        assert exc_info.value.code == "invalid_point_coords"
+        assert "expected coordinates like (x,y)" in str(exc_info.value)
+        assert exc_info.value.details["body"] == " "
+
+    def test_point_tag_with_no_coords_raises_parse_error(self):
+        text = "<point>no coordinates here</point>"
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text)
+        assert exc_info.value.code == "invalid_point_coords"
+
+    def test_point_tag_with_json_in_mention_raises_parse_error(self):
+        # This is the actual malformed response from the model
+        text = '<point mention="{\\"price\\": \\"1.27\\"}"> </point>'
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text)
+        assert exc_info.value.code == "invalid_point_coords"
+
+    def test_box_tag_with_only_one_coord_raises_parse_error(self):
+        text = "<point_box>(100,200)</point_box>"
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text)
+        assert exc_info.value.code == "invalid_box_coords"
+        assert "expected 2 coordinates" in str(exc_info.value)
+
+    def test_box_tag_with_empty_body_raises_parse_error(self):
+        text = "<point_box> </point_box>"
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text)
+        assert exc_info.value.code == "invalid_box_coords"
+
+    def test_polygon_tag_with_only_two_coords_raises_parse_error(self):
+        text = "<polygon>(0,0) (10,10)</polygon>"
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text)
+        assert exc_info.value.code == "invalid_polygon_coords"
+        assert "expected at least 3 coordinates" in str(exc_info.value)
+        assert exc_info.value.details["points_found"] == 2
+
+    def test_polygon_tag_with_empty_body_raises_parse_error(self):
+        text = "<polygon></polygon>"
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text)
+        assert exc_info.value.code == "invalid_polygon_coords"
+        assert exc_info.value.details["points_found"] == 0
+
+    def test_valid_point_tag_does_not_raise(self):
+        text = '<point mention="target">(100,200)</point>'
+        segs = parse_text(text)
+        assert len(segs) == 1
+        assert segs[0]["kind"] == "point"
+        assert segs[0]["value"].x == 100
+        assert segs[0]["value"].y == 200
+
+    def test_valid_box_tag_does_not_raise(self):
+        text = "<point_box>(10,20) (30,40)</point_box>"
+        segs = parse_text(text)
+        assert len(segs) == 1
+        assert segs[0]["kind"] == "box"
+
+    def test_valid_polygon_tag_does_not_raise(self):
+        text = "<polygon>(0,0) (10,0) (10,10)</polygon>"
+        segs = parse_text(text)
+        assert len(segs) == 1
+        assert segs[0]["kind"] == "polygon"
