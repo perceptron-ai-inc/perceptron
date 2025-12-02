@@ -103,7 +103,8 @@ ignore = [
 "src/perceptron/client.py" = ["PLR2004", "PLR0912", "PLR0915", "SIM117", "SIM102"]
 "src/perceptron/config.py" = ["PLW0602", "PLW0603"]
 "src/perceptron/dsl/nodes.py" = ["PLR0913"]
-"src/perceptron/dsl/perceive.py" = ["PLR0912", "PLR0915", "PLR0913"]
+"src/perceptron/dsl/perceive.py" = ["PLR0912", "PLR0915", "PLR0913", "PLC0415"]
+"src/perceptron/media.py" = ["PLR2004", "PLW0603"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -43,6 +43,13 @@ class Image(DSLNode):
 
 
 @dataclass
+class Video(DSLNode):
+    """Video content. Accepts path/bytes for upload via presigned URLs."""
+
+    obj: Any
+
+
+@dataclass
 class PointTag(DSLNode):
     x: int
     y: int
@@ -112,6 +119,11 @@ def agent(content: str) -> Agent:
 def image(obj: Any) -> Image:
     """Create an image node from path/bytes/PIL.Image/np.ndarray."""
     return Image(obj)
+
+
+def video(obj: Any) -> Video:
+    """Create a video node from path/bytes for upload via presigned URLs."""
+    return Video(obj)
 
 
 def point(

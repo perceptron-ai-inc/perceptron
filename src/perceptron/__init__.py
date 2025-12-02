@@ -18,7 +18,7 @@ __version__ = "0.1.4"
 from .annotations import annotate_image
 from .client import AsyncClient, Client
 from .config import config, configure, settings
-from .dsl.nodes import agent, block, box, image, point, polygon, system, text
+from .dsl.nodes import agent, block, box, image, point, polygon, system, text, video
 from .dsl.perceive import PerceiveResult, async_perceive, inspect_task, perceive
 from .errors import (
     AnchorError,
@@ -32,6 +32,14 @@ from .errors import (
     TransportError,
 )
 from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
+from .media import (
+    AsyncMediaClient,
+    MediaClient,
+    PresignedUploadUrl,
+    UploadedMedia,
+    upload_media,
+    upload_media_and_get_url,
+)
 from .pointing.geometry import scale_points_to_pixels
 from .pointing.parser import (
     PointParser,
@@ -68,15 +76,18 @@ def __getattr__(name):
 __all__ = [
     "AnchorError",
     "AsyncClient",
+    "AsyncMediaClient",
     "AuthError",
     "BadRequestError",
     "BoundingBox",
     "Client",
     "Collection",
     "ExpectationError",
+    "MediaClient",
     "PerceiveResult",
     "PointParser",
     "Polygon",
+    "PresignedUploadUrl",
     "RateLimitError",
     "ReasoningExtraction",
     "ReasoningStreamCleaner",
@@ -85,6 +96,7 @@ __all__ = [
     "SinglePoint",
     "TimeoutError",
     "TransportError",
+    "UploadedMedia",
     "__version__",
     "agent",
     "annotate_image",
@@ -118,4 +130,7 @@ __all__ = [
     "system",
     "tensorstream",
     "text",
+    "upload_media",
+    "upload_media_and_get_url",
+    "video",
 ]

@@ -36,6 +36,12 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Dependency directories
+node_modules/
+package.json
+package-lock.json
+*env*
+uv.lock
 # Unit test / coverage reports
 htmlcov/
 .tox/

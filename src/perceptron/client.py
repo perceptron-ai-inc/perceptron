@@ -86,11 +86,13 @@ class _StreamProcessor:
                 self._reasoning_started = True
                 reasoning = f"<think>{reasoning}"
             self._cumulative += reasoning
-            events.append({
-                "type": "text.delta",
-                "chunk": reasoning,
-                "total_chars": len(self._cumulative),
-            })
+            events.append(
+                {
+                    "type": "text.delta",
+                    "chunk": reasoning,
+                    "total_chars": len(self._cumulative),
+                }
+            )
 
         # Process answer content
         content = delta.get("content")
@@ -99,19 +101,23 @@ class _StreamProcessor:
             if self._reasoning_started and not self._answering_started:
                 close_tag = "</think>"
                 self._cumulative += close_tag
-                events.append({
-                    "type": "text.delta",
-                    "chunk": close_tag,
-                    "total_chars": len(self._cumulative),
-                })
+                events.append(
+                    {
+                        "type": "text.delta",
+                        "chunk": close_tag,
+                        "total_chars": len(self._cumulative),
+                    }
+                )
                 self._answering_started = True
 
             self._cumulative += content
-            events.append({
-                "type": "text.delta",
-                "chunk": content,
-                "total_chars": len(self._cumulative),
-            })
+            events.append(
+                {
+                    "type": "text.delta",
+                    "chunk": content,
+                    "total_chars": len(self._cumulative),
+                }
+            )
 
         # Check buffer limits
         if self._parsing_enabled and self._max_buffer_bytes is not None:
@@ -266,6 +272,17 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
                 _flush()
             current_role = role
             current_content.append(image_part)
+            contains_non_text = True
+        elif itype == "video":
+            payload = item.get("content")
+            if payload is None:
+                continue
+            # Videos are always URLs (either provided or uploaded via presigned URL)
+            video_part = {"type": "video_url", "video_url": {"url": payload}}
+            if current_role not in {role, None}:
+                _flush()
+            current_role = role
+            current_content.append(video_part)
             contains_non_text = True
         else:
             continue
@@ -507,6 +524,50 @@ class _ClientCore:
                 pass
         return cleaned, reasoning
 
+    def _enrich_bad_request(self, err: BadRequestError, invocation: _PreparedInvocation) -> BadRequestError:
+        """Add actionable context to common schema errors returned by providers.
+
+        In particular, some providers reject non-text content (e.g., video_url)
+        with a generic JSON-deserialization message. When we detect that pattern,
+        surface a clearer hint about unsupported content types and echo which
+        content parts we sent.
+        """
+
+        message = str(err) if err else ""
+        if "ChatCompletionRequestUserMessageContent" not in message:
+            return err
+
+        content_types: set[str] = set()
+        messages = invocation.body.get("messages") or []
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    ptype = part.get("type")
+                    if ptype:
+                        content_types.add(ptype)
+
+        if not content_types:
+            return err
+
+        hint_bits: list[str] = []
+        if "video_url" in content_types or "video" in content_types:
+            hint_bits.append(
+                "provider endpoint does not yet accept video inputs; remove video() nodes or upgrade backend"
+            )
+        if "image_url" in content_types:
+            hint_bits.append("ensure provider supports OpenAI-style image_url parts")
+        if not hint_bits:
+            hint_bits.append("provider rejected non-text content in messages")
+
+        hint = "; ".join(hint_bits)
+        details = dict(err.details or {})
+        details.setdefault("content_types", sorted(content_types))
+        details.setdefault("original_message", message)
+        details.setdefault("hint", hint)
+
+        return BadRequestError(hint, code=err.code, details=details)
+
     def _prepare_invocation(
         self,
         task: dict,
@@ -578,7 +639,10 @@ class Client(_ClientCore):
             raise TimeoutError("request timed out") from e
         except httpx.HTTPError as e:  # pragma: no cover
             raise TransportError(str(e)) from e
-        data = _response_json(resp)
+        try:
+            data = _response_json(resp)
+        except BadRequestError as e:
+            raise self._enrich_bad_request(e, invocation) from e
         return self._build_result(data, invocation.expects)
 
     def stream(
@@ -640,7 +704,10 @@ class AsyncClient(_ClientCore):
             raise TimeoutError("request timed out") from e
         except httpx.HTTPError as e:  # pragma: no cover
             raise TransportError(str(e)) from e
-        data = _response_json(resp)
+        try:
+            data = _response_json(resp)
+        except BadRequestError as e:
+            raise self._enrich_bad_request(e, invocation) from e
         return self._build_result(data, invocation.expects)
 
     def stream(

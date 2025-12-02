@@ -59,6 +59,9 @@ from .nodes import (
 from .nodes import (
     PolygonTag as PolygonTagNode,
 )
+from .nodes import (
+    Video as VideoNode,
+)
 
 _IMAGE_SIGNATURES = (
     b"\x89PNG\r\n\x1a\n",
@@ -153,6 +156,32 @@ def _to_b64_image(obj: Any) -> tuple[str, dict]:
     raise TypeError(f"Unsupported image object: {type(obj)}")
 
 
+def _to_video_url(obj: Any) -> tuple[str, dict]:
+    """Return URL string and metadata for video content.
+
+    Videos are uploaded via presigned URLs and the download URL is returned.
+    Accepts: Path/str (path or http/https URL), bytes, or dict with bytes/content_type.
+    """
+    meta: dict[str, Any] = {}
+
+    # If already a URL, return as-is
+    if isinstance(obj, str):
+        parsed = urlparse(obj)
+        if parsed.scheme in {"http", "https"}:
+            return obj, meta
+
+    # Import here to avoid circular imports
+    from ..media import MediaClient
+
+    client = MediaClient()
+    uploaded = client.upload_and_get_url(obj)
+
+    if uploaded.download_url is None:
+        raise BadRequestError("Failed to get download URL for uploaded video")
+
+    return uploaded.download_url, meta
+
+
 def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) -> tuple[dict, list[dict]]:
     """Compile DSL nodes into a Task JSON and return (task, issues)."""
     seq = nodes if isinstance(nodes, Sequence) else Sequence([nodes])
@@ -199,6 +228,16 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                         "width": meta.get("width"),
                         "height": meta.get("height"),
                     },
+                }
+            )
+        elif isinstance(node, VideoNode):
+            video_url, meta = _to_video_url(node.obj)
+            content.append(
+                {
+                    "type": "video",
+                    "role": "user",
+                    "content": video_url,
+                    "metadata": meta,
                 }
             )
         elif isinstance(node, (PointTagNode, BoxTagNode, PolygonTagNode)):
