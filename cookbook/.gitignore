@@ -30,6 +30,8 @@ __pycache__/
 *.bak
 *.orig
 *_annotated.*
+*.jpg
+!_shared/assets/**/*.jpg
 
 # Notebook-derived scripts
 quickstart/quickstart_isaac/quickstart_isaac.py
