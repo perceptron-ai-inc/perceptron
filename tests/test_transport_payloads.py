@@ -133,3 +133,84 @@ def test_image_url_passthrough():
     assert isinstance(parts, list)
     img_parts = [p for p in parts if isinstance(p, dict) and p.get("type") == "image_url"]
     assert img_parts and img_parts[0]["image_url"]["url"] == "https://example.com/sample.png"
+
+
+def test_reasoning_hint_enables_reasoning_payload(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Thoughts then answer",
+                            "reasoning_content": "Because...",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            captured["headers"] = headers
+            captured["url"] = url
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("FAL_KEY", "test-key")
+
+    @perceive(expects="think")
+    def make_request():
+        return text("Why did the robot stop working?")
+
+    with cfg(provider="fal", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured["payload"]
+    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(
+        (isinstance(m, dict)
+         and (
+             (isinstance(m.get("content"), str) and "<hint>THINK</hint>" in m.get("content", ""))
+             or any(
+                 isinstance(part, dict)
+                 and part.get("type") == "text"
+                 and "<hint>THINK</hint>" in part.get("text", "")
+                 for part in (m.get("content") or [])
+                 if isinstance(m.get("content"), list)
+             )
+         ))
+        for m in messages
+    )
+
+
+def test_reasoning_false_on_thinking_model_yields_warning(monkeypatch):
+    def _echo_task(self, task, **kwargs):  # pylint: disable=unused-argument
+        return {"text": "", "points": None, "parsed": None, "raw": task}
+
+    monkeypatch.setattr(client_mod.Client, "generate", _echo_task)
+
+    with cfg(api_key="test-key", provider="perceptron", model="qwen3-vl-235b-a22b-thinking"):
+        @perceive(reasoning=False)
+        def fn():
+            return text("Hi there")
+
+        res = fn()
+
+    assert any(
+        issue.get("code") == "reasoning_disabled_for_thinking_model" for issue in res.errors
+    )

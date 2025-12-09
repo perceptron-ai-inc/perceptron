@@ -56,6 +56,7 @@ class ExpectationType(str, Enum):
     POINT = "point"
     BOX = "box"
     POLYGON = "polygon"
+    THINK = "think"
 
 
 def _resolve_image(image: str) -> str | bytes:
@@ -623,7 +624,7 @@ def caption(
         ExpectationType.BOX,
         "--expects",
         case_sensitive=False,
-        help="Expected output structure (text, point, box, or polygon).",
+        help="Expected output structure (text, point, box, polygon, or think).",
     ),
 ):
     """Generate captions using the high-level helper."""
@@ -761,7 +762,7 @@ def question(
         ExpectationType.TEXT,
         "--expects",
         case_sensitive=False,
-        help="Expected output structure (text, point, box, or polygon).",
+        help="Expected output structure (text, point, box, polygon, or think).",
     ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),

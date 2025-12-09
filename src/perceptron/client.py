@@ -30,7 +30,7 @@ from .errors import (
     TimeoutError,
     TransportError,
 )
-from .expectations import expectation_hint_text
+from .expectations import REASONING_HINT, expectation_hint_text
 from .pointing.parser import extract_points, extract_reasoning, parse_text
 
 
@@ -294,6 +294,18 @@ def _inject_expectation_hint(task: dict, expects: str | None) -> dict:
     return new_task
 
 
+def _task_has_reasoning_hint(task: dict) -> bool:
+    for entry in task.get("content", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") != "text":
+            continue
+        content = entry.get("content")
+        if isinstance(content, str) and REASONING_HINT.lower() in content.lower():
+            return True
+    return False
+
+
 _PROVIDER_CONFIG = {
     "fal": {
         "base_url": "https://fal.run",
@@ -517,6 +529,7 @@ class _ClientCore:
     ) -> _PreparedInvocation:
         s = self._settings
         local_kwargs = dict(gen_kwargs)
+        reasoning_flag = local_kwargs.pop("reasoning", None)
         provider_cfg = _resolve_provider(local_kwargs.pop("provider", None) or s.provider)
         temperature = local_kwargs.pop("temperature", s.temperature)
         max_tokens = local_kwargs.pop("max_tokens", s.max_tokens)
@@ -527,6 +540,8 @@ class _ClientCore:
         if "model" not in local_kwargs and s.model is not None:
             local_kwargs["model"] = s.model
         messages = _task_to_openai_messages(prepared_task)
+        if reasoning_flag is None and _task_has_reasoning_hint(prepared_task):
+            reasoning_flag = True
         model = _pop_and_resolve_model(resolved_cfg, local_kwargs)
         body: dict[str, Any] = {
             "model": model,
@@ -537,6 +552,8 @@ class _ClientCore:
         }
         if top_k is not None:
             body["top_k"] = top_k
+        if reasoning_flag:
+            body["reasoning"] = True
         if stream:
             body["stream"] = True
         return _PreparedInvocation(url=url, headers=headers, body=body, expects=expects, provider_cfg=resolved_cfg)

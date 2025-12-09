@@ -307,6 +307,7 @@ def _prepare_client_kwargs(
     provider_override: str | None,
     model_override: str | None,
     expects: str | None,
+    reasoning: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -317,6 +318,7 @@ def _prepare_client_kwargs(
     env = settings()
     resolved_provider = provider_override or env.provider
     provider_name = resolved_provider or "fal"
+    reasoning_enabled = reasoning if reasoning is not None else _expects_reasoning(expects)
     client_kwargs = {
         "expects": expects,
         "provider": provider_name,
@@ -327,6 +329,8 @@ def _prepare_client_kwargs(
         "allow_multiple": allow_multiple,
         "max_outputs": max_outputs,
     }
+    if reasoning_enabled:
+        client_kwargs["reasoning"] = True
     if model_override is not None:
         client_kwargs["model"] = model_override
     return env, resolved_provider, provider_name, client_kwargs
@@ -394,6 +398,7 @@ def _prepare_execution_context(
     provider_override: str | None,
     model_override: str | None,
     expects: str | None,
+    reasoning: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -405,6 +410,7 @@ def _prepare_execution_context(
         provider_override=provider_override,
         model_override=model_override,
         expects=expects,
+        reasoning=reasoning,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -412,6 +418,18 @@ def _prepare_execution_context(
         top_p=top_p,
         top_k=top_k,
     )
+
+    # Warn when a thinking model is used with reasoning explicitly disabled.
+    if reasoning is False:
+        provider_cfg = _PROVIDER_CONFIG.get(provider_name or "", {})
+        model_name = model_override or env.model or provider_cfg.get("default_model")
+        if _is_thinking_model(model_name):
+            issues.append(
+                {
+                    "code": "reasoning_disabled_for_thinking_model",
+                    "message": f"Model '{model_name}' is a thinking model; setting reasoning=False will have no effect.",
+                }
+            )
 
     compile_only = _maybe_compile_only_result(
         stream=stream,
@@ -426,6 +444,16 @@ def _prepare_execution_context(
 
 def _expects_structured(expects: str | None) -> bool:
     return expects in {"point", "box", "polygon"}
+
+
+def _expects_reasoning(expects: str | None) -> bool:
+    return isinstance(expects, str) and expects.lower() == "think"
+
+
+def _is_thinking_model(model_name: str | None) -> bool:
+    if not isinstance(model_name, str):
+        return False
+    return "thinking" in model_name.lower() or model_name.lower().startswith("qwen3")
 
 
 def _collect_nodes(value: Any, acc: list[DSLNode]) -> None:
@@ -468,6 +496,7 @@ def _execute_sync_task(
     provider_override: str | None,
     model_override: str | None,
     expects: str | None,
+    reasoning: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -482,6 +511,7 @@ def _execute_sync_task(
         provider_override=provider_override,
         model_override=model_override,
         expects=expects,
+        reasoning=reasoning,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -515,6 +545,7 @@ def perceive(
     *nodes_or_fn: Any,
     visual_reasoning: str | None = None,
     expects: str | None = None,
+    reasoning: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float = 0.0,
@@ -550,6 +581,7 @@ def perceive(
                 provider_override=provider,
                 model_override=model,
                 expects=expects,
+                reasoning=reasoning,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
@@ -584,6 +616,7 @@ def perceive(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        reasoning=reasoning,
     )
 
 
@@ -591,6 +624,7 @@ def async_perceive(
     *,
     visual_reasoning: str | None = None,
     expects: str | None = None,
+    reasoning: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float = 0.0,
@@ -622,6 +656,7 @@ def async_perceive(
                         provider_override=provider,
                         model_override=model,
                         expects=expects,
+                        reasoning=reasoning,
                         allow_multiple=allow_multiple,
                         max_outputs=max_outputs,
                         temperature=temperature,
@@ -654,6 +689,7 @@ def async_perceive(
                 provider_override=provider,
                 model_override=model,
                 expects=expects,
+                reasoning=reasoning,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
