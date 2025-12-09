@@ -343,3 +343,51 @@ def test_reasoning_true_keeps_reasoning_in_payload(monkeypatch):
     payload = captured.get("payload", {})
     assert payload.get("reasoning") is True
     assert all(issue.get("code") != "reasoning_not_supported" for issue in res.errors)
+
+
+def test_isaac_02_reasoning_true_adds_think_hint(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Answer",
+                            "reasoning_content": "Because...",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(reasoning=True, model="isaac-0.2", provider="perceptron")
+    def make_request():
+        return text("Hi there")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured.get("payload", {})
+    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "THINK" in m.get("content") for m in messages)

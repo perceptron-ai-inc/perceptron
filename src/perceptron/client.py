@@ -273,15 +273,6 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
     return messages
 
 
-def _should_skip_structured_hints(model_name: str | None, provider_cfg: dict[str, Any] | None) -> bool:
-    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
-    if isinstance(models_cfg, dict):
-        entry = models_cfg.get(model_name)
-        if isinstance(entry, dict) and entry.get("skip_structured_hints") is True:
-            return True
-    return False
-
-
 def _model_entry(model_name: str | None, provider_cfg: dict[str, Any] | None) -> dict | None:
     models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
     if isinstance(models_cfg, dict):
@@ -356,18 +347,6 @@ def _inject_expectation_hint(
     return new_task
 
 
-def _task_has_reasoning_hint(task: dict) -> bool:
-    for entry in task.get("content", []) or []:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("type") != "text":
-            continue
-        content = entry.get("content")
-        if isinstance(content, str) and "<hint" in content.lower() and "think" in content.lower():
-            return True
-    return False
-
-
 def _apply_reasoning_and_hints(
     *,
     task: dict,
@@ -375,7 +354,6 @@ def _apply_reasoning_and_hints(
     model_name: str | None,
     provider_cfg: dict[str, Any] | None,
     reasoning_flag: bool | None,
-    issues: list[dict],
 ) -> tuple[dict, bool]:
     supports, requires, _ = _reasoning_capabilities(model_name, provider_cfg)
 
@@ -384,12 +362,6 @@ def _apply_reasoning_and_hints(
     # If the model requires reasoning, force it on.
     if requires and final_reasoning is not True:
         final_reasoning = True
-        issues.append(
-            {
-                "code": "reasoning_required_for_model",
-                "message": f"Model '{model_name}' requires reasoning; flag was enabled automatically.",
-            }
-        )
 
     # If caller didn't specify, enable when expects==think or a THINK hint will be injected.
     if final_reasoning is None and expects and expects.lower() == "think":
@@ -398,12 +370,6 @@ def _apply_reasoning_and_hints(
     # Disable if model lacks support.
     if final_reasoning is True and not supports:
         final_reasoning = False
-        issues.append(
-            {
-                "code": "reasoning_not_supported",
-                "message": f"Model '{model_name}' does not support reasoning; flag was ignored.",
-            }
-        )
 
     include_reasoning_hint = bool((final_reasoning is True) or requires or (expects and expects.lower() == "think"))
     task_with_hint = _inject_expectation_hint(
@@ -443,13 +409,14 @@ _PROVIDER_CONFIG = {
         "auth_prefix": "Bearer ",
         "env_keys": ["PERCEPTRON_API_KEY"],
         "default_model": "isaac-0.1",
-        "supported_models": ["isaac-0.1", "qwen3-vl-235b-a22b-thinking"],
+        "supported_models": ["isaac-0.1", "isaac-0.2", "qwen3-vl-235b-a22b-thinking"],
         "models": {
             "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
+            "isaac-0.2": {"reasoning": True, "skip_structured_hints": False},
             "qwen3-vl-235b-a22b-thinking": {
                 "reasoning": True,
                 "only_reasoning": True,
-                "skip_structured_hints": False,
+                "skip_structured_hints": True,
             },
         },
         "stream": True,
@@ -671,12 +638,9 @@ class _ClientCore:
             model_name=model,
             provider_cfg=provider_cfg,
             reasoning_flag=reasoning_flag,
-            issues=[],
         )
         prepared_task, url, headers, resolved_cfg = _prepare_transport(s, provider_cfg, task_with_hint, stream=stream)
         messages = _task_to_openai_messages(prepared_task)
-        if reasoning_flag is None and _task_has_reasoning_hint(prepared_task):
-            reasoning_flag = True
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
