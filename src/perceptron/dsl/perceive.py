@@ -34,7 +34,7 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore
 
-from ..client import _PROVIDER_CONFIG, AsyncClient, Client
+from ..client import _PROVIDER_CONFIG, AsyncClient, Client, _inject_expectation_hint, _requires_reasoning
 from ..config import settings
 from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
@@ -419,17 +419,39 @@ def _prepare_execution_context(
         top_k=top_k,
     )
 
+    provider_cfg = _PROVIDER_CONFIG.get(provider_name or "", {})
+    model_name = model_override or env.model or provider_cfg.get("default_model")
+
+    requires_reasoning = _requires_reasoning(model_name, provider_cfg)
+
     # Warn when a thinking model is used with reasoning explicitly disabled.
-    if reasoning is False:
-        provider_cfg = _PROVIDER_CONFIG.get(provider_name or "", {})
-        model_name = model_override or env.model or provider_cfg.get("default_model")
-        if _is_thinking_model(model_name):
-            issues.append(
-                {
-                    "code": "reasoning_disabled_for_thinking_model",
-                    "message": f"Model '{model_name}' is a thinking model; setting reasoning=False will have no effect.",
-                }
-            )
+    if reasoning is False and _is_thinking_model(model_name):
+        issues.append(
+            {
+                "code": "reasoning_disabled_for_thinking_model",
+                "message": f"Model '{model_name}' is a thinking model; setting reasoning=False will have no effect.",
+            }
+        )
+
+    # Drop reasoning flag (and warn) for models that don't support it (registry-driven).
+    if client_kwargs.get("reasoning") and not _supports_reasoning(model_name, provider_cfg):
+        client_kwargs.pop("reasoning", None)
+        issues.append(
+            {
+                "code": "reasoning_not_supported",
+                "message": f"Model '{model_name}' does not support reasoning; flag was ignored.",
+            }
+        )
+
+    # Force reasoning when the model requires it (registry-driven).
+    if requires_reasoning and not client_kwargs.get("reasoning"):
+        client_kwargs["reasoning"] = True
+        issues.append(
+            {
+                "code": "reasoning_required_for_model",
+                "message": f"Model '{model_name}' requires reasoning; flag was enabled automatically.",
+            }
+        )
 
     compile_only = _maybe_compile_only_result(
         stream=stream,
@@ -454,6 +476,35 @@ def _is_thinking_model(model_name: str | None) -> bool:
     if not isinstance(model_name, str):
         return False
     return "thinking" in model_name.lower() or model_name.lower().startswith("qwen3")
+
+
+def _supports_reasoning(model_name: str | None, provider_cfg: dict | None = None) -> bool:
+    if not isinstance(model_name, str):
+        return False
+
+    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
+    if isinstance(models_cfg, dict):
+        entry = models_cfg.get(model_name)
+        if isinstance(entry, dict) and "reasoning" in entry:
+            return bool(entry["reasoning"])
+
+    # Fallback heuristics
+    if "isaac-0.1" in model_name.lower():
+        return False
+    if _is_thinking_model(model_name):
+        return True
+    return True
+
+
+def _requires_reasoning(model_name: str | None, provider_cfg: dict | None = None) -> bool:
+    if not isinstance(model_name, str):
+        return False
+    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
+    if isinstance(models_cfg, dict):
+        entry = models_cfg.get(model_name)
+        if isinstance(entry, dict) and entry.get("only_reasoning") is True:
+            return True
+    return False
 
 
 def _collect_nodes(value: Any, acc: list[DSLNode]) -> None:
@@ -521,6 +572,23 @@ def _execute_sync_task(
     )
     if compile_only is not None:
         return compile_only
+
+    env_local = settings()
+    provider_name = client_kwargs.get("provider") or env_local.provider or "fal"
+    provider_cfg = {"name": provider_name, **(_PROVIDER_CONFIG.get(provider_name) or {})}
+    model_name = client_kwargs.get("model") or env_local.model or provider_cfg.get("default_model")
+    include_reasoning = bool(
+        client_kwargs.get("reasoning")
+        or (expects and expects.lower() == "think")
+        or _requires_reasoning(model_name, provider_cfg)
+    )
+    task = _inject_expectation_hint(
+        task,
+        expects,
+        model_name=model_name,
+        provider_cfg=provider_cfg,
+        include_reasoning=include_reasoning,
+    )
 
     client = Client()
     if stream:
@@ -666,9 +734,25 @@ def async_perceive(
                     )
                     if compile_only is not None:
                         return
+                    env_local = settings()
+                    provider_name = client_kwargs.get("provider") or env_local.provider or "fal"
+                    provider_cfg = {"name": provider_name, **(_PROVIDER_CONFIG.get(provider_name) or {})}
+                    model_name = client_kwargs.get("model") or env_local.model or provider_cfg.get("default_model")
+                    include_reasoning = bool(
+                        client_kwargs.get("reasoning")
+                        or (expects and expects.lower() == "think")
+                        or _requires_reasoning(model_name, provider_cfg)
+                    )
+                    task_with_hint = _inject_expectation_hint(
+                        task,
+                        expects,
+                        model_name=model_name,
+                        provider_cfg=provider_cfg,
+                        include_reasoning=include_reasoning,
+                    )
                     client = AsyncClient()
                     async for event in client.stream(
-                        task,
+                        task_with_hint,
                         parse_points=parse_points,
                         **client_kwargs,
                     ):
@@ -699,6 +783,22 @@ def async_perceive(
             )
             if compile_only is not None:
                 return compile_only
+            env_local = settings()
+            provider_name = client_kwargs.get("provider") or env_local.provider or "fal"
+            provider_cfg = {"name": provider_name, **(_PROVIDER_CONFIG.get(provider_name) or {})}
+            model_name = client_kwargs.get("model") or env_local.model or provider_cfg.get("default_model")
+            include_reasoning = bool(
+                client_kwargs.get("reasoning")
+                or (expects and expects.lower() == "think")
+                or _requires_reasoning(model_name, provider_cfg)
+            )
+            task = _inject_expectation_hint(
+                task,
+                expects,
+                model_name=model_name,
+                provider_cfg=provider_cfg,
+                include_reasoning=include_reasoning,
+            )
 
             client = AsyncClient()
             resp = await client.generate(task, **client_kwargs)

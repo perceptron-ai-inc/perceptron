@@ -27,8 +27,18 @@ def test_caption_highlevel_text_expectation(monkeypatch):
     assert res.raw and isinstance(res.raw, dict)
     assert res.raw.get("expects") is None
     content = res.raw.get("content", [])
-    assert all(entry.get("content") != "<hint>BOX</hint>" for entry in content)
+    assert all("<hint>" not in (entry.get("content") or "") for entry in content)
     assert res.errors == []
+
+
+def test_caption_hint_present_when_model_allows(monkeypatch):
+    monkeypatch.setattr(client_mod.Client, "generate", _echo_task)
+    with cfg(api_key="test-key", provider="perceptron", model="qwen3-vl-235b-a22b-thinking"):
+        res = caption(PNG_BYTES, style="concise")
+    assert res.raw and isinstance(res.raw, dict)
+    content = res.raw.get("content", [])
+    assert any(entry.get("content") == "<hint>BOX THINK</hint>" for entry in content)
+    assert any(issue.get("code") == "reasoning_required_for_model" for issue in res.errors)
 
 
 def test_caption_style_validation():

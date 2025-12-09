@@ -170,32 +170,17 @@ def test_reasoning_hint_enables_reasoning_payload(monkeypatch):
             raise AssertionError
 
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("FAL_KEY", "test-key")
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="think")
+    @perceive(expects="think", model="qwen3-vl-235b-a22b-thinking", provider="perceptron")
     def make_request():
         return text("Why did the robot stop working?")
 
-    with cfg(provider="fal", base_url="https://mock.api"):
+    with cfg(provider="perceptron", base_url="https://mock.api"):
         make_request()
 
     payload = captured["payload"]
     assert payload.get("reasoning") is True
-    messages = payload.get("messages") or []
-    assert any(
-        (isinstance(m, dict)
-         and (
-             (isinstance(m.get("content"), str) and "<hint>THINK</hint>" in m.get("content", ""))
-             or any(
-                 isinstance(part, dict)
-                 and part.get("type") == "text"
-                 and "<hint>THINK</hint>" in part.get("text", "")
-                 for part in (m.get("content") or [])
-                 if isinstance(m.get("content"), list)
-             )
-         ))
-        for m in messages
-    )
 
 
 def test_reasoning_false_on_thinking_model_yields_warning(monkeypatch):
@@ -214,3 +199,147 @@ def test_reasoning_false_on_thinking_model_yields_warning(monkeypatch):
     assert any(
         issue.get("code") == "reasoning_disabled_for_thinking_model" for issue in res.errors
     )
+
+
+def test_reasoning_stripped_for_isaac_model(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "No reasoning",
+                            "reasoning_content": None,
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            captured["headers"] = headers
+            captured["url"] = url
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(reasoning=True, model="isaac-0.1")
+    def make_request():
+        return text("Hi there")
+
+    with cfg(provider="fal", base_url="https://mock.api"):
+        res = make_request()
+
+    payload = captured.get("payload", {})
+    assert "reasoning" not in payload
+    assert any(issue.get("code") == "reasoning_not_supported" for issue in res.errors)
+
+
+def test_only_reasoning_model_forces_reasoning(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Answer",
+                            "reasoning_content": "Because...",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    # Do not pass reasoning, expect auto-enable for only_reasoning model
+    @perceive(model="qwen3-vl-235b-a22b-thinking")
+    def make_request():
+        return text("Hi there")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        res = make_request()
+
+    payload = captured.get("payload", {})
+    assert payload.get("reasoning") is True
+    assert any(issue.get("code") == "reasoning_required_for_model" for issue in res.errors)
+
+
+def test_reasoning_true_keeps_reasoning_in_payload(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Answer",
+                            "reasoning_content": "Because...",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(reasoning=True, model="qwen3-vl-235b-a22b-thinking", provider="perceptron")
+    def make_request():
+        return text("Hi there")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        res = make_request()
+
+    payload = captured.get("payload", {})
+    assert payload.get("reasoning") is True
+    assert all(issue.get("code") != "reasoning_not_supported" for issue in res.errors)
