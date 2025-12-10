@@ -290,10 +290,12 @@ def _reasoning_capabilities(model_name: str | None, provider_cfg: dict[str, Any]
     return supports, requires, skip_hints
 
 
-def _build_hint_content(expects: str | None, include_reasoning: bool) -> str | None:
+def _build_hint_content(expects: str | None, include_reasoning: bool, include_focus: bool) -> str | None:
     tokens: list[str] = []
     if expects and expects.lower() in STRUCTURED_EXPECTATIONS:
         tokens.append(expects.upper())
+    if include_focus:
+        tokens.append("TOOLS")
     if include_reasoning:
         tokens.append("THINK")
     if not tokens:
@@ -308,8 +310,9 @@ def _inject_expectation_hint(
     model_name: str | None,
     provider_cfg: dict[str, Any] | None,
     include_reasoning: bool,
+    include_focus: bool = False,
 ) -> dict:
-    supports, requires, skip_hints = _reasoning_capabilities(model_name, provider_cfg)
+    _, _, skip_hints = _reasoning_capabilities(model_name, provider_cfg)
     if skip_hints:
         content = task.get("content") or []
         filtered = [
@@ -326,7 +329,7 @@ def _inject_expectation_hint(
         new_task["content"] = filtered
         return new_task
 
-    hint = _build_hint_content(expects, include_reasoning)
+    hint = _build_hint_content(expects, include_reasoning, include_focus)
     if hint is None:
         return task
 
@@ -354,7 +357,8 @@ def _apply_reasoning_and_hints(
     model_name: str | None,
     provider_cfg: dict[str, Any] | None,
     reasoning_flag: bool | None,
-) -> tuple[dict, bool]:
+    focus_flag: bool | None = None,
+) -> tuple[dict, bool, bool]:
     supports, requires, _ = _reasoning_capabilities(model_name, provider_cfg)
 
     final_reasoning = reasoning_flag  # None means "auto"
@@ -371,6 +375,9 @@ def _apply_reasoning_and_hints(
     if final_reasoning is True and not supports:
         final_reasoning = False
 
+    # Focus is only supported on Isaac 0.2 (same models that support reasoning)
+    final_focus = focus_flag if focus_flag is True and supports else False
+
     include_reasoning_hint = bool((final_reasoning is True) or requires or (expects and expects.lower() == "think"))
     task_with_hint = _inject_expectation_hint(
         task,
@@ -378,9 +385,10 @@ def _apply_reasoning_and_hints(
         model_name=model_name,
         provider_cfg=provider_cfg,
         include_reasoning=include_reasoning_hint,
+        include_focus=final_focus,
     )
 
-    return task_with_hint, final_reasoning
+    return task_with_hint, final_reasoning, final_focus
 
 
 def _requires_reasoning(model_name: str | None, provider_cfg: dict[str, Any] | None) -> bool:
@@ -623,6 +631,7 @@ class _ClientCore:
         s = self._settings
         local_kwargs = dict(gen_kwargs)
         reasoning_flag = local_kwargs.pop("reasoning", None)
+        focus_flag = local_kwargs.pop("focus", None)
         provider_cfg = _resolve_provider(local_kwargs.pop("provider", None) or s.provider)
         temperature = local_kwargs.pop("temperature", s.temperature)
         max_tokens = local_kwargs.pop("max_tokens", s.max_tokens)
@@ -632,12 +641,13 @@ class _ClientCore:
         if "model" not in local_kwargs and s.model is not None:
             local_kwargs["model"] = s.model
         model = _pop_and_resolve_model(provider_cfg, local_kwargs)
-        task_with_hint, reasoning_flag = _apply_reasoning_and_hints(
+        task_with_hint, reasoning_flag, focus_flag = _apply_reasoning_and_hints(
             task=task,
             expects=expects,
             model_name=model,
             provider_cfg=provider_cfg,
             reasoning_flag=reasoning_flag,
+            focus_flag=focus_flag,
         )
         prepared_task, url, headers, resolved_cfg = _prepare_transport(s, provider_cfg, task_with_hint, stream=stream)
         messages = _task_to_openai_messages(prepared_task)
