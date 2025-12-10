@@ -537,7 +537,14 @@ def _prepare_task_with_hints(
         or (expects and expects.lower() == "think")
         or _requires_reasoning(model_name, provider_cfg)
     )
-    include_focus = bool(client_kwargs.get("focus") is True)
+    # Respect per-model focus capability
+    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
+    supports_focus = True
+    if isinstance(models_cfg, dict):
+        entry = models_cfg.get(model_name)
+        if isinstance(entry, dict) and entry.get("focus") is False:
+            supports_focus = False
+    include_focus = bool(client_kwargs.get("focus") is True and supports_focus)
     return _inject_expectation_hint(
         task,
         expects,

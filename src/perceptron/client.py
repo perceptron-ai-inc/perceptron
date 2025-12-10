@@ -282,12 +282,13 @@ def _model_entry(model_name: str | None, provider_cfg: dict[str, Any] | None) ->
     return None
 
 
-def _reasoning_capabilities(model_name: str | None, provider_cfg: dict[str, Any] | None) -> tuple[bool, bool, bool]:
+def _model_capabilities(model_name: str | None, provider_cfg: dict[str, Any] | None) -> tuple[bool, bool, bool, bool]:
     entry = _model_entry(model_name, provider_cfg) or {}
-    supports = bool(entry.get("reasoning", True))
-    requires = bool(entry.get("only_reasoning", False))
+    supports_reasoning = bool(entry.get("reasoning", True))
+    requires_reasoning = bool(entry.get("only_reasoning", False))
     skip_hints = bool(entry.get("skip_structured_hints", False))
-    return supports, requires, skip_hints
+    supports_focus = bool(entry.get("focus", True))
+    return supports_reasoning, requires_reasoning, skip_hints, supports_focus
 
 
 def _build_hint_content(expects: str | None, include_reasoning: bool, include_focus: bool) -> str | None:
@@ -312,7 +313,8 @@ def _inject_expectation_hint(
     include_reasoning: bool,
     include_focus: bool = False,
 ) -> dict:
-    _, _, skip_hints = _reasoning_capabilities(model_name, provider_cfg)
+    _, _, skip_hints, supports_focus = _model_capabilities(model_name, provider_cfg)
+    include_focus = include_focus and supports_focus
     if skip_hints:
         content = task.get("content") or []
         filtered = [
@@ -359,7 +361,7 @@ def _apply_reasoning_and_hints(
     reasoning_flag: bool | None,
     focus_flag: bool | None = None,
 ) -> tuple[dict, bool, bool]:
-    supports, requires, _ = _reasoning_capabilities(model_name, provider_cfg)
+    supports, requires, _, supports_focus = _model_capabilities(model_name, provider_cfg)
 
     final_reasoning = reasoning_flag  # None means "auto"
 
@@ -375,8 +377,8 @@ def _apply_reasoning_and_hints(
     if final_reasoning is True and not supports:
         final_reasoning = False
 
-    # Focus is only supported on Isaac 0.2 (same models that support reasoning)
-    final_focus = focus_flag if focus_flag is True and supports else False
+    # Focus is allowed only if the model supports it
+    final_focus = focus_flag if focus_flag is True and supports_focus else False
 
     include_reasoning_hint = bool((final_reasoning is True) or requires or (expects and expects.lower() == "think"))
     task_with_hint = _inject_expectation_hint(
@@ -406,7 +408,7 @@ _PROVIDER_CONFIG = {
         "default_model": "isaac-0.1",
         "supported_models": ["isaac-0.1"],
         "models": {
-            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
+            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False, "focus": False},
         },
         "stream": True,
     },
@@ -419,12 +421,13 @@ _PROVIDER_CONFIG = {
         "default_model": "isaac-0.1",
         "supported_models": ["isaac-0.1", "isaac-0.2", "qwen3-vl-235b-a22b-thinking"],
         "models": {
-            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
-            "isaac-0.2": {"reasoning": True, "skip_structured_hints": False},
+            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False, "focus": False},
+            "isaac-0.2": {"reasoning": True, "skip_structured_hints": False, "focus": True},
             "qwen3-vl-235b-a22b-thinking": {
                 "reasoning": True,
                 "only_reasoning": True,
                 "skip_structured_hints": True,
+                "focus": False,
             },
         },
         "stream": True,
