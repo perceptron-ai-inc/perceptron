@@ -380,7 +380,7 @@ def test_isaac_02_reasoning_true_adds_think_hint(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(reasoning=True, model="isaac-0.2", provider="perceptron")
+    @perceive(reasoning=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Hi there")
 
@@ -430,7 +430,7 @@ def test_payload_shape_matches_expected(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="box", reasoning=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="box", reasoning=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe the object.")
 
@@ -446,7 +446,7 @@ def test_payload_shape_matches_expected(monkeypatch):
         }
     ]
 
-    assert payload.get("model") == "isaac-0.2"
+    assert payload.get("model") == "isaac-0.2-1b"
     assert payload.get("reasoning") is True
     assert payload.get("messages") == expected_messages
     assert payload.get("temperature") == 0.0
@@ -492,11 +492,11 @@ def test_model_default_used_when_not_explicit(monkeypatch):
     def make_request():
         return text("Hi there")
 
-    with cfg(provider="perceptron", model="isaac-0.2", base_url="https://mock.api"):
+    with cfg(provider="perceptron", model="isaac-0.2-1b", base_url="https://mock.api"):
         make_request()
 
     payload = captured.get("payload") or {}
-    assert payload.get("model") == "isaac-0.2"
+    assert payload.get("model") == "isaac-0.2-1b"
 
 
 def test_isaac_02_focus_true_adds_tools_hint(monkeypatch):
@@ -533,7 +533,7 @@ def test_isaac_02_focus_true_adds_tools_hint(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(focus=True, model="isaac-0.2", provider="perceptron")
+    @perceive(focus=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe the scene.")
 
@@ -627,7 +627,7 @@ def test_focus_and_reasoning_combined_hint(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(focus=True, reasoning=True, model="isaac-0.2", provider="perceptron")
+    @perceive(focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe the scene.")
 
@@ -676,7 +676,7 @@ def test_focus_box_reasoning_combined_hint(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="box", focus=True, reasoning=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="box", focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Find the object.")
 
@@ -716,7 +716,7 @@ def test_focus_only_hint_exact_format(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(focus=True, model="isaac-0.2", provider="perceptron")
+    @perceive(focus=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe.")
 
@@ -756,7 +756,7 @@ def test_focus_false_no_tools_hint(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(focus=False, model="isaac-0.2", provider="perceptron")
+    @perceive(focus=False, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe.")
 
@@ -797,7 +797,7 @@ def test_focus_none_no_tools_hint(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
     # No focus parameter specified (defaults to None)
-    @perceive(model="isaac-0.2", provider="perceptron")
+    @perceive(model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe.")
 
@@ -837,7 +837,7 @@ def test_focus_with_point_expectation(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="point", focus=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="point", focus=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Find the center.")
 
@@ -877,7 +877,7 @@ def test_focus_with_polygon_expectation(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="polygon", focus=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="polygon", focus=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Outline the region.")
 
@@ -960,7 +960,7 @@ def test_focus_direct_invocation(monkeypatch):
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
         # Direct invocation with nodes
-        perceive(text("Describe the scene."), focus=True, model="isaac-0.2", provider="perceptron")
+        perceive(text("Describe the scene."), focus=True, model="isaac-0.2-1b", provider="perceptron")
 
     payload = captured.get("payload", {})
     messages = payload.get("messages") or []
@@ -994,7 +994,7 @@ def test_focus_with_expects_think(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="think", focus=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="think", focus=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Why is the sky blue?")
 
@@ -1036,7 +1036,7 @@ def test_focus_true_expects_think_exact_format(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="think", focus=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="think", focus=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Explain.")
 
@@ -1085,7 +1085,7 @@ def test_hint_tokens_are_sorted_and_deduped(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="box", focus=True, reasoning=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="box", focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe")
 
@@ -1125,7 +1125,7 @@ def test_manual_think_hint_does_not_get_double_injected(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(model="isaac-0.2", provider="perceptron")
+    @perceive(model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("<hint>THINK</hint> Explain.")
 
@@ -1165,7 +1165,7 @@ def test_expects_think_without_focus(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="think", model="isaac-0.2", provider="perceptron")
+    @perceive(expects="think", model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Explain.")
 
@@ -1248,7 +1248,7 @@ def test_focus_expects_think_reasoning_explicit_true(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="think", focus=True, reasoning=True, model="isaac-0.2", provider="perceptron")
+    @perceive(expects="think", focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Think carefully.")
 
