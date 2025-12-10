@@ -453,6 +453,52 @@ def test_payload_shape_matches_expected(monkeypatch):
     assert payload.get("max_completion_tokens") == 1024
 
 
+def test_model_default_used_when_not_explicit(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Answer",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    # Do NOT pass model into the decorator; rely on configured default
+    @perceive()
+    def make_request():
+        return text("Hi there")
+
+    with cfg(provider="perceptron", model="isaac-0.2", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured.get("payload") or {}
+    assert payload.get("model") == "isaac-0.2"
+
+
 def test_isaac_02_focus_true_adds_tools_hint(monkeypatch):
     captured: dict[str, dict] = {}
 
