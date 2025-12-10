@@ -23,7 +23,7 @@ from .dsl.nodes import (
 )
 from .dsl.perceive import perceive
 from .errors import BadRequestError
-from .expectations import expectation_hint_text, resolve_structured_expectation
+from .expectations import resolve_structured_expectation
 from .pointing.types import bbox
 from .prompting import (
     CaptionPromptTemplate,
@@ -139,12 +139,9 @@ def _caption_sequence(
     style_map = template.style_prompts
     if style not in style_map:
         raise BadRequestError(f"Unsupported caption style: {style}")
-    hint = expectation_hint_text(expects)
     nodes = []
     if template.system_instruction:
         nodes.append(system(template.system_instruction))
-    if hint:
-        nodes.append(text(hint))
     nodes.append(image_node(image_obj))
     nodes.append(text(style_map[style]))
     return SequenceNode(nodes)
@@ -204,9 +201,6 @@ def _question_sequence(
     nodes: list = []
     if system_instruction:
         nodes.append(system(system_instruction))
-    hint = expectation_hint_text(expects)
-    if hint:
-        nodes.append(text(hint))
     nodes.append(image_node(image_obj))
     nodes.append(text(question_text))
     return SequenceNode(nodes)
