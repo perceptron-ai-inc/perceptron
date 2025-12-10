@@ -63,3 +63,9 @@ class ParseError(SDKError):
     """Failed to parse model response (e.g., malformed point/box tags)."""
 
     pass
+
+
+# Warning/issue codes for reasoning configuration
+REASONING_NOT_SUPPORTED = "reasoning_not_supported"
+REASONING_REQUIRED_FOR_MODEL = "reasoning_required_for_model"
+REASONING_DISABLED_FOR_THINKING_MODEL = "reasoning_disabled_for_thinking_model"

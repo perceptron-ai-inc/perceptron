@@ -34,7 +34,12 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore
 
-from ..client import _PROVIDER_CONFIG, AsyncClient, Client
+from ..client import _PROVIDER_CONFIG, AsyncClient, Client, _inject_expectation_hint
+from ..errors import (
+    REASONING_DISABLED_FOR_THINKING_MODEL,
+    REASONING_NOT_SUPPORTED,
+    REASONING_REQUIRED_FOR_MODEL,
+)
 from ..config import settings
 from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
@@ -307,6 +312,7 @@ def _prepare_client_kwargs(
     provider_override: str | None,
     model_override: str | None,
     expects: str | None,
+    reasoning: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -317,6 +323,7 @@ def _prepare_client_kwargs(
     env = settings()
     resolved_provider = provider_override or env.provider
     provider_name = resolved_provider or "fal"
+    reasoning_enabled = reasoning if reasoning is not None else _expects_reasoning(expects)
     client_kwargs = {
         "expects": expects,
         "provider": provider_name,
@@ -327,6 +334,8 @@ def _prepare_client_kwargs(
         "allow_multiple": allow_multiple,
         "max_outputs": max_outputs,
     }
+    if reasoning_enabled:
+        client_kwargs["reasoning"] = True
     if model_override is not None:
         client_kwargs["model"] = model_override
     return env, resolved_provider, provider_name, client_kwargs
@@ -394,6 +403,7 @@ def _prepare_execution_context(
     provider_override: str | None,
     model_override: str | None,
     expects: str | None,
+    reasoning: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -405,6 +415,7 @@ def _prepare_execution_context(
         provider_override=provider_override,
         model_override=model_override,
         expects=expects,
+        reasoning=reasoning,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -412,6 +423,40 @@ def _prepare_execution_context(
         top_p=top_p,
         top_k=top_k,
     )
+
+    provider_cfg = _PROVIDER_CONFIG.get(provider_name or "", {})
+    model_name = model_override or env.model or provider_cfg.get("default_model")
+
+    requires_reasoning = _requires_reasoning(model_name, provider_cfg)
+
+    # Warn when a thinking model is used with reasoning explicitly disabled.
+    if reasoning is False and _is_thinking_model(model_name):
+        issues.append(
+            {
+                "code": REASONING_DISABLED_FOR_THINKING_MODEL,
+                "message": f"Model '{model_name}' is a thinking model; setting reasoning=False will have no effect.",
+            }
+        )
+
+    # Drop reasoning flag (and warn) for models that don't support it (registry-driven).
+    if client_kwargs.get("reasoning") and not _supports_reasoning(model_name, provider_cfg):
+        client_kwargs.pop("reasoning", None)
+        issues.append(
+            {
+                "code": REASONING_NOT_SUPPORTED,
+                "message": f"Model '{model_name}' does not support reasoning; flag was ignored.",
+            }
+        )
+
+    # Force reasoning when the model requires it (registry-driven).
+    if requires_reasoning and not client_kwargs.get("reasoning"):
+        client_kwargs["reasoning"] = True
+        issues.append(
+            {
+                "code": REASONING_REQUIRED_FOR_MODEL,
+                "message": f"Model '{model_name}' requires reasoning; flag was enabled automatically.",
+            }
+        )
 
     compile_only = _maybe_compile_only_result(
         stream=stream,
@@ -426,6 +471,74 @@ def _prepare_execution_context(
 
 def _expects_structured(expects: str | None) -> bool:
     return expects in {"point", "box", "polygon"}
+
+
+def _expects_reasoning(expects: str | None) -> bool:
+    return isinstance(expects, str) and expects.lower() == "think"
+
+
+def _is_thinking_model(model_name: str | None) -> bool:
+    if not isinstance(model_name, str):
+        return False
+    return "thinking" in model_name.lower() or model_name.lower().startswith("qwen3")
+
+
+def _supports_reasoning(model_name: str | None, provider_cfg: dict | None = None) -> bool:
+    """Check if model supports reasoning based on registry config.
+
+    Returns True if the model's registry entry has reasoning=True,
+    or if the model is not in the registry (permissive default).
+    """
+    if not isinstance(model_name, str):
+        return False
+
+    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
+    if isinstance(models_cfg, dict):
+        entry = models_cfg.get(model_name)
+        if isinstance(entry, dict) and "reasoning" in entry:
+            return bool(entry["reasoning"])
+
+    # Model not in registry - default to True (permissive)
+    return True
+
+
+def _requires_reasoning(model_name: str | None, provider_cfg: dict | None = None) -> bool:
+    if not isinstance(model_name, str):
+        return False
+    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
+    if isinstance(models_cfg, dict):
+        entry = models_cfg.get(model_name)
+        if isinstance(entry, dict) and entry.get("only_reasoning") is True:
+            return True
+    return False
+
+
+def _prepare_task_with_hints(
+    task: dict,
+    expects: str | None,
+    client_kwargs: dict,
+) -> dict:
+    """Inject expectation hints into task based on provider/model config.
+
+    Resolves provider and model from client_kwargs and settings, then injects
+    appropriate hints for structured expectations and/or reasoning.
+    """
+    env_local = settings()
+    provider_name = client_kwargs.get("provider") or env_local.provider or "fal"
+    provider_cfg = {"name": provider_name, **(_PROVIDER_CONFIG.get(provider_name) or {})}
+    model_name = client_kwargs.get("model") or env_local.model or provider_cfg.get("default_model")
+    include_reasoning = bool(
+        client_kwargs.get("reasoning")
+        or (expects and expects.lower() == "think")
+        or _requires_reasoning(model_name, provider_cfg)
+    )
+    return _inject_expectation_hint(
+        task,
+        expects,
+        model_name=model_name,
+        provider_cfg=provider_cfg,
+        include_reasoning=include_reasoning,
+    )
 
 
 def _collect_nodes(value: Any, acc: list[DSLNode]) -> None:
@@ -468,6 +581,7 @@ def _execute_sync_task(
     provider_override: str | None,
     model_override: str | None,
     expects: str | None,
+    reasoning: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -482,6 +596,7 @@ def _execute_sync_task(
         provider_override=provider_override,
         model_override=model_override,
         expects=expects,
+        reasoning=reasoning,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -491,6 +606,8 @@ def _execute_sync_task(
     )
     if compile_only is not None:
         return compile_only
+
+    task = _prepare_task_with_hints(task, expects, client_kwargs)
 
     client = Client()
     if stream:
@@ -515,6 +632,7 @@ def perceive(
     *nodes_or_fn: Any,
     visual_reasoning: str | None = None,
     expects: str | None = None,
+    reasoning: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float = 0.0,
@@ -550,6 +668,7 @@ def perceive(
                 provider_override=provider,
                 model_override=model,
                 expects=expects,
+                reasoning=reasoning,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
@@ -584,6 +703,7 @@ def perceive(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        reasoning=reasoning,
     )
 
 
@@ -591,6 +711,7 @@ def async_perceive(
     *,
     visual_reasoning: str | None = None,
     expects: str | None = None,
+    reasoning: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float = 0.0,
@@ -622,6 +743,7 @@ def async_perceive(
                         provider_override=provider,
                         model_override=model,
                         expects=expects,
+                        reasoning=reasoning,
                         allow_multiple=allow_multiple,
                         max_outputs=max_outputs,
                         temperature=temperature,
@@ -631,9 +753,10 @@ def async_perceive(
                     )
                     if compile_only is not None:
                         return
+                    task_with_hint = _prepare_task_with_hints(task, expects, client_kwargs)
                     client = AsyncClient()
                     async for event in client.stream(
-                        task,
+                        task_with_hint,
                         parse_points=parse_points,
                         **client_kwargs,
                     ):
@@ -654,6 +777,7 @@ def async_perceive(
                 provider_override=provider,
                 model_override=model,
                 expects=expects,
+                reasoning=reasoning,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
@@ -663,6 +787,7 @@ def async_perceive(
             )
             if compile_only is not None:
                 return compile_only
+            task = _prepare_task_with_hints(task, expects, client_kwargs)
 
             client = AsyncClient()
             resp = await client.generate(task, **client_kwargs)
