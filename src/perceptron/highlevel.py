@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .annotations import annotate_image, canonicalize_text_collections, serialize_annotations
-from .client import _PROVIDER_CONFIG, _select_model
+from .client import _PROVIDER_CONFIG, ResponseFormat, _select_model
 from .config import settings
 from .dsl.nodes import (
     Sequence as SequenceNode,
@@ -110,9 +110,12 @@ def _run_perceive_sequence(
     builder: Callable[[], SequenceNode],
     perceive_base_kwargs: Mapping[str, Any],
     gen_kwargs: dict[str, Any],
+    response_format: ResponseFormat | None = None,
 ):
     perceive_kwargs = dict(perceive_base_kwargs)
     perceive_kwargs.update(gen_kwargs)
+    if response_format is not None:
+        perceive_kwargs["response_format"] = response_format
     runner = perceive(**perceive_kwargs)
 
     @runner
@@ -153,9 +156,16 @@ def caption(
     style: str = "concise",
     expects: str = "box",
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """Generate a caption for an image using predefined best-practice prompts."""
+    """Generate a caption for an image using predefined best-practice prompts.
+
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to enable constrained decoding.
+    """
 
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     caption_template = profile.caption
@@ -171,6 +181,7 @@ def caption(
         builder=lambda: _caption_sequence(image_obj, style, structured_expectation, caption_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
+        response_format=response_format,
     )
 
 
@@ -207,9 +218,16 @@ def question(
     *,
     expects: str = "text",
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """Answer a question about an image, optionally requesting structured outputs."""
+    """Answer a question about an image, optionally requesting structured outputs.
+
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to enable constrained decoding.
+    """
 
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     question_template = profile.question
@@ -225,6 +243,7 @@ def question(
         builder=lambda: _question_sequence(image_obj, question_text, structured_expectation, question_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
+        response_format=response_format,
     )
 
 
@@ -254,6 +273,7 @@ def _run_ocr(
     stream: bool,
     mode: str,
     gen_kwargs: dict[str, Any],
+    response_format: ResponseFormat | None = None,
 ):
     profile, resolved_model = _prompt_profile_from_kwargs(gen_kwargs)
     ocr_template = profile.ocr
@@ -277,6 +297,7 @@ def _run_ocr(
         builder=lambda: _ocr_sequence(image_obj, effective_prompt, ocr_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
+        response_format=response_format,
     )
 
 
@@ -285,11 +306,25 @@ def ocr(
     *,
     prompt: str | None = None,
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """Perform OCR on an image (plain text)."""
+    """Perform OCR on an image (plain text).
 
-    return _run_ocr(image_obj, prompt=prompt, stream=stream, mode="plain", gen_kwargs=gen_kwargs)
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to enable constrained decoding.
+    """
+
+    return _run_ocr(
+        image_obj,
+        prompt=prompt,
+        stream=stream,
+        mode="plain",
+        gen_kwargs=gen_kwargs,
+        response_format=response_format,
+    )
 
 
 def ocr_markdown(
@@ -297,11 +332,25 @@ def ocr_markdown(
     *,
     prompt: str | None = None,
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """Perform OCR and request Markdown output when supported by the provider."""
+    """Perform OCR and request Markdown output when supported by the provider.
 
-    return _run_ocr(image_obj, prompt=prompt, stream=stream, mode="markdown", gen_kwargs=gen_kwargs)
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to enable constrained decoding.
+    """
+
+    return _run_ocr(
+        image_obj,
+        prompt=prompt,
+        stream=stream,
+        mode="markdown",
+        gen_kwargs=gen_kwargs,
+        response_format=response_format,
+    )
 
 
 def ocr_html(
@@ -309,11 +358,25 @@ def ocr_html(
     *,
     prompt: str | None = None,
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """Perform OCR and request HTML output when supported by the provider."""
+    """Perform OCR and request HTML output when supported by the provider.
 
-    return _run_ocr(image_obj, prompt=prompt, stream=stream, mode="html", gen_kwargs=gen_kwargs)
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to enable constrained decoding.
+    """
+
+    return _run_ocr(
+        image_obj,
+        prompt=prompt,
+        stream=stream,
+        mode="html",
+        gen_kwargs=gen_kwargs,
+        response_format=response_format,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -360,9 +423,16 @@ def detect(  # noqa: PLR0913
     strict: bool | None = None,
     max_outputs: int | None = None,
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """High-level object detection helper."""
+    """High-level object detection helper.
+
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to enable constrained decoding.
+    """
 
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     detect_template = profile.detect
@@ -379,6 +449,7 @@ def detect(  # noqa: PLR0913
         builder=lambda: _detect_sequence(image_obj, classes=classes, examples=examples, template=detect_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
+        response_format=response_format,
     )
 
 

@@ -34,7 +34,7 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore
 
-from ..client import _PROVIDER_CONFIG, AsyncClient, Client
+from ..client import _PROVIDER_CONFIG, AsyncClient, Client, ResponseFormat
 from ..config import settings
 from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
@@ -313,11 +313,12 @@ def _prepare_client_kwargs(
     max_tokens: int,
     top_p: float,
     top_k: int | None,
+    response_format: ResponseFormat | None,
 ):
     env = settings()
     resolved_provider = provider_override or env.provider
     provider_name = resolved_provider or "fal"
-    client_kwargs = {
+    client_kwargs: dict[str, Any] = {
         "expects": expects,
         "provider": provider_name,
         "temperature": temperature,
@@ -329,6 +330,8 @@ def _prepare_client_kwargs(
     }
     if model_override is not None:
         client_kwargs["model"] = model_override
+    if response_format is not None:
+        client_kwargs["response_format"] = response_format
     return env, resolved_provider, provider_name, client_kwargs
 
 
@@ -400,6 +403,7 @@ def _prepare_execution_context(
     max_tokens: int,
     top_p: float,
     top_k: int | None,
+    response_format: ResponseFormat | None,
 ):
     env, resolved_provider, provider_name, client_kwargs = _prepare_client_kwargs(
         provider_override=provider_override,
@@ -411,6 +415,7 @@ def _prepare_execution_context(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        response_format=response_format,
     )
 
     compile_only = _maybe_compile_only_result(
@@ -474,6 +479,7 @@ def _execute_sync_task(
     max_tokens: int,
     top_p: float,
     top_k: int | None,
+    response_format: ResponseFormat | None,
 ):
     compile_only, client_kwargs = _prepare_execution_context(
         task=task,
@@ -488,6 +494,7 @@ def _execute_sync_task(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        response_format=response_format,
     )
     if compile_only is not None:
         return compile_only
@@ -525,6 +532,7 @@ def perceive(
     allow_multiple: bool = False,
     max_outputs: int | None = 1,
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
 ):
     """Decorator (or direct helper) for building Tasks from DSL nodes.
 
@@ -532,6 +540,11 @@ def perceive(
     it immediately compiles and executes them. Executes via the default Client
     unless compile-only fallback is triggered (no provider configured or the
     selected provider lacks credentials).
+
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to construct this parameter. Enables constrained decoding on supported models.
     """
 
     parse_points = _expects_structured(expects)
@@ -556,6 +569,7 @@ def perceive(
                 max_tokens=max_tokens,
                 top_p=top_p,
                 top_k=top_k,
+                response_format=response_format,
             )
 
         _call.__perceptron_inspector__ = _inspect  # type: ignore[attr-defined]
@@ -584,6 +598,7 @@ def perceive(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        response_format=response_format,
     )
 
 
@@ -601,8 +616,15 @@ def async_perceive(
     allow_multiple: bool = False,
     max_outputs: int | None = 1,
     stream: bool = False,
+    response_format: ResponseFormat | None = None,
 ):
-    """Async counterpart to ``perceive`` using :class:`AsyncClient`."""
+    """Async counterpart to ``perceive`` using :class:`AsyncClient`.
+
+    Args:
+        response_format: Optional constraint for output format. Use
+            :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
+            to construct this parameter. Enables constrained decoding on supported models.
+    """
 
     parse_points = _expects_structured(expects)
 
@@ -628,6 +650,7 @@ def async_perceive(
                         max_tokens=max_tokens,
                         top_p=top_p,
                         top_k=top_k,
+                        response_format=response_format,
                     )
                     if compile_only is not None:
                         return
@@ -660,6 +683,7 @@ def async_perceive(
                 max_tokens=max_tokens,
                 top_p=top_p,
                 top_k=top_k,
+                response_format=response_format,
             )
             if compile_only is not None:
                 return compile_only
