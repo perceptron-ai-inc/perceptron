@@ -1051,6 +1051,93 @@ def test_focus_true_expects_think_exact_format(monkeypatch):
     assert messages[0]["content"].count("<hint") == 1
 
 
+def test_hint_tokens_are_sorted_and_deduped(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Answer",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(expects="box", focus=True, reasoning=True, model="isaac-0.2", provider="perceptron")
+    def make_request():
+        return text("Describe")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        make_request()
+
+    messages = (captured.get("payload", {}).get("messages") or [])
+    assert messages and messages[0]["content"].startswith("<hint>BOX THINK TOOLS</hint>")
+    assert messages[0]["content"].count("<hint") == 1
+
+
+def test_manual_think_hint_does_not_get_double_injected(monkeypatch):
+    """Ensure a user-supplied THINK hint isn't duplicated by client injection."""
+
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Answer", "reasoning_content": "Because..."}}]}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(model="isaac-0.2", provider="perceptron")
+    def make_request():
+        return text("<hint>THINK</hint> Explain.")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        make_request()
+
+    messages = (captured.get("payload", {}).get("messages") or [])
+    # Should still have only one hint, and it should be THINK (no duplicate THINK THINK)
+    assert messages and messages[0]["content"].count("<hint") == 1
+    assert messages[0]["content"].startswith("<hint>THINK</hint>")
+
+
 def test_expects_think_without_focus(monkeypatch):
     """Test that expects='think' without focus only produces <hint>THINK</hint>."""
     captured: dict[str, dict] = {}
