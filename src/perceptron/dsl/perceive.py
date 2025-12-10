@@ -313,6 +313,7 @@ def _prepare_client_kwargs(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
+    focus: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -337,6 +338,8 @@ def _prepare_client_kwargs(
     }
     if reasoning_enabled:
         client_kwargs["reasoning"] = True
+    if focus is True:
+        client_kwargs["focus"] = True
     if model_override is not None:
         client_kwargs["model"] = model_override
     if response_format is not None:
@@ -407,6 +410,7 @@ def _prepare_execution_context(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
+    focus: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -420,6 +424,7 @@ def _prepare_execution_context(
         model_override=model_override,
         expects=expects,
         reasoning=reasoning,
+        focus=focus,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -537,12 +542,21 @@ def _prepare_task_with_hints(
         or (expects and expects.lower() == "think")
         or _requires_reasoning(model_name, provider_cfg)
     )
+    # Respect per-model focus capability
+    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
+    supports_focus = True
+    if isinstance(models_cfg, dict):
+        entry = models_cfg.get(model_name)
+        if isinstance(entry, dict) and entry.get("focus") is False:
+            supports_focus = False
+    include_focus = bool(client_kwargs.get("focus") is True and supports_focus)
     return _inject_expectation_hint(
         task,
         expects,
         model_name=model_name,
         provider_cfg=provider_cfg,
         include_reasoning=include_reasoning,
+        include_focus=include_focus,
     )
 
 
@@ -587,6 +601,7 @@ def _execute_sync_task(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
+    focus: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float,
@@ -603,6 +618,7 @@ def _execute_sync_task(
         model_override=model_override,
         expects=expects,
         reasoning=reasoning,
+        focus=focus,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -640,6 +656,7 @@ def perceive(
     visual_reasoning: str | None = None,
     expects: str | None = None,
     reasoning: bool | None = None,
+    focus: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float = 0.0,
@@ -682,6 +699,7 @@ def perceive(
                 model_override=model,
                 expects=expects,
                 reasoning=reasoning,
+                focus=focus,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
@@ -719,6 +737,7 @@ def perceive(
         top_k=top_k,
         reasoning=reasoning,
         response_format=response_format,
+        focus=focus,
     )
 
 
@@ -727,6 +746,7 @@ def async_perceive(
     visual_reasoning: str | None = None,
     expects: str | None = None,
     reasoning: bool | None = None,
+    focus: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float = 0.0,
@@ -766,6 +786,7 @@ def async_perceive(
                         model_override=model,
                         expects=expects,
                         reasoning=reasoning,
+                        focus=focus,
                         allow_multiple=allow_multiple,
                         max_outputs=max_outputs,
                         temperature=temperature,
@@ -801,6 +822,7 @@ def async_perceive(
                 model_override=model,
                 expects=expects,
                 reasoning=reasoning,
+                focus=focus,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
