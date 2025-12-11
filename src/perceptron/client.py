@@ -38,11 +38,19 @@ from .pointing.parser import extract_points, extract_reasoning, parse_text
 # ---------------------------------------------------------------------------
 
 
+class JsonSchemaSpec(TypedDict, total=False):
+    """JSON Schema specification object containing name, schema, and optional strict flag."""
+
+    name: str
+    schema: dict[str, Any]
+    strict: bool
+
+
 class JsonSchemaFormat(TypedDict, total=False):
     """JSON Schema response format specification."""
 
     type: str  # Must be "json_schema"
-    json_schema: dict[str, Any]  # {"name": str, "schema": dict, "strict": bool (optional)}
+    json_schema: JsonSchemaSpec
 
 
 class RegexFormat(TypedDict, total=False):
@@ -65,8 +73,16 @@ class _PreparedInvocation:
     provider_cfg: dict[str, Any]
 
 
-def _build_response_format(response_format: ResponseFormat | None) -> dict[str, Any] | None:
-    """Validate and normalize response_format for the API request."""
+def _build_response_format(
+    response_format: ResponseFormat | None,
+) -> tuple[str, dict[str, Any] | str] | None:
+    """Validate and normalize response_format for the API request.
+
+    Returns:
+        None if response_format is None, otherwise a tuple of (field_name, value):
+        - For json_schema: ("response_format", {"type": "json_schema", "json_schema": {...}})
+        - For regex: ("regex", "pattern_string")
+    """
     if response_format is None:
         return None
 
@@ -75,16 +91,15 @@ def _build_response_format(response_format: ResponseFormat | None) -> dict[str, 
         schema_spec = response_format.get("json_schema")
         if not isinstance(schema_spec, dict):
             raise ValueError("json_schema response_format requires a 'json_schema' dict with 'name' and 'schema'")
-        return {"type": "json_schema", "json_schema": schema_spec}
+        return ("response_format", {"type": "json_schema", "json_schema": schema_spec})
 
     if fmt_type == "regex":
         regex_pattern = response_format.get("regex")
         if not isinstance(regex_pattern, str):
             raise ValueError("regex response_format requires a 'regex' string pattern")
-        return {"type": "regex", "regex": regex_pattern}
+        return ("regex", regex_pattern)
 
-    # Pass through unknown formats for forward compatibility
-    return dict(response_format)
+    raise ValueError(f"Unknown response_format type: {fmt_type!r}. Supported types: 'json_schema', 'regex'")
 
 
 class _StreamProcessor:
@@ -714,10 +729,11 @@ class _ClientCore:
         if stream:
             body["stream"] = True
 
-        # Add response_format for constrained decoding (json_schema or regex)
-        normalized_format = _build_response_format(response_format)
-        if normalized_format is not None:
-            body["response_format"] = normalized_format
+        # Add constrained decoding field (json_schema → response_format, regex → regex)
+        format_result = _build_response_format(response_format)
+        if format_result is not None:
+            field_name, field_value = format_result
+            body[field_name] = field_value
 
         return _PreparedInvocation(url=url, headers=headers, body=body, expects=expects, provider_cfg=resolved_cfg)
 
@@ -907,7 +923,7 @@ def json_schema_format(
         ... }
         >>> result = client.generate(task, response_format=json_schema_format(schema))
     """
-    json_schema_spec: dict[str, Any] = {"name": name, "schema": schema}
+    json_schema_spec: JsonSchemaSpec = {"name": name, "schema": schema}
     if strict is not None:
         json_schema_spec["strict"] = strict
     return {"type": "json_schema", "json_schema": json_schema_spec}

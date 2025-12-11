@@ -221,16 +221,23 @@ def test_build_response_format_json_schema():
     }
     result = client_mod._build_response_format(fmt)
 
-    assert result["type"] == "json_schema"
-    assert result["json_schema"]["name"] == "test"
+    # Returns tuple: (field_name, value)
+    assert isinstance(result, tuple)
+    field_name, value = result
+    assert field_name == "response_format"
+    assert value["type"] == "json_schema"
+    assert value["json_schema"]["name"] == "test"
 
 
 def test_build_response_format_regex():
     fmt = {"type": "regex", "regex": r"\d+"}
     result = client_mod._build_response_format(fmt)
 
-    assert result["type"] == "regex"
-    assert result["regex"] == r"\d+"
+    # Returns tuple: (field_name, value) where regex goes to separate "regex" field
+    assert isinstance(result, tuple)
+    field_name, value = result
+    assert field_name == "regex"
+    assert value == r"\d+"
 
 
 def test_build_response_format_invalid_json_schema():
@@ -247,12 +254,11 @@ def test_build_response_format_invalid_regex():
         client_mod._build_response_format(fmt)
 
 
-def test_build_response_format_unknown_type_passthrough():
+def test_build_response_format_unknown_type_raises():
     fmt = {"type": "custom_type", "custom_field": "value"}
-    result = client_mod._build_response_format(fmt)
 
-    assert result["type"] == "custom_type"
-    assert result["custom_field"] == "value"
+    with pytest.raises(ValueError, match="Unknown response_format type: 'custom_type'"):
+        client_mod._build_response_format(fmt)
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +308,7 @@ def test_response_format_in_payload(monkeypatch):
 
 
 def test_response_format_regex_in_payload(monkeypatch):
-    """Test that regex response_format is included in the request body."""
+    """Test that regex is passed as separate 'regex' field in the request body."""
     captured = {}
 
     class _Resp:
@@ -333,9 +339,10 @@ def test_response_format_regex_in_payload(monkeypatch):
         make_request()
 
     payload = captured["payload"]
-    assert "response_format" in payload
-    assert payload["response_format"]["type"] == "regex"
-    assert payload["response_format"]["regex"] == r"(yes|no)"
+    # regex goes to separate "regex" field, not inside response_format
+    assert "regex" in payload
+    assert payload["regex"] == r"(yes|no)"
+    assert "response_format" not in payload
 
 
 def test_no_response_format_when_none(monkeypatch):
