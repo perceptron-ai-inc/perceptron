@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 
@@ -33,6 +33,36 @@ from .errors import (
 from .expectations import STRUCTURED_EXPECTATIONS
 from .pointing.parser import extract_points, extract_reasoning, parse_text
 
+# ---------------------------------------------------------------------------
+# Response format types for constrained decoding
+# ---------------------------------------------------------------------------
+
+
+class JsonSchemaSpec(TypedDict, total=False):
+    """JSON Schema specification object containing name, schema, and optional strict flag."""
+
+    name: str
+    schema: dict[str, Any]
+    strict: bool
+
+
+class JsonSchemaFormat(TypedDict, total=False):
+    """JSON Schema response format specification."""
+
+    type: str  # Must be "json_schema"
+    json_schema: JsonSchemaSpec
+
+
+class RegexFormat(TypedDict, total=False):
+    """Regex response format specification."""
+
+    type: str  # Must be "regex"
+    regex: str  # The regex pattern to constrain output
+
+
+# Union type for response_format parameter
+ResponseFormat = JsonSchemaFormat | RegexFormat | dict[str, Any]
+
 
 @dataclass
 class _PreparedInvocation:
@@ -41,6 +71,35 @@ class _PreparedInvocation:
     body: dict[str, Any]
     expects: str | None
     provider_cfg: dict[str, Any]
+
+
+def _build_response_format(
+    response_format: ResponseFormat | None,
+) -> tuple[str, dict[str, Any] | str] | None:
+    """Validate and normalize response_format for the API request.
+
+    Returns:
+        None if response_format is None, otherwise a tuple of (field_name, value):
+        - For json_schema: ("response_format", {"type": "json_schema", "json_schema": {...}})
+        - For regex: ("regex", "pattern_string")
+    """
+    if response_format is None:
+        return None
+
+    fmt_type = response_format.get("type")
+    if fmt_type == "json_schema":
+        schema_spec = response_format.get("json_schema")
+        if not isinstance(schema_spec, dict):
+            raise ValueError("json_schema response_format requires a 'json_schema' dict with 'name' and 'schema'")
+        return ("response_format", {"type": "json_schema", "json_schema": schema_spec})
+
+    if fmt_type == "regex":
+        regex_pattern = response_format.get("regex")
+        if not isinstance(regex_pattern, str):
+            raise ValueError("regex response_format requires a 'regex' string pattern")
+        return ("regex", regex_pattern)
+
+    raise ValueError(f"Unknown response_format type: {fmt_type!r}. Supported types: 'json_schema', 'regex'")
 
 
 class _StreamProcessor:
@@ -641,6 +700,7 @@ class _ClientCore:
         max_tokens = local_kwargs.pop("max_tokens", s.max_tokens)
         top_p = local_kwargs.pop("top_p", s.top_p)
         top_k = local_kwargs.pop("top_k", s.top_k)
+        response_format = local_kwargs.pop("response_format", None)
 
         if "model" not in local_kwargs and s.model is not None:
             local_kwargs["model"] = s.model
@@ -668,6 +728,13 @@ class _ClientCore:
             body["reasoning"] = True
         if stream:
             body["stream"] = True
+
+        # Add constrained decoding field (json_schema → response_format, regex → regex)
+        format_result = _build_response_format(response_format)
+        if format_result is not None:
+            field_name, field_value = format_result
+            body[field_name] = field_value
+
         return _PreparedInvocation(url=url, headers=headers, body=body, expects=expects, provider_cfg=resolved_cfg)
 
     def _build_result(self, data: dict[str, Any], expects: str | None) -> dict[str, Any]:
@@ -822,3 +889,107 @@ class AsyncClient(_ClientCore):
             yield processor.finalize()
 
         return _run_async_stream()
+
+
+# ---------------------------------------------------------------------------
+# Response format helpers for constrained decoding
+# ---------------------------------------------------------------------------
+
+
+def json_schema_format(
+    schema: dict[str, Any],
+    *,
+    name: str = "response",
+    strict: bool | None = None,
+) -> JsonSchemaFormat:
+    """Create a JSON schema response format for constrained decoding.
+
+    Args:
+        schema: JSON Schema object defining the expected output structure.
+        name: A name for this schema (used for identification in logs/errors).
+        strict: If True, enforce strict schema validation. Defaults to None (provider default).
+
+    Returns:
+        A response_format dict suitable for passing to generate/stream/perceive.
+
+    Example:
+        >>> schema = {
+        ...     "type": "object",
+        ...     "properties": {
+        ...         "name": {"type": "string"},
+        ...         "age": {"type": "integer"}
+        ...     },
+        ...     "required": ["name", "age"]
+        ... }
+        >>> result = client.generate(task, response_format=json_schema_format(schema))
+    """
+    json_schema_spec: JsonSchemaSpec = {"name": name, "schema": schema}
+    if strict is not None:
+        json_schema_spec["strict"] = strict
+    return {"type": "json_schema", "json_schema": json_schema_spec}
+
+
+def regex_format(pattern: str) -> RegexFormat:
+    """Create a regex response format for constrained decoding.
+
+    Args:
+        pattern: A regular expression pattern that the output must match.
+
+    Returns:
+        A response_format dict suitable for passing to generate/stream/perceive.
+
+    Example:
+        >>> # Constrain output to a valid email address format
+        >>> result = client.generate(task, response_format=regex_format(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"))
+    """
+    return {"type": "regex", "regex": pattern}
+
+
+def pydantic_format(
+    model: type,
+    *,
+    name: str | None = None,
+    strict: bool | None = None,
+) -> JsonSchemaFormat:
+    """Create a JSON schema response format from a Pydantic model.
+
+    This is a convenience wrapper that extracts the JSON schema from a Pydantic
+    model class and passes it to the constrained decoding engine.
+
+    Args:
+        model: A Pydantic model class (subclass of pydantic.BaseModel).
+        name: Optional name for the schema. Defaults to the model's class name.
+        strict: If True, enforce strict schema validation. Defaults to None (provider default).
+
+    Returns:
+        A response_format dict suitable for passing to generate/stream/perceive.
+
+    Example:
+        >>> from pydantic import BaseModel
+        >>>
+        >>> class Person(BaseModel):
+        ...     name: str
+        ...     age: int
+        ...     email: str | None = None
+        >>>
+        >>> result = client.generate(task, response_format=pydantic_format(Person))
+        >>> person = Person.model_validate_json(result.text)
+
+    Note:
+        Requires pydantic to be installed. The model must be a Pydantic v2 model
+        (subclass of pydantic.BaseModel with model_json_schema method).
+    """
+    # Check if it's a Pydantic model
+    if not hasattr(model, "model_json_schema"):
+        raise TypeError(
+            f"Expected a Pydantic model class with model_json_schema method, got {type(model).__name__}. "
+            "Make sure you're using Pydantic v2."
+        )
+
+    # Extract JSON schema from the Pydantic model
+    schema = model.model_json_schema()
+
+    # Use model class name as default schema name
+    schema_name = name if name is not None else model.__name__
+
+    return json_schema_format(schema, name=schema_name, strict=strict)

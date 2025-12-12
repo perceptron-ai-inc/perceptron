@@ -16,7 +16,17 @@ import importlib
 __version__ = "0.1.4"
 
 from .annotations import annotate_image
-from .client import AsyncClient, Client
+from .client import (
+    AsyncClient,
+    Client,
+    JsonSchemaFormat,
+    JsonSchemaSpec,
+    RegexFormat,
+    ResponseFormat,
+    json_schema_format,
+    pydantic_format,
+    regex_format,
+)
 from .config import config, configure, settings
 from .dsl.nodes import agent, block, box, image, point, polygon, system, text
 from .dsl.perceive import PerceiveResult, async_perceive, inspect_task, perceive
@@ -74,12 +84,16 @@ __all__ = [
     "Client",
     "Collection",
     "ExpectationError",
+    "JsonSchemaFormat",
+    "JsonSchemaSpec",
     "PerceiveResult",
     "PointParser",
     "Polygon",
     "RateLimitError",
     "ReasoningExtraction",
     "ReasoningStreamCleaner",
+    "RegexFormat",
+    "ResponseFormat",
     "SDKError",
     "ServerError",
     "SinglePoint",
@@ -102,6 +116,7 @@ __all__ = [
     "extract_reasoning",
     "image",
     "inspect_task",
+    "json_schema_format",
     "ocr",
     "ocr_html",
     "ocr_markdown",
@@ -111,7 +126,9 @@ __all__ = [
     "poly",
     "polygon",
     "pt",
+    "pydantic_format",
     "question",
+    "regex_format",
     "scale_points_to_pixels",
     "settings",
     "strip_tags",
