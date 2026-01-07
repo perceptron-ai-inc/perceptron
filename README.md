@@ -5,7 +5,7 @@
 </p>
 
 <div align="center">
-  <h3>The platform for physical AI test</h3>
+  <h3>The platform for physical AI</h3>
 </div>
 
 <p align="center">
