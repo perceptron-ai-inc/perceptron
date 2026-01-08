@@ -73,8 +73,7 @@ from perceptron import detect, caption
 # Detect objects with structured bounding boxes
 result = detect(
     "warehouse.jpg",
-    classes=["forklift", "person", "pallet"],
-    model="perceptron"
+    classes=["forklift", "person", "pallet"]
 )
 
 for box in result.points or []:
