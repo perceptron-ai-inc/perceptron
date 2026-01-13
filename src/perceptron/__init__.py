@@ -45,10 +45,7 @@ from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_mar
 from .pointing.geometry import scale_points_to_pixels
 from .pointing.parser import (
     PointParser,
-    ReasoningExtraction,
-    ReasoningStreamCleaner,
     extract_points,
-    extract_reasoning,
     parse_text,
     strip_tags,
 )
@@ -90,8 +87,6 @@ __all__ = [
     "PointParser",
     "Polygon",
     "RateLimitError",
-    "ReasoningExtraction",
-    "ReasoningStreamCleaner",
     "RegexFormat",
     "ResponseFormat",
     "SDKError",
@@ -113,7 +108,6 @@ __all__ = [
     "detect",
     "detect_from_coco",
     "extract_points",
-    "extract_reasoning",
     "image",
     "inspect_task",
     "json_schema_format",

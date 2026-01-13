@@ -3,9 +3,7 @@ import pytest
 from perceptron.errors import ParseError
 from perceptron.pointing.parser import (
     PointParser,
-    ReasoningStreamCleaner,
     extract_points,
-    extract_reasoning,
     parse_text,
     strip_tags,
 )
@@ -116,28 +114,6 @@ def test_collection_constructor_helper():
     assert coll.mention == "group"
     assert coll.t == 2.5
     assert coll.points[0] is child
-
-
-def test_extract_reasoning_returns_clean_text_and_segments():
-    text = "Prefix <think> first thought </think> middle <think>second</think> end"
-    extraction = extract_reasoning(text)
-    assert extraction.text == "Prefix middle end"
-    assert extraction.reasoning == ["first thought", "second"]
-
-
-def test_reasoning_stream_cleaner_handles_partial_chunks():
-    cleaner = ReasoningStreamCleaner()
-    chunk1, reasons1 = cleaner.consume("Hello <think> inter")
-    assert chunk1 == "Hello "
-    assert reasons1 == []
-
-    chunk2, reasons2 = cleaner.consume("nal </think> world")
-    assert chunk2 == " world"
-    assert reasons2 == ["internal"]
-
-    chunk3, reasons3 = cleaner.consume("!")
-    assert chunk3 == "!"
-    assert reasons3 == []
 
 
 class TestParseErrorOnMalformedTags:

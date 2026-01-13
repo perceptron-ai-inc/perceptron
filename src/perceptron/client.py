@@ -31,7 +31,7 @@ from .errors import (
     TransportError,
 )
 from .expectations import STRUCTURED_EXPECTATIONS
-from .pointing.parser import extract_points, extract_reasoning, parse_text
+from .pointing.parser import extract_points, parse_text
 
 # ---------------------------------------------------------------------------
 # Response format types for constrained decoding
@@ -116,11 +116,10 @@ class _StreamProcessor:
         self._parse_points = parse_points and expects in {"point", "box", "polygon"}
         self._max_buffer_bytes = max_buffer_bytes
         self._cumulative: str = ""
+        self._reasoning: str = ""
         self._emitted_spans: set[tuple[int, int]] = set()
         self._parsing_enabled = True
         self._usage_payload: dict[str, Any] | None = None
-        self._reasoning_started = False
-        self._answering_started = False
 
     def handle_payload(self, obj: Any) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
@@ -138,33 +137,14 @@ class _StreamProcessor:
         except (KeyError, IndexError, TypeError):
             return events
 
-        # Process reasoning content (wrap in <think> tags)
+        # Process reasoning content
         reasoning = delta.get("reasoning_content")
         if reasoning:
-            if not self._reasoning_started:
-                self._reasoning_started = True
-                reasoning = f"<think>{reasoning}"
-            self._cumulative += reasoning
-            events.append({
-                "type": "text.delta",
-                "chunk": reasoning,
-                "total_chars": len(self._cumulative),
-            })
+            self._reasoning += reasoning
 
         # Process answer content
         content = delta.get("content")
         if content:
-            # Close </think> tag before first content chunk
-            if self._reasoning_started and not self._answering_started:
-                close_tag = "</think>"
-                self._cumulative += close_tag
-                events.append({
-                    "type": "text.delta",
-                    "chunk": close_tag,
-                    "total_chars": len(self._cumulative),
-                })
-                self._answering_started = True
-
             self._cumulative += content
             events.append({
                 "type": "text.delta",
@@ -184,14 +164,14 @@ class _StreamProcessor:
         return events
 
     def finalize(self) -> dict[str, Any]:
-        cleaned_text, reasoning_final = self._client_core._clean_text_with_reasoning(self._cumulative)
-        result: dict[str, Any] = {"text": cleaned_text, "raw": None}
-        if reasoning_final:
-            result["reasoning"] = reasoning_final
+        content = self._cumulative or None
+        result: dict[str, Any] = {"text": content, "raw": None}
+        if self._reasoning:
+            result["reasoning"] = [self._reasoning]
         expects = self._expects
         parsed_segments: list[dict[str, Any]] | None = None
-        if expects in {"point", "box", "polygon"} and self._parsing_enabled and isinstance(cleaned_text, str):
-            parsed_segments = parse_text(cleaned_text)
+        if expects in {"point", "box", "polygon"} and self._parsing_enabled and isinstance(content, str):
+            parsed_segments = parse_text(content)
             result["points"] = [seg["value"] for seg in parsed_segments if seg["kind"] == expects]
             result["parsed"] = parsed_segments
         issues: list[dict[str, Any]] = []
@@ -663,26 +643,6 @@ class _ClientCore:
             if hasattr(self._settings, k):
                 setattr(self._settings, k, v)
 
-    @staticmethod
-    def _clean_text_with_reasoning(content: Any, payload: dict | None = None) -> tuple[Any, list[str] | None]:
-        if not isinstance(content, str):
-            return content, None
-        extraction = extract_reasoning(content)
-        reasoning = extraction.reasoning
-        cleaned = extraction.text if extraction.text is not None else content
-        if payload:
-            try:
-                message = payload.get("choices", [{}])[0].get("message")
-                if isinstance(message, dict):
-                    message["content"] = cleaned
-                    if reasoning:
-                        message["reasoning_content"] = reasoning
-                    elif "reasoning_content" in message:
-                        message["reasoning_content"] = None
-            except Exception:
-                pass
-        return cleaned, reasoning
-
     def _prepare_invocation(
         self,
         task: dict,
@@ -740,23 +700,12 @@ class _ClientCore:
     def _build_result(self, data: dict[str, Any], expects: str | None) -> dict[str, Any]:
         message = data.get("choices", [{}])[0].get("message", {})
 
-        # Get both reasoning and content separately
         reasoning_content = message.get("reasoning_content")
-        answer_content = message.get("content")
+        content = message.get("content")
 
-        # Build full content with <think> tags if reasoning exists
-        if reasoning_content and answer_content:
-            full_content = f"<think>{reasoning_content}</think>{answer_content}"
-        elif reasoning_content:
-            full_content = f"<think>{reasoning_content}</think>"
-        else:
-            full_content = answer_content
-
-        # Clean and extract reasoning
-        content, reasoning = self._clean_text_with_reasoning(full_content, data)
         result: dict[str, Any] = {"text": content, "raw": data}
-        if reasoning:
-            result["reasoning"] = reasoning
+        if reasoning_content:
+            result["reasoning"] = [reasoning_content]
         if expects in {"point", "box", "polygon"} and isinstance(content, str):
             kind = "point" if expects == "point" else ("box" if expects == "box" else "polygon")
             result["points"] = extract_points(content, expected=kind)
