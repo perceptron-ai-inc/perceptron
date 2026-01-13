@@ -700,6 +700,8 @@ class _ClientCore:
         max_tokens = local_kwargs.pop("max_tokens", s.max_tokens)
         top_p = local_kwargs.pop("top_p", s.top_p)
         top_k = local_kwargs.pop("top_k", s.top_k)
+        frequency_penalty = local_kwargs.pop("frequency_penalty", s.frequency_penalty)
+        presence_penalty = local_kwargs.pop("presence_penalty", s.presence_penalty)
         response_format = local_kwargs.pop("response_format", None)
 
         if "model" not in local_kwargs and s.model is not None:
@@ -718,12 +720,19 @@ class _ClientCore:
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": temperature,
-            "max_completion_tokens": max_tokens,
-            "top_p": top_p,
         }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if max_tokens is not None:
+            body["max_completion_tokens"] = max_tokens
+        if top_p is not None:
+            body["top_p"] = top_p
         if top_k is not None:
             body["top_k"] = top_k
+        if frequency_penalty is not None:
+            body["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            body["presence_penalty"] = presence_penalty
         if reasoning_flag:
             body["reasoning"] = True
         if stream:
