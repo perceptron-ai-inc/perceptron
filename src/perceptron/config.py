@@ -26,11 +26,13 @@ class Settings:
     allow_multiple: bool = False
     warn_on_implicit_anchor: bool = True
 
-    # generation defaults
-    temperature: float = 0.0
-    max_tokens: int = 1024
-    top_p: float = 1.0
+    # generation defaults (None = use API server defaults)
+    temperature: float | None = None
+    max_tokens: int | None = None
+    top_p: float | None = None
     top_k: int | None = None
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
 
     # parsing/streaming knobs
     max_buffer_bytes: int | None = None
@@ -75,6 +77,8 @@ def _from_env(s: Settings) -> Settings:
         max_tokens=s.max_tokens,
         top_p=s.top_p,
         top_k=s.top_k,
+        frequency_penalty=s.frequency_penalty,
+        presence_penalty=s.presence_penalty,
         max_buffer_bytes=s.max_buffer_bytes,
         resize_max_side=s.resize_max_side,
         auto_coerce_paths=s.auto_coerce_paths,
