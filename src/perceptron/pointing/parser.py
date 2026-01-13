@@ -36,7 +36,6 @@ _FULL_TAG = re.compile(
     rf"<(?P<tag>point|point_box|polygon|collection){_ATTR}>(?P<body>[\s\S]*?)</(?P=tag)>",
     re.IGNORECASE,
 )
-_THINK_TAG = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
 
 
 def _parse_attrs(tag_open: str) -> dict[str, str]:
@@ -274,62 +273,3 @@ def extract_points(text: str, expected: Literal["point", "box", "polygon"] | Non
 def strip_tags(text: str) -> str:
     """Remove all canonical tags and return plain text only."""
     return re.sub(_FULL_TAG, "", text)
-
-
-@dataclass
-class ReasoningExtraction:
-    text: str | None
-    reasoning: list[str]
-
-    def as_tuple(self) -> tuple[list[str] | None, str | None]:
-        return (self.reasoning or None, self.text)
-
-
-class ReasoningStreamCleaner:
-    """Incrementally strips <think>...</think> blocks while capturing reasoning."""
-
-    def __init__(self) -> None:
-        self._buffer: str = ""
-
-    def consume(self, chunk: str) -> tuple[str, list[str]]:
-        text = chunk or ""
-        buf = self._buffer + text
-        reasoning: list[str] = []
-        sanitized_parts: list[str] = []
-
-        while True:
-            start = buf.find("<think>")
-            if start == -1:
-                sanitized_parts.append(buf)
-                buf = ""
-                break
-            sanitized_parts.append(buf[:start])
-            buf = buf[start + len("<think>") :]
-            end = buf.find("</think>")
-            if end == -1:
-                self._buffer = "<think>" + buf
-                return "".join(sanitized_parts), reasoning
-            content = buf[:end].strip()
-            if content:
-                reasoning.append(content)
-            buf = buf[end + len("</think>") :]
-
-        self._buffer = buf
-        sanitized = "".join(sanitized_parts)
-        return sanitized, reasoning
-
-    def reset(self) -> None:
-        self._buffer = ""
-
-
-def extract_reasoning(text: Any) -> ReasoningExtraction:
-    """Return reasoning segments and text with <think> tags removed."""
-
-    if not isinstance(text, str):
-        return ReasoningExtraction(text=text, reasoning=[])
-
-    segments = [seg.strip() for seg in _THINK_TAG.findall(text)]
-    reasoning = [seg for seg in segments if seg]
-    cleaned = _THINK_TAG.sub("", text)
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
-    return ReasoningExtraction(text=cleaned or None, reasoning=reasoning)
