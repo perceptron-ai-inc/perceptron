@@ -449,8 +449,9 @@ def test_payload_shape_matches_expected(monkeypatch):
     assert payload.get("model") == "isaac-0.2-1b"
     assert payload.get("reasoning") is True
     assert payload.get("messages") == expected_messages
-    assert payload.get("temperature") == 0.0
-    assert payload.get("max_completion_tokens") == 1024
+    # Generation params not sent when using API defaults
+    assert "temperature" not in payload
+    assert "max_completion_tokens" not in payload
 
 
 def test_model_default_used_when_not_explicit(monkeypatch):
