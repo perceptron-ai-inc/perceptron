@@ -449,8 +449,61 @@ def test_payload_shape_matches_expected(monkeypatch):
     assert payload.get("model") == "isaac-0.2-1b"
     assert payload.get("reasoning") is True
     assert payload.get("messages") == expected_messages
-    assert payload.get("temperature") == 0.0
-    assert payload.get("max_completion_tokens") == 1024
+    # Generation params not sent when using API defaults
+    assert "temperature" not in payload
+    assert "max_completion_tokens" not in payload
+
+
+def test_all_generation_params_passed_when_explicit(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Answer"}}]}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(
+        model="isaac-0.2-1b",
+        provider="perceptron",
+        temperature=0.5,
+        max_tokens=2048,
+        top_p=0.9,
+        top_k=50,
+        frequency_penalty=0.3,
+        presence_penalty=0.2,
+    )
+    def make_request():
+        return text("Hello")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured.get("payload") or {}
+
+    assert payload.get("temperature") == 0.5
+    assert payload.get("max_completion_tokens") == 2048
+    assert payload.get("top_p") == 0.9
+    assert payload.get("top_k") == 50
+    assert payload.get("frequency_penalty") == 0.3
+    assert payload.get("presence_penalty") == 0.2
 
 
 def test_model_default_used_when_not_explicit(monkeypatch):

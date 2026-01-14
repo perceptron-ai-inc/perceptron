@@ -316,10 +316,12 @@ def _prepare_client_kwargs(
     focus: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
-    temperature: float,
-    max_tokens: int,
-    top_p: float,
+    temperature: float | None,
+    max_tokens: int | None,
+    top_p: float | None,
     top_k: int | None,
+    frequency_penalty: float | None,
+    presence_penalty: float | None,
     response_format: ResponseFormat | None,
 ):
     env = settings()
@@ -329,10 +331,6 @@ def _prepare_client_kwargs(
     client_kwargs: dict[str, Any] = {
         "expects": expects,
         "provider": provider_name,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "top_p": top_p,
-        "top_k": top_k,
         "allow_multiple": allow_multiple,
         "max_outputs": max_outputs,
     }
@@ -344,6 +342,18 @@ def _prepare_client_kwargs(
         client_kwargs["model"] = model_override
     if response_format is not None:
         client_kwargs["response_format"] = response_format
+    if temperature is not None:
+        client_kwargs["temperature"] = temperature
+    if max_tokens is not None:
+        client_kwargs["max_tokens"] = max_tokens
+    if top_p is not None:
+        client_kwargs["top_p"] = top_p
+    if top_k is not None:
+        client_kwargs["top_k"] = top_k
+    if frequency_penalty is not None:
+        client_kwargs["frequency_penalty"] = frequency_penalty
+    if presence_penalty is not None:
+        client_kwargs["presence_penalty"] = presence_penalty
     return env, resolved_provider, provider_name, client_kwargs
 
 
@@ -413,10 +423,12 @@ def _prepare_execution_context(
     focus: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
-    temperature: float,
-    max_tokens: int,
-    top_p: float,
+    temperature: float | None,
+    max_tokens: int | None,
+    top_p: float | None,
     top_k: int | None,
+    frequency_penalty: float | None,
+    presence_penalty: float | None,
     response_format: ResponseFormat | None,
 ):
     env, resolved_provider, provider_name, client_kwargs = _prepare_client_kwargs(
@@ -431,6 +443,8 @@ def _prepare_execution_context(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        frequency_penalty=frequency_penalty,
+        presence_penalty=presence_penalty,
         response_format=response_format,
     )
 
@@ -604,10 +618,12 @@ def _execute_sync_task(
     focus: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
-    temperature: float,
-    max_tokens: int,
-    top_p: float,
+    temperature: float | None,
+    max_tokens: int | None,
+    top_p: float | None,
     top_k: int | None,
+    frequency_penalty: float | None,
+    presence_penalty: float | None,
     response_format: ResponseFormat | None,
 ):
     compile_only, client_kwargs = _prepare_execution_context(
@@ -625,6 +641,8 @@ def _execute_sync_task(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        frequency_penalty=frequency_penalty,
+        presence_penalty=presence_penalty,
         response_format=response_format,
     )
     if compile_only is not None:
@@ -659,10 +677,12 @@ def perceive(
     focus: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
-    temperature: float = 0.0,
-    max_tokens: int = 1024,
-    top_p: float = 1.0,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
     top_k: int | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
     strict: bool = False,
     allow_multiple: bool = False,
     max_outputs: int | None = 1,
@@ -706,6 +726,8 @@ def perceive(
                 max_tokens=max_tokens,
                 top_p=top_p,
                 top_k=top_k,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
                 response_format=response_format,
             )
 
@@ -735,6 +757,8 @@ def perceive(
         max_tokens=max_tokens,
         top_p=top_p,
         top_k=top_k,
+        frequency_penalty=frequency_penalty,
+        presence_penalty=presence_penalty,
         reasoning=reasoning,
         response_format=response_format,
         focus=focus,
@@ -749,10 +773,12 @@ def async_perceive(
     focus: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
-    temperature: float = 0.0,
-    max_tokens: int = 1024,
-    top_p: float = 1.0,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
     top_k: int | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
     strict: bool = False,
     allow_multiple: bool = False,
     max_outputs: int | None = 1,
@@ -793,6 +819,8 @@ def async_perceive(
                         max_tokens=max_tokens,
                         top_p=top_p,
                         top_k=top_k,
+                        frequency_penalty=frequency_penalty,
+                        presence_penalty=presence_penalty,
                         response_format=response_format,
                     )
                     if compile_only is not None:
@@ -829,6 +857,8 @@ def async_perceive(
                 max_tokens=max_tokens,
                 top_p=top_p,
                 top_k=top_k,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
                 response_format=response_format,
             )
             if compile_only is not None:
