@@ -16,7 +16,7 @@ Optimal prompts for each SDK primitive with SDK and curl examples.
 ```python
 from perceptron import configure, caption
 
-configure(provider="perceptron", model="isaac-0.1", api_key="<your-api-key>")
+configure(provider="perceptron", model="isaac-0.2-2b-preview", api_key="<your-api-key>")
 
 result = caption("image.jpg", style="concise")
 print(result.text)
@@ -25,11 +25,11 @@ print(result.text)
 ### curl
 
 ```bash
-curl -X POST "https://api.perceptron.build/v1/chat/completions" \
+curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "isaac-0.1",
+  "model": "isaac-0.2-2b-preview",
   "messages": [
     {
       "role": "user",
@@ -38,8 +38,7 @@ curl -X POST "https://api.perceptron.build/v1/chat/completions" \
         {"type": "text", "text": "Provide a concise, human-friendly caption for the upcoming image."}
       ]
     }
-  ],
-  "max_completion_tokens": 1024
+  ]
 }'
 ```
 
@@ -57,7 +56,7 @@ You are an OCR (Optical Character Recognition) system. Accurately detect, extrac
 ```python
 from perceptron import configure, ocr
 
-configure(provider="perceptron", model="isaac-0.1", api_key="<your-api-key>")
+configure(provider="perceptron", model="isaac-0.2-2b-preview", api_key="<your-api-key>")
 
 result = ocr("document.png")
 print(result.text)
@@ -70,11 +69,11 @@ print(result.text)
 ### curl
 
 ```bash
-curl -X POST "https://api.perceptron.build/v1/chat/completions" \
+curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "isaac-0.1",
+  "model": "isaac-0.2-2b-preview",
   "messages": [
     {
       "role": "system",
@@ -88,8 +87,7 @@ curl -X POST "https://api.perceptron.build/v1/chat/completions" \
         {"type": "image_url", "image_url": {"url": "<image-url>"}}
       ]
     }
-  ],
-  "max_completion_tokens": 4096
+  ]
 }'
 ```
 
@@ -107,7 +105,7 @@ curl -X POST "https://api.perceptron.build/v1/chat/completions" \
 ```python
 from perceptron import configure, detect
 
-configure(provider="perceptron", model="isaac-0.1", api_key="<your-api-key>")
+configure(provider="perceptron", model="isaac-0.2-2b-preview", api_key="<your-api-key>")
 
 result = detect("warehouse.jpg", classes=["forklift", "person", "pallet"])
 
@@ -118,11 +116,11 @@ for box in result.points or []:
 ### curl
 
 ```bash
-curl -X POST "https://api.perceptron.build/v1/chat/completions" \
+curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "isaac-0.1",
+  "model": "isaac-0.2-2b-preview",
   "messages": [
     {
       "role": "user",
@@ -131,8 +129,7 @@ curl -X POST "https://api.perceptron.build/v1/chat/completions" \
         {"type": "text", "text": "Your goal is to segment out the following categories: forklift, person, pallet"}
       ]
     }
-  ],
-  "max_completion_tokens": 4096
+  ]
 }'
 ```
 
@@ -147,7 +144,7 @@ Pass your question directly as user content. For grounded responses, set `expect
 ```python
 from perceptron import configure, question
 
-configure(provider="perceptron", model="isaac-0.1", api_key="<your-api-key>")
+configure(provider="perceptron", model="isaac-0.2-2b-preview", api_key="<your-api-key>")
 
 # Simple Q&A
 result = question("factory.jpg", "How many workers are visible?")
@@ -162,11 +159,11 @@ for box in result.points or []:
 ### curl
 
 ```bash
-curl -X POST "https://api.perceptron.build/v1/chat/completions" \
+curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "isaac-0.1",
+  "model": "isaac-0.2-2b-preview",
   "messages": [
     {
       "role": "user",
@@ -175,8 +172,7 @@ curl -X POST "https://api.perceptron.build/v1/chat/completions" \
         {"type": "text", "text": "Where is the safety equipment?"}
       ]
     }
-  ],
-  "max_completion_tokens": 2048
+  ]
 }'
 ```
 
@@ -207,7 +203,7 @@ print(result.text)
 ### curl equivalent
 
 ```bash
-curl -X POST "https://api.perceptron.build/v1/chat/completions" \
+curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
@@ -224,8 +220,7 @@ curl -X POST "https://api.perceptron.build/v1/chat/completions" \
         {"type": "text", "text": "Count the number of cars, excluding buses. Return JSON."}
       ]
     }
-  ],
-  "max_completion_tokens": 4096
+  ]
 }'
 ```
 
