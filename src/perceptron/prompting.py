@@ -131,7 +131,7 @@ _ISAAC_PROFILE = HighLevelPromptProfile(
         ),
         prompts={
             "plain": None,
-            "markdown": None,
+            "markdown": "Transcribe every readable word in the image using Markdown formatting with headings, lists, tables, and other structural elements as appropriate.",
             "html": "Transcribe every readable word in the image using HTML markup.",
         },
         default_mode="plain",
