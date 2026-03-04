@@ -80,6 +80,49 @@ def test_stream_text_and_points(monkeypatch):
     assert events[-1]["result"]["usage"]["prompt_tokens"] == 12
 
 
+def test_stream_reasoning_delta(monkeypatch):
+    @perceive(stream=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
+    def fn(img):
+        return image(img) + text("Think about this")
+
+    chunks = [
+        _sse({"choices": [{"delta": {"reasoning_content": "Let me think"}}]}),
+        _sse({"choices": [{"delta": {"reasoning_content": " step by step"}}]}),
+        _sse({"choices": [{"delta": {"content": "The answer"}}]}),
+        _sse({"choices": [{"delta": {"content": " is 42"}}]}),
+        "data: [DONE]",
+    ]
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+        def stream(self, method, url, headers=None, json=None):
+            return _MockResp(chunks, status=200)
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    img = PILImage.new("RGB", (8, 8)) if PILImage is not None else b"\x89PNG\r\n\x1a\n" + b"0" * 10
+
+    events = list(fn(img))
+    types = [e["type"] for e in events]
+
+    assert types.count("reasoning.delta") == 2
+    assert types.count("text.delta") == 2
+    assert types[-1] == "final"
+
+    final = events[-1]["result"]
+    assert final["reasoning"] == "Let me think step by step"
+    assert final["text"] == "The answer is 42"
+
+
 def test_stream_http_error(monkeypatch):
     @perceive(stream=True)
     def fn(img):
