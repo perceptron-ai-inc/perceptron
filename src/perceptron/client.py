@@ -714,8 +714,8 @@ class _ClientCore:
     def _build_result(self, data: dict[str, Any], expects: str | None) -> dict[str, Any]:
         message = data.get("choices", [{}])[0].get("message", {})
 
-        reasoning_content = message.get("reasoning_content") or None
-        content = message.get("content") or None
+        reasoning_content = message.get("reasoning_content")
+        content = message.get("content")
 
         result: dict[str, Any] = {"text": content, "reasoning": reasoning_content, "raw": data}
         if expects in {"point", "box", "polygon"} and isinstance(content, str):
