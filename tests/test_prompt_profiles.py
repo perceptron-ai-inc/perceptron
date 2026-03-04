@@ -130,6 +130,15 @@ def test_incompatible_default_model_raises():
         detect(PNG_BYTES, classes=categories)
 
 
+def test_isaac_markdown_ocr_prompt():
+    with cfg(api_key="test-key", provider="fal"):
+        res = ocr_markdown(PNG_BYTES)
+
+    content = res.raw.get("content", [])
+    user_messages = _collect_text(content, role="user")
+    assert "Transcribe every readable word in the image using Markdown formatting with headings, lists, tables, and other structural elements as appropriate." in user_messages
+
+
 def test_qwen_plain_ocr_prompt():
     with cfg(api_key="test-key", provider="perceptron"):
         res = ocr(PNG_BYTES, model="qwen3-vl-235b-a22b-thinking")
