@@ -22,6 +22,7 @@ class _StubResult(PerceiveResult):
             text=text,
             points=None,
             parsed=None,
+            reasoning=None,
             usage=None,
             errors=[],
             raw={"text": text},
