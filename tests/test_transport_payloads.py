@@ -343,6 +343,8 @@ def test_reasoning_true_keeps_reasoning_in_payload(monkeypatch):
     payload = captured.get("payload", {})
     assert payload.get("reasoning") is True
     assert all(issue.get("code") != "reasoning_not_supported" for issue in res.errors)
+    assert res.reasoning == "Because..."
+    assert res.text == "Answer"
 
 
 def test_isaac_02_reasoning_true_adds_think_hint(monkeypatch):
@@ -1306,10 +1308,12 @@ def test_focus_expects_think_reasoning_explicit_true(monkeypatch):
         return text("Think carefully.")
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
+        res = make_request()
 
     payload = captured.get("payload", {})
     messages = payload.get("messages") or []
     # Should have <hint>THINK TOOLS</hint>
     assert any("<hint>THINK TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
     assert payload.get("reasoning") is True
+    assert res.reasoning == "Because..."
+    assert res.text == "Answer"

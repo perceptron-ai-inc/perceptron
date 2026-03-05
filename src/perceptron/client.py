@@ -141,6 +141,11 @@ class _StreamProcessor:
         reasoning = delta.get("reasoning_content")
         if reasoning:
             self._reasoning += reasoning
+            events.append({
+                "type": "reasoning.delta",
+                "chunk": reasoning,
+                "total_chars": len(self._reasoning),
+            })
 
         # Process answer content
         content = delta.get("content")
@@ -165,9 +170,8 @@ class _StreamProcessor:
 
     def finalize(self) -> dict[str, Any]:
         content = self._cumulative or None
-        result: dict[str, Any] = {"text": content, "raw": None}
-        if self._reasoning:
-            result["reasoning"] = [self._reasoning]
+        reasoning = self._reasoning or None
+        result: dict[str, Any] = {"text": content, "reasoning": reasoning, "raw": None}
         expects = self._expects
         parsed_segments: list[dict[str, Any]] | None = None
         if expects in {"point", "box", "polygon"} and self._parsing_enabled and isinstance(content, str):
@@ -186,6 +190,7 @@ class _StreamProcessor:
             "type": "final",
             "result": {
                 "text": result.get("text"),
+                "reasoning": result.get("reasoning"),
                 "points": result.get("points"),
                 "parsed": result.get("parsed"),
                 "usage": self._usage_payload,
@@ -712,9 +717,7 @@ class _ClientCore:
         reasoning_content = message.get("reasoning_content")
         content = message.get("content")
 
-        result: dict[str, Any] = {"text": content, "raw": data}
-        if reasoning_content:
-            result["reasoning"] = [reasoning_content]
+        result: dict[str, Any] = {"text": content, "reasoning": reasoning_content, "raw": data}
         if expects in {"point", "box", "polygon"} and isinstance(content, str):
             kind = "point" if expects == "point" else ("box" if expects == "box" else "polygon")
             result["points"] = extract_points(content, expected=kind)

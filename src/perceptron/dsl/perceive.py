@@ -297,6 +297,7 @@ class PerceiveResult:
     text: str | None
     points: list[Any] | None
     parsed: list[dict] | None
+    reasoning: str | None
     usage: dict | None
     errors: list[dict]
     raw: Any
@@ -380,10 +381,12 @@ def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveRe
     text = resp.get("text")
     points = resp.get("points")
     parsed = resp.get("parsed")
+    reasoning = resp.get("reasoning")
     return PerceiveResult(
         text=text,
         points=points,
         parsed=parsed,
+        reasoning=reasoning,
         usage=None,
         errors=issues,
         raw=resp.get("raw"),
