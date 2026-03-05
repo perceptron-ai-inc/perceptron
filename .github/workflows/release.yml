@@ -42,7 +42,8 @@ jobs:
             sys.exit(1)
 
           py = root / 'pyproject.toml'
-          data = tomllib.loads(py.read_bytes())
+          with open(py, 'rb') as f:
+            data = tomllib.load(f)
           cur_v = data['project']['version']
 
           def parse(v):
