@@ -266,7 +266,7 @@ def test_build_response_format_unknown_type_raises():
 # ---------------------------------------------------------------------------
 
 
-from _image_fixtures import PNG_BYTES  # noqa: E402
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 16
 
 
 def test_response_format_in_payload(monkeypatch):

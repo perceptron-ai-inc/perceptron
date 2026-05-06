@@ -1,7 +1,6 @@
 import json
 
 import pytest
-from _image_fixtures import PNG_BYTES
 
 from perceptron import client as client_mod
 from perceptron import config as cfg
@@ -62,7 +61,7 @@ def test_stream_parsing_buffer_overflow(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     with cfg(max_buffer_bytes=40):
-        events = list(fn(PNG_BYTES))
+        events = list(fn(b"\x89PNG\r\n\x1a\nHEADERONLY"))
     # Final event should include buffer overflow issue
     finals = [e for e in events if e.get("type") == "final"]
     assert finals, "missing final event"

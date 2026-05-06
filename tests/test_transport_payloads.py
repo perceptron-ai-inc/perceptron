@@ -1,10 +1,10 @@
-from _image_fixtures import PNG_BYTES
-
 from perceptron import agent, box, image, inspect_task, perceive, text
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.pointing.parser import PointParser
 from perceptron.pointing.types import SinglePoint, bbox
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 16
 
 
 @perceive()

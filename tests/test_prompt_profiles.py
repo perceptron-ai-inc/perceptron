@@ -8,7 +8,7 @@ from perceptron import config as cfg
 from perceptron.client import _PROVIDER_CONFIG, _select_model
 from perceptron.errors import BadRequestError
 
-from _image_fixtures import PNG_BYTES  # noqa: E402
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 12
 
 
 @pytest.fixture(autouse=True)

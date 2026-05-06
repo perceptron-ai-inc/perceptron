@@ -1,9 +1,9 @@
 import asyncio
 
-from _image_fixtures import PNG_BYTES
-
 from perceptron import async_perceive, inspect_task, perceive
 from perceptron.dsl.nodes import image, text
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 12
 
 
 def test_inspect_task_sync():

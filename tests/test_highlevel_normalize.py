@@ -1,9 +1,10 @@
 import pytest
-from _image_fixtures import PNG_BYTES
 
 from perceptron.errors import BadRequestError
 from perceptron.highlevel import _normalize_examples
 from perceptron.pointing.types import bbox
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 12
 
 
 def test_normalize_examples_supports_annotations_list():
