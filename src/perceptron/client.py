@@ -302,9 +302,17 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
             if isinstance(payload, str) and payload.startswith(("http://", "https://")):
                 image_part = {"type": "image_url", "image_url": {"url": payload}}
             else:
+                fmt = item.get("format")
+                if fmt is None:
+                    raise BadRequestError(
+                        "Could not determine image format from input. The wire protocol "
+                        "supports png, jpeg, and webp; convert the image to one of these "
+                        "formats before passing it to the SDK.",
+                        code="invalid_image_format",
+                    )
                 image_part = {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{payload}"},
+                    "image_url": {"url": f"data:image/{fmt};base64,{payload}"},
                 }
             if current_role not in {role, None}:
                 _flush()

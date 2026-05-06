@@ -77,6 +77,9 @@ _IMAGE_SIGNATURES = (
 
 _WEBP_SIGNATURE_LENGTH = 12
 
+# Maps PIL's format names to the wire-protocol MIME subtype.
+_PIL_FORMAT_TO_WIRE = {"PNG": "png", "JPEG": "jpeg", "WEBP": "webp"}
+
 
 def _is_webp(data: bytes) -> bool:
     return len(data) >= _WEBP_SIGNATURE_LENGTH and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
@@ -95,8 +98,10 @@ def _validate_image_bytes(data: bytes, *, origin: str) -> dict[str, Any]:
         try:
             with PILImage.open(BytesIO(data)) as im:
                 meta["width"], meta["height"] = im.size
+                if im.format and im.format in _PIL_FORMAT_TO_WIRE:
+                    meta["format"] = _PIL_FORMAT_TO_WIRE[im.format]
                 return meta
-        except Exception as exc:  # Let imghdr double-check before failing
+        except Exception as exc:
             pil_exc = exc
     if not _looks_like_image(data):
         reason = "decoder_failed" if pil_exc is not None else "unknown_format"
@@ -113,6 +118,8 @@ def _encode_bytes(data: bytes) -> tuple[str, dict[str, Any]]:
         try:
             with PILImage.open(BytesIO(data)) as im:
                 meta["width"], meta["height"] = im.size
+                if im.format and im.format in _PIL_FORMAT_TO_WIRE:
+                    meta["format"] = _PIL_FORMAT_TO_WIRE[im.format]
         except Exception:
             pass
     b64 = base64.b64encode(data).decode("ascii")
@@ -143,6 +150,7 @@ def _to_b64_image(obj: Any) -> tuple[str, dict]:
         meta["width"], meta["height"] = obj.size
         buf = BytesIO()
         obj.save(buf, format="PNG")
+        meta["format"] = "png"
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return b64, meta
     if np is not None and isinstance(obj, np.ndarray):  # type: ignore[arg-type]
@@ -153,6 +161,7 @@ def _to_b64_image(obj: Any) -> tuple[str, dict]:
         im = PILImage.fromarray(obj)
         buf = BytesIO()
         im.save(buf, format="PNG")
+        meta["format"] = "png"
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return b64, meta
     raise TypeError(f"Unsupported image object: {type(obj)}")
@@ -200,6 +209,7 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                     "type": "image",
                     "role": "user",
                     "content": b64,
+                    "format": meta.get("format"),
                     "metadata": {
                         "width": meta.get("width"),
                         "height": meta.get("height"),

@@ -1,5 +1,7 @@
 import json
 
+from _image_fixtures import PNG_BYTES
+
 from cookbook.utils import cookbook_asset
 from perceptron import annotate_image, detect, detect_from_coco
 from perceptron import client as client_mod
@@ -33,7 +35,7 @@ def test_detect_compile_only(monkeypatch):
 
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(b"\x89PNG\r\n\x1a\n" + b"0" * 10, classes=["person"], max_tokens=16)
+        res = detect(PNG_BYTES, classes=["person"], max_tokens=16)
     assert res.raw and isinstance(res.raw, dict)
     roles = [item.get("role") for item in res.raw.get("content", [])]
     assert roles and roles[0] == "system"
@@ -44,12 +46,12 @@ def test_detect_with_examples(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
 
     example = annotate_image(
-        b"\x89PNG\r\n\x1a\n" + b"0" * 12,
+        PNG_BYTES,
         [bbox(1, 2, 3, 4, mention="car")],
     )
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(b"\x89PNG\r\n\x1a\n" + b"1" * 12, classes=["car"], examples=[example])
+        res = detect(PNG_BYTES, classes=["car"], examples=[example])
     content = res.raw.get("content", [])
     # Should include example turns before target image
     assistants = [item for item in content if item.get("role") == "assistant"]
@@ -60,7 +62,7 @@ def test_detect_with_collection_examples(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
 
     example = annotate_image(
-        b"\x89PNG\r\n\x1a\n" + b"3" * 12,
+        PNG_BYTES,
         [
             collection(
                 [
@@ -74,7 +76,7 @@ def test_detect_with_collection_examples(monkeypatch):
 
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(b"\x89PNG\r\n\x1a\n" + b"4" * 12, classes=["group"], examples=[example])
+        res = detect(PNG_BYTES, classes=["group"], examples=[example])
     content = res.raw.get("content", [])
     assistants = [item for item in content if item.get("role") == "assistant"]
     assert assistants and "<collection" in assistants[0]["content"]
@@ -179,7 +181,7 @@ def test_detect_stream(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "stream", _StubClient.stream)
 
     with cfg(api_key="test-key", provider="fal"):
-        events = list(detect(b"\x89PNG\r\n\x1a\n" + b"2" * 12, classes=None, stream=True))
+        events = list(detect(PNG_BYTES, classes=None, stream=True))
     assert events[0]["type"] == "text.delta"
     assert events[-1]["type"] == "final"
 
@@ -217,7 +219,7 @@ def test_detect_flattens_collection_response(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     with cfg(provider="fal", base_url="https://unit.test", api_key="test-key"):
-        res = detect(b"\x89PNG\r\n\x1a\n" + b"3" * 12, classes=["dog"])
+        res = detect(PNG_BYTES, classes=["dog"])
 
     assert res.text and "<collection" in res.text
     assert res.points and len(res.points) == 2

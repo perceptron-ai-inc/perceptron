@@ -1,8 +1,8 @@
+from _image_fixtures import PNG_BYTES
+
 from perceptron import caption, json_schema_format, ocr
 from perceptron import client as client_mod
 from perceptron import config as cfg
-
-PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 12
 
 
 def _echo_task(self, task, **kwargs):  # pylint: disable=unused-argument
