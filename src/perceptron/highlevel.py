@@ -5,7 +5,15 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Union
+
+if TYPE_CHECKING:
+    import numpy as np
+    from PIL import Image as PILImage
+
+#: Anything the high-level helpers accept as image / video media input.
+#: Resolved by ``perceptron.dsl.perceive._to_b64_image`` at runtime.
+MediaInput = Union[str, Path, bytes, "PILImage.Image", "np.ndarray"]
 
 from .annotations import annotate_image, canonicalize_text_collections, serialize_annotations
 from .client import _PROVIDER_CONFIG, ResponseFormat, _select_model
@@ -131,7 +139,7 @@ def _run_perceive_sequence(
 
 
 def _caption_sequence(
-    image_obj: Any,
+    media: MediaInput,
     style: str,
     expects: str | None,
     template: CaptionPromptTemplate,
@@ -142,13 +150,13 @@ def _caption_sequence(
     nodes = []
     if template.system_instruction:
         nodes.append(system(template.system_instruction))
-    nodes.append(image_node(image_obj))
+    nodes.append(image_node(media))
     nodes.append(text(style_map[style]))
     return SequenceNode(nodes)
 
 
 def caption(
-    image_obj: Any,
+    media: MediaInput,
     *,
     style: str = "concise",
     expects: str = "box",
@@ -156,7 +164,7 @@ def caption(
     response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """Generate a caption for an image using predefined best-practice prompts.
+    """Generate a caption for media using predefined best-practice prompts.
 
     Args:
         response_format: Optional constraint for output format. Use
@@ -175,7 +183,7 @@ def caption(
     }
 
     return _run_perceive_sequence(
-        builder=lambda: _caption_sequence(image_obj, style, structured_expectation, caption_template),
+        builder=lambda: _caption_sequence(media, style, structured_expectation, caption_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
         response_format=response_format,
@@ -188,7 +196,7 @@ def caption(
 
 
 def _question_sequence(
-    image_obj: Any,
+    media: MediaInput,
     question_text: str,
     expects: str | None,
     template: QuestionPromptTemplate,
@@ -201,13 +209,13 @@ def _question_sequence(
     nodes: list = []
     if system_instruction:
         nodes.append(system(system_instruction))
-    nodes.append(image_node(image_obj))
+    nodes.append(image_node(media))
     nodes.append(text(question_text))
     return SequenceNode(nodes)
 
 
 def question(
-    image_obj: Any,
+    media: MediaInput,
     question_text: str,
     *,
     expects: str = "text",
@@ -215,7 +223,7 @@ def question(
     response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
 ):
-    """Answer a question about an image, optionally requesting structured outputs.
+    """Answer a question about media, optionally requesting structured outputs.
 
     Args:
         response_format: Optional constraint for output format. Use
@@ -234,7 +242,7 @@ def question(
     }
 
     return _run_perceive_sequence(
-        builder=lambda: _question_sequence(image_obj, question_text, structured_expectation, question_template),
+        builder=lambda: _question_sequence(media, question_text, structured_expectation, question_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
         response_format=response_format,
@@ -247,21 +255,21 @@ def question(
 
 
 def _ocr_sequence(
-    image_obj: Any,
+    image: MediaInput,
     prompt: str | None,
     template: OcrPromptTemplate,
 ) -> SequenceNode:
     nodes = []
     if template.system_instruction:
         nodes.append(system(template.system_instruction))
-    nodes.append(image_node(image_obj))
+    nodes.append(image_node(image))
     if prompt:
         nodes.append(text(prompt))
     return SequenceNode(nodes)
 
 
 def _run_ocr(
-    image_obj: Any,
+    image: MediaInput,
     *,
     prompt: str | None,
     stream: bool,
@@ -288,7 +296,7 @@ def _run_ocr(
     }
 
     return _run_perceive_sequence(
-        builder=lambda: _ocr_sequence(image_obj, effective_prompt, ocr_template),
+        builder=lambda: _ocr_sequence(image, effective_prompt, ocr_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
         response_format=response_format,
@@ -296,7 +304,7 @@ def _run_ocr(
 
 
 def ocr(
-    image_obj: Any,
+    image: MediaInput,
     *,
     prompt: str | None = None,
     stream: bool = False,
@@ -312,7 +320,7 @@ def ocr(
     """
 
     return _run_ocr(
-        image_obj,
+        image,
         prompt=prompt,
         stream=stream,
         mode="plain",
@@ -322,7 +330,7 @@ def ocr(
 
 
 def ocr_markdown(
-    image_obj: Any,
+    image: MediaInput,
     *,
     prompt: str | None = None,
     stream: bool = False,
@@ -338,7 +346,7 @@ def ocr_markdown(
     """
 
     return _run_ocr(
-        image_obj,
+        image,
         prompt=prompt,
         stream=stream,
         mode="markdown",
@@ -348,7 +356,7 @@ def ocr_markdown(
 
 
 def ocr_html(
-    image_obj: Any,
+    image: MediaInput,
     *,
     prompt: str | None = None,
     stream: bool = False,
@@ -364,7 +372,7 @@ def ocr_html(
     """
 
     return _run_ocr(
-        image_obj,
+        image,
         prompt=prompt,
         stream=stream,
         mode="html",
@@ -391,7 +399,7 @@ def _detect_system_message(
 
 
 def _detect_sequence(
-    image_obj: Any,
+    media: MediaInput,
     *,
     classes: Sequence[str] | None,
     examples: Sequence[Any] | None,
@@ -404,13 +412,13 @@ def _detect_sequence(
         if ex.prompt:
             sequence = sequence + text(ex.prompt)
         sequence = sequence + agent(ex.tags)
-    im = image_node(image_obj)
+    im = image_node(media)
     sequence = sequence + im
     return sequence
 
 
 def detect(  # noqa: PLR0913
-    image_obj: Any,
+    media: MediaInput,
     *,
     classes: Sequence[str] | None = None,
     examples: Sequence[Any] | None = None,
@@ -440,7 +448,7 @@ def detect(  # noqa: PLR0913
         base_kwargs["strict"] = strict
 
     return _run_perceive_sequence(
-        builder=lambda: _detect_sequence(image_obj, classes=classes, examples=examples, template=detect_template),
+        builder=lambda: _detect_sequence(media, classes=classes, examples=examples, template=detect_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
         response_format=response_format,

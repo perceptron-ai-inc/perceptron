@@ -41,7 +41,7 @@ from .errors import (
     TimeoutError,
     TransportError,
 )
-from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
+from .highlevel import MediaInput, caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
 from .pointing.geometry import scale_points_to_pixels
 from .pointing.parser import (
     PointParser,
@@ -83,6 +83,7 @@ __all__ = [
     "ExpectationError",
     "JsonSchemaFormat",
     "JsonSchemaSpec",
+    "MediaInput",
     "PerceiveResult",
     "PointParser",
     "Polygon",
