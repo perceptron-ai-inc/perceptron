@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from _image_fixtures import PNG_BYTES
 
-from perceptron import caption, ocr, question, video
+from perceptron import caption, detect, ocr, question, video
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.client import _task_to_openai_messages
@@ -73,6 +73,20 @@ def test_video_bytes_detect_webm_format():
     assert parts[0]["format"] == "webm"
 
 
+def test_video_file_path_reads_and_encodes(tmp_path):
+    """File-path branch of _to_b64_video: read from disk, sniff format, base64."""
+
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(MP4_BYTES)
+
+    seq = video(str(clip))
+    task, _ = _compile(seq, expects=None, strict=False)
+    parts = [p for p in task["content"] if p.get("type") == "video"]
+    assert len(parts) == 1
+    assert parts[0]["format"] == "mp4"
+    assert parts[0]["url"] is False
+
+
 def test_unsniffable_video_bytes_raise():
     with pytest.raises(BadRequestError) as excinfo:
         seq = video(b"not a video")
@@ -114,6 +128,13 @@ def test_caption_accepts_video():
 def test_question_accepts_video():
     with cfg(api_key="test", provider="fal"):
         res = question(video("https://x.com/v.mp4"), "what happens?")
+    parts = [p for p in res.raw["content"] if p.get("type") == "video"]
+    assert len(parts) == 1
+
+
+def test_detect_accepts_video():
+    with cfg(api_key="test", provider="fal"):
+        res = detect(video("https://x.com/v.mp4"), classes=["person"])
     parts = [p for p in res.raw["content"] if p.get("type") == "video"]
     assert len(parts) == 1
 
