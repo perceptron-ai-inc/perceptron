@@ -51,8 +51,8 @@ def test_docs_capabilities_captioning_example():
     img_path = _doc_asset("suburban_street.webp")
 
     with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
-        text_only = caption(img_path, style="concise", expects="text")
-        boxes = caption(img_path, style="detailed", expects="box")
+        text_only = caption(image(img_path), style="concise", expects="text")
+        boxes = caption(image(img_path), style="detailed", expects="box")
 
     assert isinstance(text_only.text, str)
     assert text_only.text.strip() != ""
@@ -134,7 +134,7 @@ def test_docs_capabilities_object_detection_example():
 
     with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
         result = detect(
-            frame_path,
+            image(frame_path),
             classes=["helmet", "vest"],
             expects="box",
         )
@@ -156,7 +156,7 @@ def test_docs_capabilities_ocr_example():
     img_path = _doc_asset("grocery_labels.webp")
 
     with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
-        result = ocr(img_path, prompt="Extract product name and price", stream=False)
+        result = ocr(image(img_path), prompt="Extract product name and price", stream=False)
 
     assert isinstance(result.text, str)
     assert "price" in result.text.lower()
@@ -170,7 +170,7 @@ def test_docs_capabilities_visual_qa_example():
 
     question_text = "What stands out in this studio scene?"
     with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
-        result = question(frame_path, question_text, expects="box")
+        result = question(image(frame_path), question_text, expects="box")
 
     assert isinstance(result.text, str)
     assert result.text.strip() != ""
@@ -213,7 +213,7 @@ def test_docs_in_context_single_example():
 
     with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
         bootstrap = detect(
-            exemplar_path,
+            image(exemplar_path),
             classes=["objectCategory1"],
         )
 
@@ -235,7 +235,7 @@ def test_docs_in_context_single_example():
         )
 
         result = detect(
-            target_path,
+            image(target_path),
             classes=["objectCategory1"],
             examples=[example_shot],
         )
@@ -263,7 +263,7 @@ def test_docs_in_context_multi_example():
 
     with config(**{k: v for k, v in _live_config_kwargs().items() if v is not None}):
         result = detect(
-            target_path,
+            image(target_path),
             classes=["classA", "classB"],
             examples=[cat_example, dog_example],
         )
@@ -292,7 +292,7 @@ def test_docs_error_invalid_image_decision_tree(tmp_path):
     bad_path.write_text("not an image", encoding="utf-8")
 
     with pytest.raises(BadRequestError) as excinfo:
-        caption(str(bad_path), expects="text")
+        caption(image(str(bad_path)), expects="text")
 
     err = excinfo.value
     assert err.code == "invalid_image"
@@ -383,7 +383,7 @@ def test_docs_batch_async_example():
     async def detect_async(image_path, *, classes):
         return await asyncio.to_thread(
             detect,
-            image_path,
+            image(image_path),
             classes=classes,
             expects="box",
         )
@@ -408,6 +408,6 @@ def test_docs_scaling_low_latency_example():
     cfg.update({"timeout": 8, "max_tokens": 256})
 
     with config(**cfg):
-        result = detect(sample_image, classes=["scratch"], expects="box")
+        result = detect(image(sample_image), classes=["scratch"], expects="box")
 
     assert isinstance(result.points, list) or result.points is None

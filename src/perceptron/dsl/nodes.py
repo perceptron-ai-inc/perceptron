@@ -43,6 +43,16 @@ class Image(DSLNode):
 
 
 @dataclass
+class Video(DSLNode):
+    """Video content. Accepts path/str (URL or file)/bytes; format auto-detected from magic bytes."""
+
+    obj: Any
+
+
+Media = Image | Video
+
+
+@dataclass
 class PointTag(DSLNode):
     x: int
     y: int
@@ -112,6 +122,16 @@ def agent(content: str) -> Agent:
 def image(obj: Any) -> Image:
     """Create an image node from path/bytes/PIL.Image/np.ndarray."""
     return Image(obj)
+
+
+def video(obj: Any) -> Video:
+    """Create a video node from path/str (URL or file)/bytes.
+
+    Format is auto-detected from magic bytes (mp4 / webm) for bytes and path
+    input; HTTP(S) URLs are passed through and the server infers from the
+    response.
+    """
+    return Video(obj)
 
 
 def point(

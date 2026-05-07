@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from perceptron import caption, detect, ocr, ocr_html, ocr_markdown
+from perceptron import caption, detect, image, ocr, ocr_html, ocr_markdown
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.client import _PROVIDER_CONFIG, _select_model
@@ -32,7 +32,7 @@ def _collect_text(content, *, role: str) -> list[str]:
 
 def test_caption_uses_qwen_prompt_text():
     with cfg(api_key="test-key", provider="perceptron"):
-        res = caption(PNG_BYTES, style="concise", model="qwen3-vl-235b-a22b-thinking")
+        res = caption(image(PNG_BYTES), style="concise", model="qwen3-vl-235b-a22b-thinking")
 
     content = res.raw.get("content", [])
     system_messages = _collect_text(content, role="system")
@@ -46,7 +46,7 @@ def test_caption_uses_qwen_prompt_text():
 
 def test_caption_defaults_to_isaac_prompt_on_fal():
     with cfg(api_key="test-key", provider="fal"):
-        res = caption(PNG_BYTES, style="concise")
+        res = caption(image(PNG_BYTES), style="concise")
 
     content = res.raw.get("content", [])
     system_messages = _collect_text(content, role="system")
@@ -82,7 +82,7 @@ def test_detect_qwen_prompt_reports_json_bbox():
         "person",
     ]
     with cfg(api_key="test-key", provider="perceptron"):
-        res = detect(PNG_BYTES, classes=categories, model="qwen3-vl-235b-a22b-thinking")
+        res = detect(image(PNG_BYTES), classes=categories, model="qwen3-vl-235b-a22b-thinking")
 
     content = res.raw.get("content", [])
     system_messages = _collect_text(content, role="system")
@@ -97,7 +97,7 @@ def test_detect_qwen_prompt_reports_json_bbox():
 def test_config_context_propagates_default_model():
     categories = ["plate/dish"]
     with cfg(api_key="test-key", provider="perceptron", model="qwen3-vl-235b-a22b-thinking"):
-        res = detect(PNG_BYTES, classes=categories)
+        res = detect(image(PNG_BYTES), classes=categories)
 
     content = res.raw.get("content", [])
     system_messages = _collect_text(content, role="system")
@@ -113,7 +113,7 @@ def test_env_default_model_applies(monkeypatch):
 
     categories = ["plate/dish"]
     with cfg(api_key="test-key", provider="perceptron"):
-        res = detect(PNG_BYTES, classes=categories)
+        res = detect(image(PNG_BYTES), classes=categories)
 
     content = res.raw.get("content", [])
     system_messages = _collect_text(content, role="system")
@@ -127,12 +127,12 @@ def test_env_default_model_applies(monkeypatch):
 def test_incompatible_default_model_raises():
     categories = ["plate/dish"]
     with pytest.raises(BadRequestError), cfg(api_key="test-key", provider="fal", model="qwen3-vl-235b-a22b-thinking"):
-        detect(PNG_BYTES, classes=categories)
+        detect(image(PNG_BYTES), classes=categories)
 
 
 def test_isaac_markdown_ocr_prompt():
     with cfg(api_key="test-key", provider="fal"):
-        res = ocr_markdown(PNG_BYTES)
+        res = ocr_markdown(image(PNG_BYTES))
 
     content = res.raw.get("content", [])
     user_messages = _collect_text(content, role="user")
@@ -141,7 +141,7 @@ def test_isaac_markdown_ocr_prompt():
 
 def test_qwen_plain_ocr_prompt():
     with cfg(api_key="test-key", provider="perceptron"):
-        res = ocr(PNG_BYTES, model="qwen3-vl-235b-a22b-thinking")
+        res = ocr(image(PNG_BYTES), model="qwen3-vl-235b-a22b-thinking")
 
     content = res.raw.get("content", [])
     user_messages = _collect_text(content, role="user")
@@ -150,7 +150,7 @@ def test_qwen_plain_ocr_prompt():
 
 def test_qwen_markdown_ocr_prompt():
     with cfg(api_key="test-key", provider="perceptron"):
-        res = ocr_markdown(PNG_BYTES, model="qwen3-vl-235b-a22b-thinking")
+        res = ocr_markdown(image(PNG_BYTES), model="qwen3-vl-235b-a22b-thinking")
 
     content = res.raw.get("content", [])
     user_messages = _collect_text(content, role="user")
@@ -159,7 +159,7 @@ def test_qwen_markdown_ocr_prompt():
 
 def test_qwen_html_ocr_prompt():
     with cfg(api_key="test-key", provider="perceptron"):
-        res = ocr_html(PNG_BYTES, model="qwen3-vl-235b-a22b-thinking")
+        res = ocr_html(image(PNG_BYTES), model="qwen3-vl-235b-a22b-thinking")
 
     content = res.raw.get("content", [])
     user_messages = _collect_text(content, role="user")

@@ -64,6 +64,9 @@ from .nodes import (
 from .nodes import (
     PolygonTag as PolygonTagNode,
 )
+from .nodes import (
+    Video as VideoNode,
+)
 
 _IMAGE_SIGNATURES = (
     b"\x89PNG\r\n\x1a\n",
@@ -132,20 +135,21 @@ def _to_b64_image(obj: Any) -> tuple[str, dict]:
     Accepts: Path/str (path or http/https URL), bytes, file-like, PIL.Image.Image, numpy.ndarray (HxWxC, uint8)
     """
     meta: dict[str, Any] = {}
+
+    if isinstance(obj, str) and urlparse(obj).scheme in {"http", "https"}:
+        return obj, {}
+
     if isinstance(obj, (str, Path)):
-        if isinstance(obj, str):
-            parsed = urlparse(obj)
-            if parsed.scheme in {"http", "https"}:
-                return obj, {}
         p = Path(obj)
-        with open(p, "rb") as f:
-            data = f.read()
+        data = p.read_bytes()
         meta = _validate_image_bytes(data, origin=str(p))
         b64 = base64.b64encode(data).decode("ascii")
         return b64, meta
+
     if isinstance(obj, bytes):
         b64, meta = _encode_bytes(obj)
         return b64, meta
+
     if PILImage is not None and isinstance(obj, PILImage.Image):  # type: ignore[attr-defined]
         meta["width"], meta["height"] = obj.size
         buf = BytesIO()
@@ -153,6 +157,7 @@ def _to_b64_image(obj: Any) -> tuple[str, dict]:
         meta["format"] = "png"
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return b64, meta
+
     if np is not None and isinstance(obj, np.ndarray):  # type: ignore[arg-type]
         h, w = obj.shape[:2]
         meta["width"], meta["height"] = int(w), int(h)
@@ -164,7 +169,62 @@ def _to_b64_image(obj: Any) -> tuple[str, dict]:
         meta["format"] = "png"
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return b64, meta
+
     raise TypeError(f"Unsupported image object: {type(obj)}")
+
+
+def _detect_video_format(data: bytes) -> str | None:
+    """Wire-protocol video format from magic bytes (mp4/webm only)."""
+
+    # mp4 / quicktime: bytes [4:8] == b"ftyp"
+    if len(data) >= 8 and data[4:8] == b"ftyp":
+        return "mp4"
+    # webm / matroska: EBML header
+    if data.startswith(b"\x1a\x45\xdf\xa3"):
+        return "webm"
+    return None
+
+
+def _to_b64_video(obj: Any) -> tuple[str, dict[str, Any]]:
+    """Return (base64-or-URL, metadata).
+
+    Accepts: Path/str (path or http/https URL) or bytes. URLs are returned
+    verbatim with ``meta["url"]=True``; bytes are base64-encoded and the
+    format is detected from magic bytes (mp4 / webm).
+    """
+
+    meta: dict[str, Any] = {}
+
+    if isinstance(obj, str) and urlparse(obj).scheme in {"http", "https"}:
+        meta["url"] = True
+        return obj, meta
+
+    if isinstance(obj, (str, Path)):
+        p = Path(obj)
+        data = p.read_bytes()
+        fmt = _detect_video_format(data)
+        if fmt is None:
+            raise BadRequestError(
+                "Video format could not be detected. The wire protocol supports mp4 and webm.",
+                code="invalid_video",
+                details={"origin": str(p)},
+            )
+        meta["format"] = fmt
+        b64 = base64.b64encode(data).decode("ascii")
+        return b64, meta
+
+    if isinstance(obj, bytes):
+        fmt = _detect_video_format(obj)
+        if fmt is None:
+            raise BadRequestError(
+                "Video format could not be detected from bytes. The wire protocol supports mp4 and webm.",
+                code="invalid_video",
+            )
+        meta["format"] = fmt
+        b64 = base64.b64encode(obj).decode("ascii")
+        return b64, meta
+
+    raise TypeError(f"Unsupported video object: {type(obj)}")
 
 
 def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) -> tuple[dict, list[dict]]:
@@ -214,6 +274,17 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
                         "width": meta.get("width"),
                         "height": meta.get("height"),
                     },
+                }
+            )
+        elif isinstance(node, VideoNode):
+            payload, meta = _to_b64_video(node.obj)
+            content.append(
+                {
+                    "type": "video",
+                    "role": "user",
+                    "content": payload,
+                    "format": meta.get("format"),
+                    "url": bool(meta.get("url")),
                 }
             )
         elif isinstance(node, (PointTagNode, BoxTagNode, PolygonTagNode)):
