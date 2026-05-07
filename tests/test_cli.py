@@ -21,6 +21,7 @@ class _StubResult(PerceiveResult):
         super().__init__(
             text=text,
             points=None,
+            clips=None,
             parsed=None,
             reasoning=None,
             usage=None,

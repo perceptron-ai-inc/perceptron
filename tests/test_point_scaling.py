@@ -64,6 +64,7 @@ def test_perceive_result_points_to_pixels_returns_copy():
     result = PerceiveResult(
         text=None,
         points=[raw_box],
+        clips=None,
         parsed=None,
         reasoning=None,
         usage=None,

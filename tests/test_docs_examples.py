@@ -198,7 +198,7 @@ def test_docs_concepts_coordinate_helpers():
     assert (scaled.top_left.x, scaled.top_left.y, scaled.bottom_right.x, scaled.bottom_right.y) == expected
 
     # Per docs, PerceiveResult.points_to_pixels is the one-liner wrapper
-    result_stub = PerceiveResult(text="", points=[normalized_box], parsed=None, reasoning=None, usage=None, errors=[], raw={})
+    result_stub = PerceiveResult(text="", points=[normalized_box], clips=None, parsed=None, reasoning=None, usage=None, errors=[], raw={})
     pixel_points = result_stub.points_to_pixels(width, height)
     assert pixel_points is not None
     assert isinstance(pixel_points[0], type(scaled))

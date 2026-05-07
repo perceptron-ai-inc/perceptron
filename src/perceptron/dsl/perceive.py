@@ -377,6 +377,7 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
 class PerceiveResult:
     text: str | None
     points: list[Any] | None
+    clips: list[Any] | None
     parsed: list[dict] | None
     reasoning: str | None
     usage: dict | None
@@ -466,6 +467,7 @@ def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveRe
     return PerceiveResult(
         text=text,
         points=points,
+        clips=resp.get("clips"),
         parsed=parsed,
         reasoning=reasoning,
         usage=None,

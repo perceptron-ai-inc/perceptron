@@ -30,8 +30,8 @@ from .errors import (
     TimeoutError,
     TransportError,
 )
-from .expectations import STRUCTURED_EXPECTATIONS
-from .pointing.parser import extract_points, parse_text
+from .expectations import SPATIAL_EXPECTATIONS, STRUCTURED_EXPECTATIONS
+from .pointing.parser import extract_clips, extract_points, parse_text
 
 # ---------------------------------------------------------------------------
 # Response format types for constrained decoding
@@ -113,7 +113,7 @@ class _StreamProcessor:
     ) -> None:
         self._client_core = client_core
         self._expects = expects
-        self._parse_points = parse_points and expects in {"point", "box", "polygon"}
+        self._parse_points = parse_points and expects in SPATIAL_EXPECTATIONS
         self._max_buffer_bytes = max_buffer_bytes
         self._cumulative: str = ""
         self._reasoning: str = ""
@@ -174,10 +174,12 @@ class _StreamProcessor:
         result: dict[str, Any] = {"text": content, "reasoning": reasoning, "raw": None}
         expects = self._expects
         parsed_segments: list[dict[str, Any]] | None = None
-        if expects in {"point", "box", "polygon"} and self._parsing_enabled and isinstance(content, str):
+        if expects in SPATIAL_EXPECTATIONS and self._parsing_enabled and isinstance(content, str):
             parsed_segments = parse_text(content)
             result["points"] = [seg["value"] for seg in parsed_segments if seg["kind"] == expects]
             result["parsed"] = parsed_segments
+        if expects == "clip" and self._parsing_enabled and isinstance(content, str):
+            result["clips"] = extract_clips(content)
         issues: list[dict[str, Any]] = []
         if not self._parsing_enabled:
             issues.append(
@@ -192,6 +194,7 @@ class _StreamProcessor:
                 "text": result.get("text"),
                 "reasoning": result.get("reasoning"),
                 "points": result.get("points"),
+                "clips": result.get("clips"),
                 "parsed": result.get("parsed"),
                 "usage": self._usage_payload,
                 "errors": issues,
@@ -202,14 +205,14 @@ class _StreamProcessor:
     def _point_events(self) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         expects = self._expects
-        if expects not in {"point", "box", "polygon"}:
+        if expects not in SPATIAL_EXPECTATIONS:
             return events
         try:
             segments = parse_text(self._cumulative)
         except Exception:
             return events
         for seg in segments:
-            if seg.get("kind") not in {"point", "box", "polygon"}:
+            if seg.get("kind") not in SPATIAL_EXPECTATIONS:
                 continue
             span_info = seg.get("span")
             if not isinstance(span_info, dict):
@@ -758,10 +761,12 @@ class _ClientCore:
         content = message.get("content")
 
         result: dict[str, Any] = {"text": content, "reasoning": reasoning_content, "raw": data}
-        if expects in {"point", "box", "polygon"} and isinstance(content, str):
+        if expects in SPATIAL_EXPECTATIONS and isinstance(content, str):
             kind = "point" if expects == "point" else ("box" if expects == "box" else "polygon")
             result["points"] = extract_points(content, expected=kind)
             result["parsed"] = parse_text(content)
+        if expects == "clip" and isinstance(content, str):
+            result["clips"] = extract_clips(content)
         return result
 
 

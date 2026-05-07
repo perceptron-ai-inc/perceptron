@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from .errors import BadRequestError
 
-STRUCTURED_EXPECTATIONS: frozenset[str] = frozenset({"point", "box", "polygon"})
+SPATIAL_EXPECTATIONS: frozenset[str] = frozenset({"point", "box", "polygon"})
+CLIP_EXPECTATIONS: frozenset[str] = frozenset({"clip"})
+STRUCTURED_EXPECTATIONS: frozenset[str] = frozenset(SPATIAL_EXPECTATIONS | CLIP_EXPECTATIONS)
 REASONING_EXPECTATIONS: frozenset[str] = frozenset({"think"})
 TEXT_EXPECTATIONS: frozenset[str] = frozenset({"text"})
 VALID_EXPECTATIONS: frozenset[str] = frozenset(
@@ -23,6 +25,8 @@ def resolve_structured_expectation(expects: str, *, context: str) -> tuple[str |
 
 
 __all__ = [
+    "CLIP_EXPECTATIONS",
+    "SPATIAL_EXPECTATIONS",
     "STRUCTURED_EXPECTATIONS",
     "REASONING_EXPECTATIONS",
     "VALID_EXPECTATIONS",
