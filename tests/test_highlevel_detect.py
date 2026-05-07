@@ -3,7 +3,7 @@ import json
 from _image_fixtures import PNG_BYTES
 
 from cookbook.utils import cookbook_asset
-from perceptron import annotate_image, detect, detect_from_coco
+from perceptron import annotate_image, detect, detect_from_coco, image
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.highlevel import CocoDetectResult
@@ -35,7 +35,7 @@ def test_detect_compile_only(monkeypatch):
 
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(PNG_BYTES, classes=["person"], max_tokens=16)
+        res = detect(image(PNG_BYTES), classes=["person"], max_tokens=16)
     assert res.raw and isinstance(res.raw, dict)
     roles = [item.get("role") for item in res.raw.get("content", [])]
     assert roles and roles[0] == "system"
@@ -51,7 +51,7 @@ def test_detect_with_examples(monkeypatch):
     )
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(PNG_BYTES, classes=["car"], examples=[example])
+        res = detect(image(PNG_BYTES), classes=["car"], examples=[example])
     content = res.raw.get("content", [])
     # Should include example turns before target image
     assistants = [item for item in content if item.get("role") == "assistant"]
@@ -76,7 +76,7 @@ def test_detect_with_collection_examples(monkeypatch):
 
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(PNG_BYTES, classes=["group"], examples=[example])
+        res = detect(image(PNG_BYTES), classes=["group"], examples=[example])
     content = res.raw.get("content", [])
     assistants = [item for item in content if item.get("role") == "assistant"]
     assert assistants and "<collection" in assistants[0]["content"]
@@ -94,7 +94,7 @@ def test_detect_canonicalizes_collection_order(monkeypatch):
 
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(b"target", classes=["person", "car"], examples=[example])
+        res = detect(image(b"target"), classes=["person", "car"], examples=[example])
 
     assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
     content = assistant["content"]
@@ -118,7 +118,7 @@ def test_detect_sorts_collection_children(monkeypatch):
 
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(b"target", classes=["group"], examples=[example])
+        res = detect(image(b"target"), classes=["group"], examples=[example])
 
     assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
     content = assistant["content"]
@@ -169,7 +169,7 @@ def test_prompt_collection_canonicalization(monkeypatch):
 
     # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(b"target", classes=["group"], examples=[example])
+        res = detect(image(b"target"), classes=["group"], examples=[example])
 
     prompt_text = next(
         item for item in res.raw["content"] if item.get("role") == "user" and "context" in item.get("content", "")
@@ -181,7 +181,7 @@ def test_detect_stream(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "stream", _StubClient.stream)
 
     with cfg(api_key="test-key", provider="fal"):
-        events = list(detect(PNG_BYTES, classes=None, stream=True))
+        events = list(detect(image(PNG_BYTES), classes=None, stream=True))
     assert events[0]["type"] == "text.delta"
     assert events[-1]["type"] == "final"
 
@@ -219,7 +219,7 @@ def test_detect_flattens_collection_response(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
 
     with cfg(provider="fal", base_url="https://unit.test", api_key="test-key"):
-        res = detect(PNG_BYTES, classes=["dog"])
+        res = detect(image(PNG_BYTES), classes=["dog"])
 
     assert res.text and "<collection" in res.text
     assert res.points and len(res.points) == 2
@@ -249,10 +249,10 @@ def test_detect_from_coco(monkeypatch, tmp_path):
             self.points = None
             self.raw = {"text": text}
 
-    def _fake_detect(image_bytes, *, classes, stream=False, examples=None, **kwargs):
+    def _fake_detect(image_obj, *, classes, stream=False, examples=None, **kwargs):
         assert classes == ["cell"]
         assert stream is False
-        assert image_bytes == b"image-one"
+        assert image_obj.obj == b"image-one"
         assert examples is None
         return _StubResult("detected")
 
@@ -302,7 +302,7 @@ def test_detect_from_coco_shots(monkeypatch, tmp_path):
             self.points = None
             self.raw = {"text": "detected"}
 
-    def _fake_detect(image_bytes, *, classes, stream=False, examples=None, **kwargs):
+    def _fake_detect(image_obj, *, classes, stream=False, examples=None, **kwargs):
         assert classes == ["cell", "artifact"]
         assert stream is False
         assert examples is not None
@@ -341,7 +341,7 @@ def test_examples_icl_detection_sequence(monkeypatch):
 
     with cfg(provider="perceptron", api_key="test-key"):
         res = detect(
-            str(cookbook_asset("in-context-learning", "multi", "cat_dog_input.png")),
+            image(str(cookbook_asset("in-context-learning", "multi", "cat_dog_input.png"))),
             classes=["classA", "classB"],
             examples=[cat_example, dog_example],
         )

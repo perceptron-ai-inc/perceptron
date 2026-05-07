@@ -28,7 +28,7 @@ from .client import (
     regex_format,
 )
 from .config import config, configure, settings
-from .dsl.nodes import agent, block, box, image, point, polygon, system, text
+from .dsl.nodes import agent, block, box, image, point, polygon, system, text, video
 from .dsl.perceive import PerceiveResult, async_perceive, inspect_task, perceive
 from .errors import (
     AnchorError,
@@ -41,7 +41,7 @@ from .errors import (
     TimeoutError,
     TransportError,
 )
-from .highlevel import MediaInput, caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
+from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
 from .pointing.geometry import scale_points_to_pixels
 from .pointing.parser import (
     PointParser,
@@ -83,7 +83,6 @@ __all__ = [
     "ExpectationError",
     "JsonSchemaFormat",
     "JsonSchemaSpec",
-    "MediaInput",
     "PerceiveResult",
     "PointParser",
     "Polygon",
@@ -130,4 +129,5 @@ __all__ = [
     "system",
     "tensorstream",
     "text",
+    "video",
 ]

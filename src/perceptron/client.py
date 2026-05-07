@@ -266,6 +266,15 @@ def _response_json(resp) -> dict[str, Any]:
     return resp.json()
 
 
+def _is_url_payload(item: dict[str, Any]) -> bool:
+    """True when the payload should pass through as a URL rather than a data URL."""
+
+    if item.get("url"):
+        return True
+    payload = item.get("content")
+    return isinstance(payload, str) and payload.startswith(("http://", "https://"))
+
+
 def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     current_role: str | None = None
@@ -299,7 +308,7 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
             payload = item.get("content")
             if payload is None:
                 continue
-            if isinstance(payload, str) and payload.startswith(("http://", "https://")):
+            if _is_url_payload(item):
                 image_part = {"type": "image_url", "image_url": {"url": payload}}
             else:
                 fmt = item.get("format")
@@ -318,6 +327,29 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
                 _flush()
             current_role = role
             current_content.append(image_part)
+            contains_non_text = True
+        elif itype == "video":
+            payload = item.get("content")
+            if payload is None:
+                continue
+            if _is_url_payload(item):
+                video_part = {"type": "video_url", "video_url": {"url": payload}}
+            else:
+                fmt = item.get("format")
+                if fmt is None:
+                    raise BadRequestError(
+                        "Could not determine video format from input. The wire protocol "
+                        "supports mp4 and webm.",
+                        code="invalid_video_format",
+                    )
+                video_part = {
+                    "type": "video_url",
+                    "video_url": {"url": f"data:video/{fmt};base64,{payload}"},
+                }
+            if current_role not in {role, None}:
+                _flush()
+            current_role = role
+            current_content.append(video_part)
             contains_non_text = True
         else:
             continue
