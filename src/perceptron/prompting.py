@@ -11,10 +11,27 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
+from .dsl.nodes import Image, Media, Video
+
+
+@dataclass(frozen=True)
+class ModalityPrompt:
+    """Prompt text that varies by media modality (image vs video)."""
+
+    image: str
+    video: str
+
+    def get(self, media: Media) -> str:
+        if isinstance(media, Image):
+            return self.image
+        if isinstance(media, Video):
+            return self.video
+        raise TypeError(f"ModalityPrompt.get expected Image or Video, got {type(media).__name__}")
+
 
 @dataclass(frozen=True)
 class CaptionPromptTemplate:
-    style_prompts: dict[str, str]
+    style_prompts: dict[str, ModalityPrompt]
     system_instruction: str | None = None
 
 
@@ -33,8 +50,8 @@ class OcrPromptTemplate:
 
 @dataclass(frozen=True)
 class DetectPromptTemplate:
-    general_instruction: str
-    category_instruction_template: str
+    general_instruction: ModalityPrompt
+    category_instruction_template: ModalityPrompt
 
 
 @dataclass(frozen=True)
@@ -117,8 +134,14 @@ _ISAAC_PROFILE = HighLevelPromptProfile(
     key="isaac-default",
     caption=CaptionPromptTemplate(
         style_prompts={
-            "concise": "Provide a concise, human-friendly caption for the upcoming image.",
-            "detailed": "Provide a detailed caption describing key objects, relationships, and context in the upcoming image.",
+            "concise": ModalityPrompt(
+                image="Provide a concise, human-friendly caption for the upcoming image.",
+                video="Provide a concise, human-friendly caption for the upcoming video.",
+            ),
+            "detailed": ModalityPrompt(
+                image="Provide a detailed caption describing key objects, relationships, and context in the upcoming image.",
+                video="Provide a detailed caption describing key objects, relationships, and context in the upcoming video.",
+            ),
         },
     ),
     question=QuestionPromptTemplate(
@@ -137,8 +160,14 @@ _ISAAC_PROFILE = HighLevelPromptProfile(
         default_mode="plain",
     ),
     detect=DetectPromptTemplate(
-        general_instruction="Your goal is to segment out the objects in the scene",
-        category_instruction_template="Your goal is to segment out the following categories: {categories}",
+        general_instruction=ModalityPrompt(
+            image="Your goal is to segment out the objects in the scene",
+            video="Your goal is to segment out the objects in the scene. Make sure to track the objects.",
+        ),
+        category_instruction_template=ModalityPrompt(
+            image="Your goal is to segment out the following categories: {categories}",
+            video="Your goal is to segment out the following categories: {categories}. Make sure to track the objects.",
+        ),
     ),
 )
 
@@ -147,9 +176,13 @@ _QWEN_PROFILE = HighLevelPromptProfile(
     caption=CaptionPromptTemplate(
         system_instruction=None,
         style_prompts={
-            "concise": "Describe the primary subjects, their actions, and visible context in one vivid sentence.",
-            "detailed": (
-                "Provide a multi-sentence caption that calls out subjects, relationships, scene intent, and any text embedded in the image."
+            "concise": ModalityPrompt(
+                image="Describe the primary subjects, their actions, and visible context in one vivid sentence.",
+                video="Describe the primary subjects, their actions, and visible context in one vivid sentence.",
+            ),
+            "detailed": ModalityPrompt(
+                image="Provide a multi-sentence caption that calls out subjects, relationships, scene intent, and any text embedded in the image.",
+                video="Provide a multi-sentence caption that calls out subjects, relationships, scene intent, and any text embedded in the video.",
             ),
         },
     ),
@@ -169,10 +202,13 @@ _QWEN_PROFILE = HighLevelPromptProfile(
         default_mode="plain",
     ),
     detect=DetectPromptTemplate(
-        general_instruction="Locate every object of interest and report bounding box coordinates in JSON format.",
-        category_instruction_template=(
-            'Locate every instance that belongs to the following categories: "{categories}". '
-            "Report bbox coordinates in JSON format."
+        general_instruction=ModalityPrompt(
+            image="Locate every object of interest and report bounding box coordinates in JSON format.",
+            video="Locate every object of interest and report bounding box coordinates in JSON format.",
+        ),
+        category_instruction_template=ModalityPrompt(
+            image='Locate every instance that belongs to the following categories: "{categories}". Report bbox coordinates in JSON format.',
+            video='Locate every instance that belongs to the following categories: "{categories}". Report bbox coordinates in JSON format.',
         ),
     ),
 )
@@ -198,6 +234,7 @@ __all__ = [
     "CaptionPromptTemplate",
     "DetectPromptTemplate",
     "HighLevelPromptProfile",
+    "ModalityPrompt",
     "OcrPromptTemplate",
     "PromptProfileRegistry",
     "QuestionPromptTemplate",

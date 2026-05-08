@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from _image_fixtures import PNG_BYTES
 
-from perceptron import caption, detect, ocr, question, video
+from perceptron import caption, detect, image, ocr, question, video
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.client import _task_to_openai_messages
@@ -137,6 +137,54 @@ def test_detect_accepts_video():
         res = detect(video("https://x.com/v.mp4"), classes=["person"])
     parts = [p for p in res.raw["content"] if p.get("type") == "video"]
     assert len(parts) == 1
+
+
+def test_caption_video_uses_video_modality_prompt():
+    """Isaac caption.concise should emit the video-modality wording for video input."""
+
+    with cfg(api_key="test", provider="fal"):
+        res = caption(video("https://x.com/v.mp4"), style="concise")
+    user_msgs = [
+        e["content"]
+        for e in res.raw["content"]
+        if e.get("type") == "text" and e.get("role") == "user"
+    ]
+    assert any("upcoming video" in m for m in user_msgs)
+
+
+def test_caption_image_uses_image_modality_prompt():
+    with cfg(api_key="test", provider="fal"):
+        res = caption(image(PNG_BYTES), style="concise")
+    user_msgs = [
+        e["content"]
+        for e in res.raw["content"]
+        if e.get("type") == "text" and e.get("role") == "user"
+    ]
+    assert any("upcoming image" in m for m in user_msgs)
+
+
+def test_detect_video_includes_tracking_instruction():
+    """Isaac detect appends a tracking hint when the media is video."""
+
+    with cfg(api_key="test", provider="fal"):
+        res = detect(video("https://x.com/v.mp4"), classes=["person"])
+    sys_msgs = [
+        e["content"]
+        for e in res.raw["content"]
+        if e.get("type") == "text" and e.get("role") == "system"
+    ]
+    assert any("Make sure to track the objects." in m for m in sys_msgs)
+
+
+def test_detect_image_omits_tracking_instruction():
+    with cfg(api_key="test", provider="fal"):
+        res = detect(image(PNG_BYTES), classes=["person"])
+    sys_msgs = [
+        e["content"]
+        for e in res.raw["content"]
+        if e.get("type") == "text" and e.get("role") == "system"
+    ]
+    assert all("Make sure to track" not in m for m in sys_msgs)
 
 
 def test_caption_requires_wrapped_input():
