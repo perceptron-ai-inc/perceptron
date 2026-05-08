@@ -376,17 +376,29 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
 @dataclass
 class PerceiveResult:
     text: str | None
-    points: list[Any] | None
+    points: list[SinglePoint] | None
+    boxes: list[BoundingBox] | None
+    polygons: list[Polygon] | None
     parsed: list[dict] | None
     reasoning: str | None
     usage: dict | None
     errors: list[dict]
     raw: Any
 
-    def points_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[Any] | None:
+    def points_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[SinglePoint] | None:
         """Return a pixel-space copy of ``points`` given the image dimensions."""
 
         return scale_points_to_pixels(self.points, width=width, height=height, clamp=clamp)
+
+    def boxes_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[BoundingBox] | None:
+        """Return a pixel-space copy of ``boxes`` given the image dimensions."""
+
+        return scale_points_to_pixels(self.boxes, width=width, height=height, clamp=clamp)
+
+    def polygons_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[Polygon] | None:
+        """Return a pixel-space copy of ``polygons`` given the image dimensions."""
+
+        return scale_points_to_pixels(self.polygons, width=width, height=height, clamp=clamp)
 
 
 def _prepare_client_kwargs(
@@ -459,15 +471,13 @@ def _maybe_compile_only_result(
 
 
 def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:
-    text = resp.get("text")
-    points = resp.get("points")
-    parsed = resp.get("parsed")
-    reasoning = resp.get("reasoning")
     return PerceiveResult(
-        text=text,
-        points=points,
-        parsed=parsed,
-        reasoning=reasoning,
+        text=resp.get("text"),
+        points=resp.get("points"),
+        boxes=resp.get("boxes"),
+        polygons=resp.get("polygons"),
+        parsed=resp.get("parsed"),
+        reasoning=resp.get("reasoning"),
         usage=None,
         errors=issues,
         raw=resp.get("raw"),

@@ -113,7 +113,7 @@ def test_fal_payload_structure(monkeypatch):
     assert assistant and isinstance(assistant[0]["content"], str)
 
     # Perceive result should surface parsed boxes from response text
-    assert res.points and res.points[0].top_left.x == 1
+    assert res.boxes and res.boxes[0].top_left.x == 1
 
 
 def test_image_url_passthrough():

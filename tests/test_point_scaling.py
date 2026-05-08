@@ -59,11 +59,13 @@ def test_scale_points_to_pixels_rejects_bad_dimensions():
         scale_points_to_pixels([], width=0, height=10)
 
 
-def test_perceive_result_points_to_pixels_returns_copy():
+def test_perceive_result_boxes_to_pixels_returns_copy():
     raw_box = bbox(0, 0, 1000, 1000, mention="full")
     result = PerceiveResult(
         text=None,
-        points=[raw_box],
+        points=None,
+        boxes=[raw_box],
+        polygons=None,
         parsed=None,
         reasoning=None,
         usage=None,
@@ -71,7 +73,7 @@ def test_perceive_result_points_to_pixels_returns_copy():
         raw=None,
     )
 
-    scaled = result.points_to_pixels(400, 200)
+    scaled = result.boxes_to_pixels(400, 200)
     assert scaled and scaled[0].bottom_right.x == 399
     # Original remains normalized
-    assert result.points[0].bottom_right.x == 1000
+    assert result.boxes[0].bottom_right.x == 1000

@@ -33,6 +33,9 @@ from .errors import (
 from .expectations import STRUCTURED_EXPECTATIONS
 from .pointing.parser import extract_points, parse_text
 
+# Maps each spatial `expects` value to the PerceiveResult bucket it populates.
+_BUCKET_BY_EXPECTS = {"point": "points", "box": "boxes", "polygon": "polygons"}
+
 # ---------------------------------------------------------------------------
 # Response format types for constrained decoding
 # ---------------------------------------------------------------------------
@@ -113,7 +116,7 @@ class _StreamProcessor:
     ) -> None:
         self._client_core = client_core
         self._expects = expects
-        self._parse_points = parse_points and expects in {"point", "box", "polygon"}
+        self._parse_points = parse_points and expects in _BUCKET_BY_EXPECTS
         self._max_buffer_bytes = max_buffer_bytes
         self._cumulative: str = ""
         self._reasoning: str = ""
@@ -174,9 +177,10 @@ class _StreamProcessor:
         result: dict[str, Any] = {"text": content, "reasoning": reasoning, "raw": None}
         expects = self._expects
         parsed_segments: list[dict[str, Any]] | None = None
-        if expects in {"point", "box", "polygon"} and self._parsing_enabled and isinstance(content, str):
+        if expects in _BUCKET_BY_EXPECTS and self._parsing_enabled and isinstance(content, str):
             parsed_segments = parse_text(content)
-            result["points"] = [seg["value"] for seg in parsed_segments if seg["kind"] == expects]
+            bucket = _BUCKET_BY_EXPECTS[expects]
+            result[bucket] = [seg["value"] for seg in parsed_segments if seg["kind"] == expects]
             result["parsed"] = parsed_segments
         issues: list[dict[str, Any]] = []
         if not self._parsing_enabled:
@@ -189,27 +193,23 @@ class _StreamProcessor:
         return {
             "type": "final",
             "result": {
-                "text": result.get("text"),
-                "reasoning": result.get("reasoning"),
-                "points": result.get("points"),
-                "parsed": result.get("parsed"),
+                **result,
                 "usage": self._usage_payload,
                 "errors": issues,
-                "raw": result.get("raw"),
             },
         }
 
     def _point_events(self) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         expects = self._expects
-        if expects not in {"point", "box", "polygon"}:
+        if expects not in _BUCKET_BY_EXPECTS:
             return events
         try:
             segments = parse_text(self._cumulative)
         except Exception:
             return events
         for seg in segments:
-            if seg.get("kind") not in {"point", "box", "polygon"}:
+            if seg.get("kind") not in _BUCKET_BY_EXPECTS:
                 continue
             span_info = seg.get("span")
             if not isinstance(span_info, dict):
@@ -758,9 +758,9 @@ class _ClientCore:
         content = message.get("content")
 
         result: dict[str, Any] = {"text": content, "reasoning": reasoning_content, "raw": data}
-        if expects in {"point", "box", "polygon"} and isinstance(content, str):
-            kind = "point" if expects == "point" else ("box" if expects == "box" else "polygon")
-            result["points"] = extract_points(content, expected=kind)
+        if expects in _BUCKET_BY_EXPECTS and isinstance(content, str):
+            bucket = _BUCKET_BY_EXPECTS[expects]
+            result[bucket] = extract_points(content, expected=expects)
             result["parsed"] = parse_text(content)
         return result
 
