@@ -222,9 +222,9 @@ def test_detect_flattens_collection_response(monkeypatch):
         res = detect(image(PNG_BYTES), classes=["dog"])
 
     assert res.text and "<collection" in res.text
-    assert res.points and len(res.points) == 2
-    assert res.points[0].mention == "dog"
-    assert res.points[1].mention == "named"
+    assert res.boxes and len(res.boxes) == 2
+    assert res.boxes[0].mention == "dog"
+    assert res.boxes[1].mention == "named"
 
 
 def test_detect_from_coco(monkeypatch, tmp_path):

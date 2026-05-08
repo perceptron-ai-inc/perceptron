@@ -122,10 +122,23 @@ def _serialize_annotation(annotation: Any) -> Any:
     return annotation
 
 
+_BUCKET_BY_EXPECTS = {"point": "points", "box": "boxes", "polygon": "polygons"}
+
+
 def _serialize_points(points: list[Any] | None) -> list[Any] | None:
     if not points:
         return None
     return [_serialize_annotation(point) for point in points]
+
+
+def _bucket_for_expects(result: Any, expects: str | None) -> tuple[str, list[Any]] | None:
+    """Return the (name, list) of the bucket matching ``expects``, if it has data."""
+
+    bucket_name = _BUCKET_BY_EXPECTS.get(expects)
+    if bucket_name is None:
+        return None
+    items = getattr(result, bucket_name)
+    return (bucket_name, items) if items else None
 
 
 def _serialize_parsed(
@@ -149,14 +162,15 @@ def _serialize_parsed(
     return serialized
 
 
-def _result_payload(result: Any, *, include_raw: bool) -> dict[str, Any]:
+def _result_payload(result: Any, *, include_raw: bool, expects: str | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     text_value = getattr(result, "text", None)
     if text_value is not None:
         payload["text"] = text_value
-    points = _serialize_points(getattr(result, "points", None))
-    if points is not None:
-        payload["points"] = points
+    populated = _bucket_for_expects(result, expects)
+    if populated is not None:
+        bucket_name, items = populated
+        payload[bucket_name] = _serialize_points(items)
     parsed = getattr(result, "parsed", None)
     serialized_parsed = _serialize_parsed(parsed)
     if serialized_parsed is not None:
@@ -267,11 +281,12 @@ def _process_directory(
         console.print(Panel(table, title="Errors", border_style="red"))
 
 
-def _caption_payload(result: Any) -> Any:
+def _caption_payload(result: Any, *, expects: str | None = None) -> Any:
     text_value = getattr(result, "text", None) or ""
-    points = _serialize_points(getattr(result, "points", None))
-    if points:
-        return {"text": text_value, "points": points}
+    populated = _bucket_for_expects(result, expects)
+    if populated is not None:
+        bucket_name, items = populated
+        return {"text": text_value, bucket_name: _serialize_points(items)}
     return text_value
 
 
@@ -280,10 +295,12 @@ def _ocr_payload(result: Any) -> str:
 
 
 def _detect_payload(result: Any) -> dict[str, Any]:
+    # Detect always emits boxes.
     payload: dict[str, Any] = {"text": getattr(result, "text", None) or ""}
-    points = _serialize_points(getattr(result, "points", None))
-    if points is not None:
-        payload["points"] = points
+    populated = _bucket_for_expects(result, "box")
+    if populated is not None:
+        bucket_name, items = populated
+        payload[bucket_name] = _serialize_points(items)
     parsed = getattr(result, "parsed", None)
     if parsed:
         payload["parsed"] = parsed
@@ -352,6 +369,8 @@ def _coerce_result_dict(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "text": result.get("text"),
         "points": result.get("points"),
+        "boxes": result.get("boxes"),
+        "polygons": result.get("polygons"),
         "parsed": result.get("parsed"),
         "usage": result.get("usage"),
         "errors": result.get("errors") or [],
@@ -406,8 +425,11 @@ def _stream_render(
     output_format: OutputFormat,
     show_raw: bool,
     show_points_table: bool,
+    expects: str | None = None,
 ) -> None:
     """Render streaming events inside a live-updating panel."""
+
+    bucket_name = _BUCKET_BY_EXPECTS.get(expects)
 
     text_buffer: list[str] = []
     points_buffer: list[Any] = []
@@ -505,8 +527,8 @@ def _stream_render(
                 end_ts = time.perf_counter()
                 if final_result.get("text") is not None:
                     text_buffer = [final_result.get("text") or ""]
-                if final_result.get("points") is not None:
-                    points_buffer = list(final_result.get("points") or [])
+                if bucket_name and final_result.get(bucket_name) is not None:
+                    points_buffer = list(final_result.get(bucket_name) or [])
                 final_errs = final_result.get("errors") or []
                 if final_errs:
                     errors.extend(final_errs)
@@ -520,18 +542,19 @@ def _stream_render(
     if final_result is None:
         final_result = {
             "text": "".join(text_buffer) or None,
-            "points": points_buffer or None,
             "parsed": None,
             "usage": usage_info,
             "errors": _dedupe_errors(errors),
             "raw": None,
         }
+        if bucket_name:
+            final_result[bucket_name] = points_buffer or None
     else:
         # ensure buffers win if final result lacked data
         if final_result.get("text") is None:
             final_result["text"] = "".join(text_buffer) or None
-        if not final_result.get("points") and points_buffer:
-            final_result["points"] = points_buffer
+        if bucket_name and not final_result.get(bucket_name) and points_buffer:
+            final_result[bucket_name] = points_buffer
         merged_errors = list(errors) if errors else []
         final_errs = final_result.get("errors") or []
         if final_errs:
@@ -544,7 +567,7 @@ def _stream_render(
     result_ns = SimpleNamespace(**coerced)
 
     if output_format is OutputFormat.JSON:
-        console.print_json(data=_result_payload(result_ns, include_raw=show_raw))
+        console.print_json(data=_result_payload(result_ns, include_raw=show_raw, expects=expects))
     else:
         if coerced["errors"]:
             _print_errors(coerced["errors"])
@@ -559,23 +582,26 @@ def _render_result(
     output_format: OutputFormat,
     show_raw: bool,
     show_points_table: bool = False,
+    expects: str | None = None,
 ):
     if output_format is OutputFormat.JSON:
-        payload = _result_payload(result, include_raw=show_raw)
+        payload = _result_payload(result, include_raw=show_raw, expects=expects)
         console.print_json(data=payload)
         return
 
-    points_serialized = _serialize_points(getattr(result, "points", None))
+    populated = _bucket_for_expects(result, expects)
     console.print(Panel(result.text or "<no text>", title=title, border_style="green"))
-    if show_points_table and getattr(result, "points", None):
+    if show_points_table and populated is not None:
+        _, items = populated
         table = Table(title="Detections", show_header=True, header_style="bold blue")
         table.add_column("Bounding Box")
         table.add_column("Mention")
-        for point in result.points or []:
+        for point in items:
             table.add_row(str(point), getattr(point, "mention", ""))
         console.print(table)
-    elif points_serialized:
-        console.print_json(data={"points": points_serialized})
+    elif populated is not None:
+        bucket_name, items = populated
+        console.print_json(data={bucket_name: _serialize_points(items)})
     _print_errors(getattr(result, "errors", []))
     if show_raw and getattr(result, "raw", None):
         console.print(result.raw)
@@ -637,7 +663,7 @@ def caption(
             stream=stream,
             show_raw=show_raw,
             runner=lambda data: caption_image(data, style=style, expects=expects.value),
-            payload_factory=_caption_payload,
+            payload_factory=lambda result: _caption_payload(result, expects=expects.value),
         )
         return
 
@@ -655,6 +681,7 @@ def caption(
             output_format=output_format,
             show_raw=show_raw,
             show_points_table=expects is ExpectationType.BOX,
+            expects=expects_value,
         )
         return
 
@@ -665,6 +692,7 @@ def caption(
         output_format=output_format,
         show_raw=show_raw,
         show_points_table=expects is ExpectationType.BOX,
+        expects=expects_value,
     )
 
 
@@ -742,6 +770,7 @@ def detect(
             output_format=output_format,
             show_raw=show_raw,
             show_points_table=True,
+            expects="box",
         )
         return
     res = detect_image(img, classes=class_list)
@@ -751,6 +780,7 @@ def detect(
         output_format=output_format,
         show_raw=show_raw,
         show_points_table=True,
+        expects="box",
     )
 
 
@@ -794,6 +824,7 @@ def question(
             output_format=output_format,
             show_raw=show_raw,
             show_points_table=expects is ExpectationType.BOX,
+            expects=expects_value,
         )
         return
 
@@ -809,6 +840,7 @@ def question(
         output_format=output_format,
         show_raw=show_raw,
         show_points_table=show_points and expects is ExpectationType.BOX,
+        expects=expects_value,
     )
 
 

@@ -21,6 +21,8 @@ class _StubResult(PerceiveResult):
         super().__init__(
             text=text,
             points=None,
+            boxes=None,
+            polygons=None,
             parsed=None,
             reasoning=None,
             usage=None,
@@ -134,7 +136,7 @@ def test_detect_command_directory(monkeypatch, tmp_path):
     def _fake_detect(data, *, classes=None):
         assert classes == ["person"]
         res = _StubResult("detected-one" if data == b"image-one" else "detected-two")
-        res.points = [
+        res.boxes = [
             BoundingBox(
                 top_left=SinglePoint(1, 2, mention="person"),
                 bottom_right=SinglePoint(3, 4),
@@ -151,10 +153,10 @@ def test_detect_command_directory(monkeypatch, tmp_path):
     data = json.loads(output_path.read_text())
     assert set(data.keys()) == {"one.png", "two.jpg"}
     assert data["one.png"]["text"] == "detected-one"
-    points = data["one.png"].get("points")
-    assert points and points[0]["type"] == "box"
-    assert points[0]["top_left"]["x"] == 1
-    assert points[0]["top_left"]["mention"] == "person"
+    boxes = data["one.png"].get("boxes")
+    assert boxes and boxes[0]["type"] == "box"
+    assert boxes[0]["top_left"]["x"] == 1
+    assert boxes[0]["top_left"]["mention"] == "person"
 
 
 def test_detect_command_stream(monkeypatch):
@@ -191,7 +193,7 @@ def test_question_command(monkeypatch):
 
 def test_question_command_box_json(monkeypatch):
     res = _StubResult("box answer")
-    res.points = [
+    res.boxes = [
         BoundingBox(
             top_left=SinglePoint(1, 2, mention="item"),
             bottom_right=SinglePoint(3, 4),
@@ -214,7 +216,7 @@ def test_question_command_box_json(monkeypatch):
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["text"] == "box answer"
-    assert payload["points"][0]["type"] == "box"
+    assert payload["boxes"][0]["type"] == "box"
 
 
 def test_config_command():

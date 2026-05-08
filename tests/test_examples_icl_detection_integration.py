@@ -67,14 +67,14 @@ def test_detect_examples_pipeline_hits_backend():
 
     assert isinstance(result.raw, dict)
     assert result.raw.get("choices"), "Expected backend to return choices"
-    assert result.points, "Backend did not return any bounding boxes"
+    assert result.boxes, "Backend did not return any bounding boxes"
 
     with Image.open(_TARGET_IMAGE) as im:
         width, height = im.size
 
     expected_box = bbox(38, 91, 934, 962, mention="classB")
     expected_pixels = scale_points_to_pixels([expected_box], width=width, height=height)[0]
-    pixel_predictions = result.points_to_pixels(width, height)
+    pixel_predictions = result.boxes_to_pixels(width, height)
     assert pixel_predictions, "Point scaling produced no boxes"
 
     best_match = max(pixel_predictions, key=lambda pt: _intersection_over_union(pt, expected_pixels))
