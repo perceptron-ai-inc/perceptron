@@ -432,7 +432,7 @@ def _stream_render(
     bucket_name = _BUCKET_BY_EXPECTS.get(expects)
 
     text_buffer: list[str] = []
-    points_buffer: list[Any] = []
+    annotations_buffer: list[Any] = []
     errors: list[dict[str, Any]] = []
     final_result: dict[str, Any] | None = None
     usage_info: dict[str, Any] | None = None
@@ -451,13 +451,13 @@ def _stream_render(
         if not text_content:
             text_render.stylize("dim")
         body.append(text_render)
-        if points_buffer:
+        if annotations_buffer:
             if show_points_table:
-                body.append(_build_points_table(points_buffer))
+                body.append(_build_points_table(annotations_buffer))
             else:
                 summary = Text()
-                for idx, point in enumerate(points_buffer, 1):
-                    kind, coords, mention = _describe_point(point)
+                for idx, annotation in enumerate(annotations_buffer, 1):
+                    kind, coords, mention = _describe_point(annotation)
                     line = f"{idx}. {kind}: {coords}"
                     if mention:
                         line += f" ({mention})"
@@ -516,7 +516,7 @@ def _stream_render(
             elif event_type == "points.delta":
                 pts = event.get("points") or []
                 if pts:
-                    points_buffer.extend(pts)
+                    annotations_buffer.extend(pts)
             elif event_type == "error":
                 message = str(event.get("message") or "unknown error")
                 errors.append({"code": "stream_error", "message": message})
@@ -528,7 +528,7 @@ def _stream_render(
                 if final_result.get("text") is not None:
                     text_buffer = [final_result.get("text") or ""]
                 if bucket_name and final_result.get(bucket_name) is not None:
-                    points_buffer = list(final_result.get(bucket_name) or [])
+                    annotations_buffer = list(final_result.get(bucket_name) or [])
                 final_errs = final_result.get("errors") or []
                 if final_errs:
                     errors.extend(final_errs)
@@ -548,13 +548,13 @@ def _stream_render(
             "raw": None,
         }
         if bucket_name:
-            final_result[bucket_name] = points_buffer or None
+            final_result[bucket_name] = annotations_buffer or None
     else:
         # ensure buffers win if final result lacked data
         if final_result.get("text") is None:
             final_result["text"] = "".join(text_buffer) or None
-        if bucket_name and not final_result.get(bucket_name) and points_buffer:
-            final_result[bucket_name] = points_buffer
+        if bucket_name and not final_result.get(bucket_name) and annotations_buffer:
+            final_result[bucket_name] = annotations_buffer
         merged_errors = list(errors) if errors else []
         final_errs = final_result.get("errors") or []
         if final_errs:
