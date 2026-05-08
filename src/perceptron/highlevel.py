@@ -139,7 +139,6 @@ def _run_perceive_sequence(
 def _caption_sequence(
     media_node: MediaNode,
     style: str,
-    expects: str | None,
     template: CaptionPromptTemplate,
 ) -> SequenceNode:
     style_map = template.style_prompts
@@ -149,7 +148,7 @@ def _caption_sequence(
     if template.system_instruction:
         nodes.append(system(template.system_instruction))
     nodes.append(media_node)
-    nodes.append(text(style_map[style]))
+    nodes.append(text(style_map[style].get(media_node)))
     return SequenceNode(nodes)
 
 
@@ -184,7 +183,7 @@ def caption(
     }
 
     return _run_perceive_sequence(
-        builder=lambda: _caption_sequence(media_obj, style, structured_expectation, caption_template),
+        builder=lambda: _caption_sequence(media_obj, style, caption_template),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
         response_format=response_format,
@@ -399,12 +398,13 @@ def ocr_html(
 def _detect_system_message(
     classes: Sequence[str] | None,
     template: DetectPromptTemplate,
+    media: MediaNode,
 ) -> SequenceNode:
     if classes:
         categories = ", ".join(str(c) for c in classes)
-        message = template.category_instruction_template.format(categories=categories)
+        message = template.category_instruction_template.get(media).format(categories=categories)
     else:
-        message = template.general_instruction
+        message = template.general_instruction.get(media)
     return SequenceNode([system(message)])
 
 
@@ -415,7 +415,7 @@ def _detect_sequence(
     examples: Sequence[Any] | None,
     template: DetectPromptTemplate,
 ) -> SequenceNode:
-    sequence = _detect_system_message(classes, template)
+    sequence = _detect_system_message(classes, template, media_node)
     normalized_examples = _normalize_examples(examples, classes) if examples else []
     for ex in normalized_examples:
         sequence = sequence + image_node(ex.image)
