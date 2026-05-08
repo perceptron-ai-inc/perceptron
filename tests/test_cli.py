@@ -424,3 +424,56 @@ def test_stream_render_buffers_points_delta_into_correct_bucket(monkeypatch):
     assert payload["polygons"][0]["type"] == "polygon"
     assert "points" not in payload
     assert "boxes" not in payload
+
+
+def test_stream_render_accumulates_text_deltas(monkeypatch):
+    """Multiple `text.delta` events should be concatenated and surfaced as `text`."""
+
+    events = [
+        {"type": "text.delta", "chunk": "hello "},
+        {"type": "text.delta", "chunk": "world"},
+        # No final event — render must fall back to buffered text.
+    ]
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "perceptron.cli.console.print_json",
+        lambda *, data: captured.update(payload=data),
+    )
+
+    _stream_render(
+        iter(events),
+        title="Caption",
+        output_format=OutputFormat.JSON,
+        show_raw=False,
+        show_points_table=False,
+        expects=None,
+    )
+
+    assert captured["payload"]["text"] == "hello world"
+
+
+def test_stream_render_final_text_overrides_buffer(monkeypatch):
+    """If the `final` event carries `text`, it should replace the streamed buffer."""
+
+    events = [
+        {"type": "text.delta", "chunk": "draft"},
+        {"type": "final", "result": {"text": "authoritative"}},
+    ]
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "perceptron.cli.console.print_json",
+        lambda *, data: captured.update(payload=data),
+    )
+
+    _stream_render(
+        iter(events),
+        title="Caption",
+        output_format=OutputFormat.JSON,
+        show_raw=False,
+        show_points_table=False,
+        expects=None,
+    )
+
+    assert captured["payload"]["text"] == "authoritative"
