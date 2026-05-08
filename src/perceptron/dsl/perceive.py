@@ -44,7 +44,7 @@ from ..config import settings
 from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
 from ..pointing.parser import PointParser_serialize
-from ..pointing.types import BoundingBox, Polygon, SinglePoint
+from ..pointing.types import BoundingBox, Clip, Polygon, SinglePoint
 from .nodes import (
     Agent,
     DSLNode,
@@ -379,6 +379,7 @@ class PerceiveResult:
     points: list[SinglePoint] | None
     boxes: list[BoundingBox] | None
     polygons: list[Polygon] | None
+    clips: list[Clip] | None
     parsed: list[dict] | None
     reasoning: str | None
     usage: dict | None
@@ -476,6 +477,7 @@ def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveRe
         points=resp.get("points"),
         boxes=resp.get("boxes"),
         polygons=resp.get("polygons"),
+        clips=resp.get("clips"),
         parsed=resp.get("parsed"),
         reasoning=resp.get("reasoning"),
         usage=None,

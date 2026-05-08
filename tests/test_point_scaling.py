@@ -66,6 +66,7 @@ def test_perceive_result_boxes_to_pixels_returns_copy():
         points=None,
         boxes=[raw_box],
         polygons=None,
+        clips=None,
         parsed=None,
         reasoning=None,
         usage=None,

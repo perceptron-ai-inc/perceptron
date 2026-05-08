@@ -21,7 +21,7 @@ from html import escape, unescape
 from typing import Any, Literal
 
 from ..errors import ParseError
-from .types import BoundingBox, Collection, Polygon, SinglePoint
+from .types import BoundingBox, Clip, ClipTimestamp, Collection, Polygon, SinglePoint
 
 BOX_MIN_POINTS = 2
 POLYGON_MIN_POINTS = 3
@@ -31,11 +31,29 @@ _WS = r"\s*"
 _NUM = r"(?:\d+)"
 _PT = rf"\({_WS}({_NUM}){_WS},{_WS}({_NUM}){_WS}\)"
 
-_ATTR = r"(?:\s+[^>]+)?"  # we ignore unknown attrs; mention/t handled in parse
+# Tag attributes — sequence of either a complete quoted string (which may contain
+# `>` characters) or a single non-quote/non-`>` character. The leading `\b` on
+# the tag name keeps `<point` from matching `<point_box`.
+_ATTRS = r'(?P<attrs>(?:"[^"]*"|[^>"])*)'
 _FULL_TAG = re.compile(
-    rf"<(?P<tag>point|point_box|polygon|collection){_ATTR}>(?P<body>[\s\S]*?)</(?P=tag)>",
+    rf"<(?P<tag>point|point_box|polygon|collection)\b{_ATTRS}>(?P<body>[\s\S]*?)</(?P=tag)>",
     re.IGNORECASE,
 )
+# Self-closing <clip mention=... t=... /> — clips have no body, just attributes.
+# Quoted values may contain `>` or `/>`, so attrs is a sequence of either a complete
+# quoted string or a single non-quote/non-`>` character.
+_CLIP_TAG = re.compile(
+    r'<clip\b(?P<attrs>(?:"[^"]*"|[^>"])*?)\s*/>',
+    re.IGNORECASE,
+)
+# Standalone <collection> regex used during clip extraction so clips inside a
+# collection inherit the parent mention.
+_COLLECTION_TAG = re.compile(
+    rf"<collection\b{_ATTRS}>(?P<body>[\s\S]*?)</collection>",
+    re.IGNORECASE,
+)
+# Accept t=1.5, t="1.5", t="1.5 seconds", t="1.5 2.0", t="1.5 seconds 2.0 seconds".
+_T_VALUE = re.compile(r'\bt=(?:"([^"]*)"|(\S+))')
 
 
 def _parse_attrs(tag_open: str) -> dict[str, str]:
@@ -94,8 +112,7 @@ def _parse_collection_body(body: str) -> Collection:
             break
         tag = m.group("tag").lower()
         inner_body = m.group("body") or ""
-        tag_open = body[m.start() : m.start() + body[m.start() : m.end()].find(">") + 1]
-        attrs = _parse_attrs(tag_open)
+        attrs = _parse_attrs(m.group("attrs") or "")
         if tag == "point":
             obj = _parse_point_body(inner_body)
         elif tag == "point_box":
@@ -177,8 +194,7 @@ def parse_text(text: str) -> list[dict[str, Any]]:
             )
         tag = m.group("tag").lower()
         inner_body = m.group("body") or ""
-        tag_open = text[m.start() : m.start() + text[m.start() : m.end()].find(">") + 1]
-        attrs = _parse_attrs(tag_open)
+        attrs = _parse_attrs(m.group("attrs") or "")
         if tag == "point":
             obj = _parse_point_body(inner_body)
             kind = "point"
@@ -272,4 +288,57 @@ def extract_points(text: str, expected: Literal["point", "box", "polygon"] | Non
 
 def strip_tags(text: str) -> str:
     """Remove all canonical tags and return plain text only."""
-    return re.sub(_FULL_TAG, "", text)
+    text = re.sub(_FULL_TAG, "", text)
+    return _CLIP_TAG.sub("", text)
+
+
+# ---------------------------------------------------------------------------
+# Clip parsing (self-closing <clip /> tags with mention + t attributes)
+# ---------------------------------------------------------------------------
+
+
+def _parse_clip_t(attrs: str) -> ClipTimestamp | None:
+    """Parse the ``t`` attribute. One number → moment; two → range. Trailing units (e.g., "seconds") are ignored."""
+
+    m = _T_VALUE.search(attrs)
+    if not m:
+        return None
+    value = m.group(1) if m.group(1) is not None else m.group(2)
+    nums: list[float] = []
+    for token in value.split():
+        try:
+            nums.append(float(token))
+        except ValueError:
+            continue
+    if len(nums) == 1:
+        return ClipTimestamp(at=nums[0])
+    if len(nums) >= BOX_MIN_POINTS:
+        return ClipTimestamp(at=nums[0], until=nums[1])
+    return None
+
+
+def extract_clips(text: str) -> list[Clip]:
+    """Extract ``<clip />`` annotations. Clips inside a ``<collection>`` inherit the parent ``mention`` when unset."""
+
+    results: list[Clip] = []
+
+    def _on_collection(match: re.Match[str]) -> str:
+        parent_mention = _parse_attrs(match.group("attrs") or "").get("mention")
+        for inner in _CLIP_TAG.finditer(match.group("body")):
+            inner_attrs = _parse_attrs(inner.group("attrs"))
+            ts = _parse_clip_t(inner.group("attrs"))
+            if ts is None:
+                continue
+            results.append(Clip(timestamp=ts, mention=inner_attrs.get("mention") or parent_mention))
+        return ""
+
+    remaining = _COLLECTION_TAG.sub(_on_collection, text)
+
+    for m in _CLIP_TAG.finditer(remaining):
+        attrs = _parse_attrs(m.group("attrs"))
+        ts = _parse_clip_t(m.group("attrs"))
+        if ts is None:
+            continue
+        results.append(Clip(timestamp=ts, mention=attrs.get("mention")))
+
+    return results

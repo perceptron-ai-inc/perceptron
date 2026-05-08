@@ -21,7 +21,7 @@ from . import caption as caption_image
 from . import detect as detect_image
 from . import ocr as ocr_image
 from . import question as question_image
-from .pointing.types import BoundingBox, Collection, Polygon, SinglePoint
+from .pointing.types import BoundingBox, Clip, Collection, Polygon, SinglePoint
 
 console = Console()
 app = typer.Typer(help="Interact with the Perceptron SDK and models.")
@@ -56,6 +56,7 @@ class ExpectationType(str, Enum):
     POINT = "point"
     BOX = "box"
     POLYGON = "polygon"
+    CLIP = "clip"
     THINK = "think"
 
 
@@ -119,10 +120,17 @@ def _serialize_annotation(annotation: Any) -> Any:
         if annotation.t is not None:
             data["t"] = annotation.t
         return data
+    if isinstance(annotation, Clip):
+        data = {"type": "clip", "at": annotation.timestamp.at}
+        if annotation.timestamp.until is not None:
+            data["until"] = annotation.timestamp.until
+        if annotation.mention is not None:
+            data["mention"] = annotation.mention
+        return data
     return annotation
 
 
-_BUCKET_BY_EXPECTS = {"point": "points", "box": "boxes", "polygon": "polygons"}
+_BUCKET_BY_EXPECTS = {"point": "points", "box": "boxes", "polygon": "polygons", "clip": "clips"}
 
 
 def _serialize_points(points: list[Any] | None) -> list[Any] | None:

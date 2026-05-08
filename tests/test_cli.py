@@ -11,7 +11,7 @@ from perceptron.cli import (
     _stream_render,
     app,
 )
-from perceptron.pointing.types import BoundingBox, Polygon, SinglePoint
+from perceptron.pointing.types import BoundingBox, Clip, ClipTimestamp, Polygon, SinglePoint
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +29,7 @@ class _StubResult(PerceiveResult):
             points=None,
             boxes=None,
             polygons=None,
+            clips=None,
             parsed=None,
             reasoning=None,
             usage=None,
@@ -279,6 +280,30 @@ def test_question_command_point_json_emits_points_key(monkeypatch):
     assert payload["points"][0]["type"] == "point"
     assert "boxes" not in payload
     assert "polygons" not in payload
+
+
+def test_question_command_clip_json_emits_clips_key(monkeypatch):
+    res = _StubResult("scene")
+    res.clips = [Clip(timestamp=ClipTimestamp(at=1.5), mention="intro")]
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: res)
+    result = runner.invoke(
+        app,
+        [
+            "question",
+            "https://example.com/clip.mp4",
+            "When does the intro happen?",
+            "--expects",
+            "clip",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["clips"][0]["type"] == "clip"
+    assert payload["clips"][0]["mention"] == "intro"
+    assert "boxes" not in payload
+    assert "points" not in payload
 
 
 def test_question_command_polygon_json_emits_polygons_key(monkeypatch):

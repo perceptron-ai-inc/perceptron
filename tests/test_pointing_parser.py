@@ -44,6 +44,16 @@ def test_strip_tags():
     assert "<point" not in stripped and "</point>" not in stripped
 
 
+def test_extract_box_with_gt_in_mention():
+    """Quoted ``>`` characters inside an attribute should not terminate the tag early."""
+
+    text = '<point_box mention="a > b"> (10,20) (30,40) </point_box>'
+    boxes = extract_points(text, expected="box")
+    assert len(boxes) == 1
+    assert boxes[0].mention == "a > b"
+    assert boxes[0].top_left.x == 10 and boxes[0].bottom_right.x == 30
+
+
 def test_point_parser_escapes_and_parses_mentions():
     pt = SinglePoint(1, 2, mention='door "A" & B', t=1.5)
     tag = PointParser.serialize(pt)

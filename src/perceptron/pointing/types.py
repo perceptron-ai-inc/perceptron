@@ -65,6 +65,30 @@ class Collection:
         return f"Collection(points={len(self.points)}, mention={self.mention!r}, t={self.t})"
 
 
+@dataclass(eq=True)
+class ClipTimestamp:
+    """Time anchor for a video clip. ``until is None`` ⇔ moment; otherwise a range [at, until]."""
+
+    at: float
+    until: float | None = None
+
+    def __repr__(self) -> str:
+        if self.until is None:
+            return f"ClipTimestamp(at={self.at})"
+        return f"ClipTimestamp(at={self.at}, until={self.until})"
+
+
+@dataclass(eq=True)
+class Clip:
+    timestamp: ClipTimestamp
+    mention: str | None = None
+
+    def __repr__(self) -> str:
+        if self.mention is None:
+            return f"Clip(timestamp={self.timestamp!r})"
+        return f"Clip(timestamp={self.timestamp!r}, mention={self.mention!r})"
+
+
 # Convenience constructors for annotations/examples
 def pt(x: int, y: int, *, mention: str | None = None) -> SinglePoint:
     return SinglePoint(x=x, y=y, mention=mention)
@@ -85,3 +109,7 @@ def collection(
     t: float | None = None,
 ) -> Collection:
     return Collection(points=list(points), mention=mention, t=t)
+
+
+def clip(at: float, until: float | None = None, *, mention: str | None = None) -> Clip:
+    return Clip(timestamp=ClipTimestamp(at=at, until=until), mention=mention)
