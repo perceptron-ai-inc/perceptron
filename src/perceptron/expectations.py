@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .errors import BadRequestError
 
-STRUCTURED_EXPECTATIONS: frozenset[str] = frozenset({"point", "box", "polygon"})
+STRUCTURED_EXPECTATIONS: frozenset[str] = frozenset({"point", "box", "polygon", "clip"})
 REASONING_EXPECTATIONS: frozenset[str] = frozenset({"think"})
 TEXT_EXPECTATIONS: frozenset[str] = frozenset({"text"})
 VALID_EXPECTATIONS: frozenset[str] = frozenset(

@@ -31,10 +31,15 @@ from .errors import (
     TransportError,
 )
 from .expectations import STRUCTURED_EXPECTATIONS
-from .pointing.parser import extract_points, parse_text
+from .pointing.parser import extract_clips, extract_points, parse_text
 
-# Maps each spatial `expects` value to the PerceiveResult bucket it populates.
-_BUCKET_BY_EXPECTS = {"point": "points", "box": "boxes", "polygon": "polygons"}
+# Maps each structured `expects` value to (PerceiveResult bucket name, extractor).
+_BUCKET_BY_EXPECTS = {
+    "point": ("points", lambda c: extract_points(c, expected="point")),
+    "box": ("boxes", lambda c: extract_points(c, expected="box")),
+    "polygon": ("polygons", lambda c: extract_points(c, expected="polygon")),
+    "clip": ("clips", extract_clips),
+}
 
 # ---------------------------------------------------------------------------
 # Response format types for constrained decoding
@@ -176,12 +181,10 @@ class _StreamProcessor:
         reasoning = self._reasoning or None
         result: dict[str, Any] = {"text": content, "reasoning": reasoning, "raw": None}
         expects = self._expects
-        parsed_segments: list[dict[str, Any]] | None = None
         if expects in _BUCKET_BY_EXPECTS and self._parsing_enabled and isinstance(content, str):
-            parsed_segments = parse_text(content)
-            bucket = _BUCKET_BY_EXPECTS[expects]
-            result[bucket] = [seg["value"] for seg in parsed_segments if seg["kind"] == expects]
-            result["parsed"] = parsed_segments
+            bucket_name, extract = _BUCKET_BY_EXPECTS[expects]
+            result[bucket_name] = extract(content)
+            result["parsed"] = parse_text(content)
         issues: list[dict[str, Any]] = []
         if not self._parsing_enabled:
             issues.append(
@@ -759,8 +762,8 @@ class _ClientCore:
 
         result: dict[str, Any] = {"text": content, "reasoning": reasoning_content, "raw": data}
         if expects in _BUCKET_BY_EXPECTS and isinstance(content, str):
-            bucket = _BUCKET_BY_EXPECTS[expects]
-            result[bucket] = extract_points(content, expected=expects)
+            bucket_name, extract = _BUCKET_BY_EXPECTS[expects]
+            result[bucket_name] = extract(content)
             result["parsed"] = parse_text(content)
         return result
 
