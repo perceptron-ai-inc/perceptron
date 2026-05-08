@@ -63,6 +63,20 @@ def test_extract_clip_skips_missing_timestamp():
     assert extract_clips(text) == []
 
 
+def test_extract_clip_with_gt_in_mention():
+    """Quoted ``>`` characters inside mention shouldn't terminate the regex early."""
+
+    text = '<clip mention="a > b" t=1.0/>'
+    assert extract_clips(text) == [Clip(timestamp=ClipTimestamp(at=1.0), mention="a > b")]
+
+
+def test_extract_clip_with_self_close_in_mention():
+    """Quoted ``/>`` inside mention shouldn't be confused with the tag terminator."""
+
+    text = '<clip mention="x/>" t=2.0/>'
+    assert extract_clips(text) == [Clip(timestamp=ClipTimestamp(at=2.0), mention="x/>")]
+
+
 def test_extract_clip_in_collection_inherits_mention():
     text = (
         '<collection mention="parent">'

@@ -31,17 +31,25 @@ _WS = r"\s*"
 _NUM = r"(?:\d+)"
 _PT = rf"\({_WS}({_NUM}){_WS},{_WS}({_NUM}){_WS}\)"
 
-_ATTR = r"(?:\s+[^>]+)?"  # we ignore unknown attrs; mention/t handled in parse
+# Tag attributes — sequence of either a complete quoted string (which may contain
+# `>` characters) or a single non-quote/non-`>` character. The leading `\b` on
+# the tag name keeps `<point` from matching `<point_box`.
+_ATTRS = r'(?P<attrs>(?:"[^"]*"|[^>"])*)'
 _FULL_TAG = re.compile(
-    rf"<(?P<tag>point|point_box|polygon|collection){_ATTR}>(?P<body>[\s\S]*?)</(?P=tag)>",
+    rf"<(?P<tag>point|point_box|polygon|collection)\b{_ATTRS}>(?P<body>[\s\S]*?)</(?P=tag)>",
     re.IGNORECASE,
 )
 # Self-closing <clip mention=... t=... /> — clips have no body, just attributes.
-_CLIP_TAG = re.compile(r"<clip\b\s*(?P<attrs>[^>]*?)\s*/>", re.IGNORECASE)
+# Quoted values may contain `>` or `/>`, so attrs is a sequence of either a complete
+# quoted string or a single non-quote/non-`>` character.
+_CLIP_TAG = re.compile(
+    r'<clip\b(?P<attrs>(?:"[^"]*"|[^>"])*?)\s*/>',
+    re.IGNORECASE,
+)
 # Standalone <collection> regex used during clip extraction so clips inside a
 # collection inherit the parent mention.
 _COLLECTION_TAG = re.compile(
-    rf"<collection{_ATTR}>(?P<body>[\s\S]*?)</collection>",
+    rf"<collection\b{_ATTRS}>(?P<body>[\s\S]*?)</collection>",
     re.IGNORECASE,
 )
 # Accept t=1.5, t="1.5", t="1.5 seconds", t="1.5 2.0", t="1.5 seconds 2.0 seconds".
@@ -104,8 +112,7 @@ def _parse_collection_body(body: str) -> Collection:
             break
         tag = m.group("tag").lower()
         inner_body = m.group("body") or ""
-        tag_open = body[m.start() : m.start() + body[m.start() : m.end()].find(">") + 1]
-        attrs = _parse_attrs(tag_open)
+        attrs = _parse_attrs(m.group("attrs") or "")
         if tag == "point":
             obj = _parse_point_body(inner_body)
         elif tag == "point_box":
@@ -187,8 +194,7 @@ def parse_text(text: str) -> list[dict[str, Any]]:
             )
         tag = m.group("tag").lower()
         inner_body = m.group("body") or ""
-        tag_open = text[m.start() : m.start() + text[m.start() : m.end()].find(">") + 1]
-        attrs = _parse_attrs(tag_open)
+        attrs = _parse_attrs(m.group("attrs") or "")
         if tag == "point":
             obj = _parse_point_body(inner_body)
             kind = "point"
@@ -317,8 +323,7 @@ def extract_clips(text: str) -> list[Clip]:
     results: list[Clip] = []
 
     def _on_collection(match: re.Match[str]) -> str:
-        coll_open = text[match.start() : match.start() + (text[match.start() : match.end()].find(">") + 1)]
-        parent_mention = _parse_attrs(coll_open).get("mention")
+        parent_mention = _parse_attrs(match.group("attrs") or "").get("mention")
         for inner in _CLIP_TAG.finditer(match.group("body")):
             inner_attrs = _parse_attrs(inner.group("attrs"))
             ts = _parse_clip_t(inner.group("attrs"))
