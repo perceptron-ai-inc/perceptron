@@ -4,8 +4,14 @@ import pytest
 from typer.testing import CliRunner
 
 from perceptron import PerceiveResult
-from perceptron.cli import app
-from perceptron.pointing.types import BoundingBox, SinglePoint
+from perceptron.cli import (
+    OutputFormat,
+    _bucket_for_expects,
+    _coerce_result_dict,
+    _stream_render,
+    app,
+)
+from perceptron.pointing.types import BoundingBox, Polygon, SinglePoint
 
 
 @pytest.fixture(autouse=True)
@@ -224,3 +230,197 @@ def test_config_command():
     assert result.exit_code == 0
     assert "PERCEPTRON_PROVIDER=fal" in result.stdout
     assert "PERCEPTRON_API_KEY=abc" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Per-kind JSON output coverage
+# ---------------------------------------------------------------------------
+
+
+def test_caption_command_box_json_emits_boxes_key(monkeypatch):
+    res = _StubResult("describe")
+    res.boxes = [
+        BoundingBox(
+            top_left=SinglePoint(10, 20, mention="lamp"),
+            bottom_right=SinglePoint(30, 40),
+            mention="lamp",
+        )
+    ]
+    monkeypatch.setattr("perceptron.cli.caption_image", lambda *a, **k: res)
+    result = runner.invoke(
+        app,
+        ["caption", "https://example.com/img", "--expects", "box", "--format", "json"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["boxes"][0]["type"] == "box"
+    assert "points" not in payload
+    assert "polygons" not in payload
+
+
+def test_question_command_point_json_emits_points_key(monkeypatch):
+    res = _StubResult("center")
+    res.points = [SinglePoint(50, 60, mention="middle")]
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: res)
+    result = runner.invoke(
+        app,
+        [
+            "question",
+            "https://example.com/img",
+            "Where is the center?",
+            "--expects",
+            "point",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["points"][0]["type"] == "point"
+    assert "boxes" not in payload
+    assert "polygons" not in payload
+
+
+def test_question_command_polygon_json_emits_polygons_key(monkeypatch):
+    res = _StubResult("region")
+    res.polygons = [
+        Polygon(
+            hull=[SinglePoint(0, 0), SinglePoint(10, 0), SinglePoint(5, 10)],
+            mention="hull",
+        )
+    ]
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: res)
+    result = runner.invoke(
+        app,
+        [
+            "question",
+            "https://example.com/img",
+            "Outline the region.",
+            "--expects",
+            "polygon",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["polygons"][0]["type"] == "polygon"
+    assert "boxes" not in payload
+    assert "points" not in payload
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def test_bucket_for_expects_routes_each_kind():
+    res = _StubResult("x")
+    res.points = [SinglePoint(1, 1)]
+    res.boxes = [BoundingBox(top_left=SinglePoint(0, 0), bottom_right=SinglePoint(2, 2))]
+    res.polygons = [Polygon(hull=[SinglePoint(0, 0), SinglePoint(2, 0), SinglePoint(1, 2)])]
+
+    assert _bucket_for_expects(res, "point") == ("points", res.points)
+    assert _bucket_for_expects(res, "box") == ("boxes", res.boxes)
+    assert _bucket_for_expects(res, "polygon") == ("polygons", res.polygons)
+
+
+def test_bucket_for_expects_returns_none_for_unsupported():
+    res = _StubResult("x")
+    res.boxes = [BoundingBox(top_left=SinglePoint(0, 0), bottom_right=SinglePoint(1, 1))]
+
+    # `text`/`think`/None aren't in the bucket map.
+    assert _bucket_for_expects(res, "text") is None
+    assert _bucket_for_expects(res, "think") is None
+    assert _bucket_for_expects(res, None) is None
+
+
+def test_bucket_for_expects_returns_none_when_bucket_empty():
+    res = _StubResult("x")
+    # boxes is None — nothing to surface.
+    assert _bucket_for_expects(res, "box") is None
+
+
+def test_coerce_result_dict_normalizes_all_buckets():
+    box = BoundingBox(top_left=SinglePoint(1, 1), bottom_right=SinglePoint(2, 2))
+    coerced = _coerce_result_dict({"text": "hi", "boxes": [box]})
+
+    # All three bucket fields are present (None for missing ones).
+    assert coerced["text"] == "hi"
+    assert coerced["boxes"] == [box]
+    assert coerced["points"] is None
+    assert coerced["polygons"] is None
+    assert coerced["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# Streaming
+# ---------------------------------------------------------------------------
+
+
+def test_stream_render_routes_box_final_event_into_boxes_bucket(monkeypatch):
+    """Streaming `final` event with a `boxes` field should reach the JSON output under `boxes`."""
+
+    box = BoundingBox(
+        top_left=SinglePoint(1, 2, mention="cat"),
+        bottom_right=SinglePoint(3, 4),
+        mention="cat",
+    )
+    events = [
+        {"type": "text.delta", "chunk": "found one"},
+        {"type": "final", "result": {"text": "found one", "boxes": [box]}},
+    ]
+
+    captured: dict[str, object] = {}
+
+    def _fake_print_json(*, data):
+        captured["payload"] = data
+
+    monkeypatch.setattr("perceptron.cli.console.print_json", _fake_print_json)
+
+    _stream_render(
+        iter(events),
+        title="Detect",
+        output_format=OutputFormat.JSON,
+        show_raw=False,
+        show_points_table=True,
+        expects="box",
+    )
+
+    payload = captured["payload"]
+    assert payload["text"] == "found one"
+    assert payload["boxes"][0]["type"] == "box"
+    assert "points" not in payload
+    assert "polygons" not in payload
+
+
+def test_stream_render_buffers_points_delta_into_correct_bucket(monkeypatch):
+    """Buffered `points.delta` events should be surfaced under the bucket matching `expects`."""
+
+    poly = Polygon(hull=[SinglePoint(0, 0), SinglePoint(10, 0), SinglePoint(5, 10)])
+    events = [
+        {"type": "points.delta", "points": [poly]},
+        {"type": "text.delta", "chunk": "ok"},
+        # No `final` event; render falls back to the buffered points.
+    ]
+
+    captured: dict[str, object] = {}
+
+    def _fake_print_json(*, data):
+        captured["payload"] = data
+
+    monkeypatch.setattr("perceptron.cli.console.print_json", _fake_print_json)
+
+    _stream_render(
+        iter(events),
+        title="Question",
+        output_format=OutputFormat.JSON,
+        show_raw=False,
+        show_points_table=False,
+        expects="polygon",
+    )
+
+    payload = captured["payload"]
+    assert payload["polygons"][0]["type"] == "polygon"
+    assert "points" not in payload
+    assert "boxes" not in payload
