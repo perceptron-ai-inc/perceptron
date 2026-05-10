@@ -67,6 +67,26 @@ def test_select_model_accepts_qwen_for_perceptron():
     assert resolved == "qwen3-vl-235b-a22b-thinking"
 
 
+def test_select_model_accepts_isaac_0_3_max_for_perceptron():
+    perceptron_cfg = {"name": "perceptron", **_PROVIDER_CONFIG["perceptron"]}
+    resolved = _select_model(perceptron_cfg, "isaac-0.3-max")
+    assert resolved == "isaac-0.3-max"
+
+
+def test_select_model_rejects_isaac_0_3_max_for_fal():
+    fal_cfg = {"name": "fal", **_PROVIDER_CONFIG["fal"]}
+    with pytest.raises(BadRequestError):
+        _select_model(fal_cfg, "isaac-0.3-max")
+
+
+def test_isaac_0_3_max_models_entry_supports_reasoning_and_focus():
+    perceptron_cfg = _PROVIDER_CONFIG["perceptron"]
+    entry = perceptron_cfg["models"]["isaac-0.3-max"]
+    assert entry["reasoning"] is True
+    assert entry["focus"] is True
+    assert entry["skip_structured_hints"] is False
+
+
 def test_detect_qwen_prompt_reports_json_bbox():
     categories = [
         "plate/dish",

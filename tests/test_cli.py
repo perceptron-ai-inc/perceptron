@@ -8,9 +8,14 @@ from perceptron.cli import (
     OutputFormat,
     _bucket_for_expects,
     _coerce_result_dict,
+    _describe_point,
+    _looks_like_video,
+    _make_media_node,
     _stream_render,
     app,
 )
+from perceptron.dsl.nodes import Image as ImageNode
+from perceptron.dsl.nodes import Video as VideoNode
 from perceptron.pointing.types import BoundingBox, Clip, ClipTimestamp, Polygon, SinglePoint
 
 
@@ -72,9 +77,10 @@ def test_caption_command_directory(monkeypatch, tmp_path):
     (tmp_path / "notes.txt").write_text("ignore me")
 
     def _fake_caption(data, **kwargs):
-        if data == b"image-one":
+        assert isinstance(data, ImageNode)
+        if data.obj == b"image-one":
             return _StubResult("caption-one")
-        if data == b"image-two":
+        if data.obj == b"image-two":
             return _StubResult("caption-two")
         raise AssertionError("unexpected payload")
 
@@ -104,9 +110,10 @@ def test_ocr_command_directory(monkeypatch, tmp_path):
     img2.write_bytes(b"image-two")
 
     def _fake_ocr(data, *, prompt=None):
-        if data == b"image-one":
+        assert isinstance(data, ImageNode)
+        if data.obj == b"image-one":
             return _StubResult("ocr-one")
-        if data == b"image-two":
+        if data.obj == b"image-two":
             return _StubResult("ocr-two")
         raise AssertionError("unexpected payload")
 
@@ -142,7 +149,8 @@ def test_detect_command_directory(monkeypatch, tmp_path):
 
     def _fake_detect(data, *, classes=None):
         assert classes == ["person"]
-        res = _StubResult("detected-one" if data == b"image-one" else "detected-two")
+        assert isinstance(data, ImageNode)
+        res = _StubResult("detected-one" if data.obj == b"image-one" else "detected-two")
         res.boxes = [
             BoundingBox(
                 top_left=SinglePoint(1, 2, mention="person"),
@@ -502,3 +510,108 @@ def test_stream_render_final_text_overrides_buffer(monkeypatch):
     )
 
     assert captured["payload"]["text"] == "authoritative"
+
+
+# ---------------------------------------------------------------------------
+# Media-aware CLI helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        "clip.mp4",
+        "/local/path/clip.mp4",
+        "https://example.com/clip.mp4",
+        "https://example.com/clip.mp4?token=abc",
+        "https://example.com/clip.mp4#fragment",
+        "CLIP.MP4",  # case-insensitive
+    ],
+)
+def test_looks_like_video_recognizes_mp4(media):
+    assert _looks_like_video(media) is True
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        "image.jpg",
+        "/local/path/image.png",
+        "https://example.com/image.webp",
+        "no-extension",
+    ],
+)
+def test_looks_like_video_rejects_non_video(media):
+    assert _looks_like_video(media) is False
+
+
+def test_make_media_node_wraps_video_for_mp4_url():
+    node = _make_media_node("https://example.com/clip.mp4", "https://example.com/clip.mp4")
+    assert isinstance(node, VideoNode)
+
+
+def test_make_media_node_wraps_image_for_png():
+    node = _make_media_node("https://example.com/img.png", "https://example.com/img.png")
+    assert isinstance(node, ImageNode)
+
+
+def test_question_command_passes_video_node_to_sdk(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _capture(media, prompt, **kwargs):
+        captured["media"] = media
+        captured["prompt"] = prompt
+        return _StubResult("ok")
+
+    monkeypatch.setattr("perceptron.cli.question_image", _capture)
+    result = runner.invoke(app, ["question", "https://example.com/clip.mp4", "What happens?"])
+    assert result.exit_code == 0
+    assert isinstance(captured["media"], VideoNode)
+
+
+def test_question_command_passes_image_node_to_sdk(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _capture(media, prompt, **kwargs):
+        captured["media"] = media
+        return _StubResult("ok")
+
+    monkeypatch.setattr("perceptron.cli.question_image", _capture)
+    result = runner.invoke(app, ["question", "https://example.com/img.png", "What is shown?"])
+    assert result.exit_code == 0
+    assert isinstance(captured["media"], ImageNode)
+
+
+def test_describe_point_renders_clip_moment():
+    kind, coords, mention = _describe_point(Clip(timestamp=ClipTimestamp(at=1.5), mention="intro"))
+    assert kind == "clip"
+    assert coords == "@1.50s"
+    assert mention == "intro"
+
+
+def test_describe_point_renders_clip_range():
+    kind, coords, mention = _describe_point(Clip(timestamp=ClipTimestamp(at=2.0, until=4.5), mention="hook"))
+    assert kind == "clip"
+    assert coords == "2.00s → 4.50s"
+    assert mention == "hook"
+
+
+def test_question_command_clip_text_renders_clips_table(monkeypatch):
+    res = _StubResult("found it")
+    res.clips = [Clip(timestamp=ClipTimestamp(at=3.0, until=5.0), mention="shot")]
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: res)
+    result = runner.invoke(
+        app,
+        [
+            "question",
+            "https://example.com/clip.mp4",
+            "When does the shot happen?",
+            "--expects",
+            "clip",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Clips" in result.stdout
+    assert "3.00s" in result.stdout
+    assert "5.00s" in result.stdout
+    assert "shot" in result.stdout
