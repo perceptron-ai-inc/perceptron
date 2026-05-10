@@ -19,8 +19,10 @@ from rich.text import Text
 
 from . import caption as caption_image
 from . import detect as detect_image
+from . import image as image_node
 from . import ocr as ocr_image
 from . import question as question_image
+from . import video as video_node
 from .pointing.types import BoundingBox, Clip, Collection, Polygon, SinglePoint
 
 console = Console()
@@ -38,6 +40,8 @@ _IMAGE_EXTENSIONS = {
     ".heic",
     ".heif",
 }
+
+_VIDEO_EXTENSIONS = {".mp4"}
 
 _OUTPUT_FILENAMES = {
     "caption": "captions.json",
@@ -60,15 +64,36 @@ class ExpectationType(str, Enum):
     THINK = "think"
 
 
-def _resolve_image(image: str) -> str | bytes:
-    if image.startswith(("http://", "https://")):
-        return image
-    path = Path(image)
+def _resolve_media(media: str) -> str | bytes:
+    """Resolve a media argument to a URL string or local-file bytes."""
+
+    if media.startswith(("http://", "https://")):
+        return media
+    path = Path(media)
     if path.is_dir():
-        raise ValueError(f"Expected image file, received directory: {image}")
+        raise ValueError(f"Expected media file, received directory: {media}")
     if path.exists():
         return path.read_bytes()
-    return image
+    return media
+
+
+# Back-compat alias for callers that still want image-only resolution semantics.
+_resolve_image = _resolve_media
+
+
+def _looks_like_video(media: str) -> bool:
+    """True if the path or URL ends with a known video extension."""
+
+    base = media.lower().split("?", 1)[0].split("#", 1)[0]
+    return any(base.endswith(ext) for ext in _VIDEO_EXTENSIONS)
+
+
+def _make_media_node(media_input: str, media_data: str | bytes):
+    """Wrap resolved media data in `image()` or `video()` based on the input's extension."""
+
+    if _looks_like_video(media_input):
+        return video_node(media_data)
+    return image_node(media_data)
 
 
 def _iter_image_files(directory: Path) -> Iterable[Path]:
@@ -345,6 +370,10 @@ def _describe_point(point: Any) -> tuple[str, str, str]:
         return ("polygon", coords, point.mention or "")
     if isinstance(point, Collection):
         return ("collection", f"{len(point.points)} items", point.mention or "")
+    if isinstance(point, Clip):
+        ts = point.timestamp
+        coords = f"@{ts.at:.2f}s" if ts.until is None else f"{ts.at:.2f}s → {ts.until:.2f}s"
+        return ("clip", coords, point.mention or "")
     return (type(point).__name__, str(point), getattr(point, "mention", "") or "")
 
 
@@ -607,6 +636,16 @@ def _render_result(
         for point in items:
             table.add_row(str(point), getattr(point, "mention", ""))
         console.print(table)
+    elif expects == "clip" and populated is not None:
+        _, items = populated
+        table = Table(title="Clips", show_header=True, header_style="bold blue")
+        table.add_column("type")
+        table.add_column("timestamp")
+        table.add_column("mention")
+        for clip in items:
+            kind, coords, mention = _describe_point(clip)
+            table.add_row(kind, coords, mention)
+        console.print(table)
     elif populated is not None:
         bucket_name, items = populated
         console.print_json(data={bucket_name: _serialize_points(items)})
@@ -643,7 +682,7 @@ def config(
 
 @app.command()
 def caption(
-    image: str = typer.Argument(..., help="Image path or URL."),
+    media: str = typer.Argument(..., help="Image or video path or URL."),
     style: str = typer.Option("concise", help="Captioning style."),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
@@ -658,33 +697,34 @@ def caption(
         ExpectationType.BOX,
         "--expects",
         case_sensitive=False,
-        help="Expected output structure (text, point, box, polygon, or think).",
+        help="Expected output structure (text, point, box, polygon, clip, or think).",
     ),
 ):
     """Generate captions using the high-level helper."""
 
-    path = Path(image)
+    path = Path(media)
     if path.is_dir():
         _process_directory(
             path,
             command_name="caption",
             stream=stream,
             show_raw=show_raw,
-            runner=lambda data: caption_image(data, style=style, expects=expects.value),
+            runner=lambda data: caption_image(image_node(data), style=style, expects=expects.value),
             payload_factory=lambda result: _caption_payload(result, expects=expects.value),
         )
         return
 
     try:
-        img = _resolve_image(image)
+        media_data = _resolve_media(media)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    node = _make_media_node(media, media_data)
     expects_value = expects.value
 
     if stream:
         _stream_render(
-            caption_image(img, style=style, expects=expects_value, stream=True),
+            caption_image(node, style=style, expects=expects_value, stream=True),
             title="Caption",
             output_format=output_format,
             show_raw=show_raw,
@@ -693,7 +733,7 @@ def caption(
         )
         return
 
-    res = caption_image(img, style=style, expects=expects_value)
+    res = caption_image(node, style=style, expects=expects_value)
     _render_result(
         res,
         title="Caption",
@@ -717,7 +757,7 @@ def ocr(
         help="Output format (text or json).",
     ),
 ):
-    """Run OCR via the high-level helper."""
+    """Run OCR via the high-level helper. Image inputs only."""
 
     path = Path(image)
     if path.is_dir():
@@ -726,13 +766,13 @@ def ocr(
             command_name="ocr",
             stream=False,
             show_raw=show_raw,
-            runner=lambda data: ocr_image(data, prompt=prompt),
+            runner=lambda data: ocr_image(image_node(data), prompt=prompt),
             payload_factory=_ocr_payload,
         )
         return
 
-    img = _resolve_image(image)
-    res = ocr_image(img, prompt=prompt)
+    img_data = _resolve_media(image)
+    res = ocr_image(image_node(img_data), prompt=prompt)
     _render_result(
         res,
         title="OCR",
@@ -755,7 +795,7 @@ def detect(
     ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
 ):
-    """Run detection via the high-level helper."""
+    """Run detection via the high-level helper. Image inputs only."""
 
     class_list = [c.strip() for c in classes.split(",")] if classes else None
     path = Path(image)
@@ -765,15 +805,16 @@ def detect(
             command_name="detect",
             stream=False,
             show_raw=show_raw,
-            runner=lambda data: detect_image(data, classes=class_list),
+            runner=lambda data: detect_image(image_node(data), classes=class_list),
             payload_factory=_detect_payload,
         )
         return
 
-    img = _resolve_image(image)
+    img_data = _resolve_media(image)
+    node = image_node(img_data)
     if stream:
         _stream_render(
-            detect_image(img, classes=class_list, stream=True),
+            detect_image(node, classes=class_list, stream=True),
             title="Detect",
             output_format=output_format,
             show_raw=show_raw,
@@ -781,7 +822,7 @@ def detect(
             expects="box",
         )
         return
-    res = detect_image(img, classes=class_list)
+    res = detect_image(node, classes=class_list)
     _render_result(
         res,
         title="Detect",
@@ -794,13 +835,13 @@ def detect(
 
 @app.command()
 def question(
-    image: str = typer.Argument(..., help="Image path or URL."),
-    prompt: str = typer.Argument(..., help="Question to answer about the image."),
+    media: str = typer.Argument(..., help="Image or video path or URL."),
+    prompt: str = typer.Argument(..., help="Question to answer about the media."),
     expects: ExpectationType = typer.Option(
         ExpectationType.TEXT,
         "--expects",
         case_sensitive=False,
-        help="Expected output structure (text, point, box, polygon, or think).",
+        help="Expected output structure (text, point, box, polygon, clip, or think).",
     ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
@@ -812,22 +853,23 @@ def question(
         help="Output format (text or json).",
     ),
 ):
-    """Answer a question about an image."""
+    """Answer a question about an image or video."""
 
-    path = Path(image)
+    path = Path(media)
     if path.is_dir():
         raise typer.BadParameter("Directory mode is not supported for 'question'.")
 
     try:
-        img = _resolve_image(image)
+        media_data = _resolve_media(media)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
+    node = _make_media_node(media, media_data)
     expects_value = expects.value
 
     if stream:
         _stream_render(
-            question_image(img, prompt, expects=expects_value, stream=True),
+            question_image(node, prompt, expects=expects_value, stream=True),
             title="Question",
             output_format=output_format,
             show_raw=show_raw,
@@ -836,7 +878,7 @@ def question(
         )
         return
 
-    res = question_image(img, prompt, expects=expects_value)
+    res = question_image(node, prompt, expects=expects_value)
     show_points = expects in {
         ExpectationType.POINT,
         ExpectationType.BOX,
