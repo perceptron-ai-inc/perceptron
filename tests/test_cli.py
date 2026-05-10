@@ -11,6 +11,7 @@ from perceptron.cli import (
     _describe_point,
     _looks_like_video,
     _make_media_node,
+    _resolve_media,
     _stream_render,
     app,
 )
@@ -594,6 +595,18 @@ def test_describe_point_renders_clip_range():
     assert kind == "clip"
     assert coords == "2.00s → 4.50s"
     assert mention == "hook"
+
+
+def test_resolve_media_rejects_directory(tmp_path):
+    """_resolve_media raises ValueError when given a directory."""
+    with pytest.raises(ValueError, match="Expected media file"):
+        _resolve_media(str(tmp_path))
+
+
+def test_question_command_rejects_directory(tmp_path):
+    """The question CLI command bails when given a directory (BadParameter -> exit code 2)."""
+    result = runner.invoke(app, ["question", str(tmp_path), "What is shown?"])
+    assert result.exit_code == 2
 
 
 def test_question_command_clip_text_renders_clips_table(monkeypatch):
