@@ -506,11 +506,17 @@ _PROVIDER_CONFIG = {
         "auth_prefix": "Bearer ",
         "env_keys": ["PERCEPTRON_API_KEY"],
         "default_model": "isaac-0.1",
-        "supported_models": ["isaac-0.1", "isaac-0.2-1b", "isaac-0.2-2b-preview"],
+        "supported_models": [
+            "isaac-0.1",
+            "isaac-0.2-1b",
+            "isaac-0.2-2b-preview",
+            "isaac-0.3-max",
+        ],
         "models": {
             "isaac-0.1": {"reasoning": False, "skip_structured_hints": False, "focus": False},
             "isaac-0.2-1b": {"reasoning": True, "skip_structured_hints": False, "focus": True},
             "isaac-0.2-2b-preview": {"reasoning": True, "skip_structured_hints": False, "focus": True},
+            "isaac-0.3-max": {"reasoning": True, "skip_structured_hints": False, "focus": True},
         },
         "stream": True,
     },
