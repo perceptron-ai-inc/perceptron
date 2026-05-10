@@ -77,10 +77,6 @@ def _resolve_media(media: str) -> str | bytes:
     return media
 
 
-# Back-compat alias for callers that still want image-only resolution semantics.
-_resolve_image = _resolve_media
-
-
 def _looks_like_video(media: str) -> bool:
     """True if the path or URL ends with a known video extension."""
 
