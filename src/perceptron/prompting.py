@@ -171,62 +171,12 @@ _ISAAC_PROFILE = HighLevelPromptProfile(
     ),
 )
 
-_QWEN_PROFILE = HighLevelPromptProfile(
-    key="qwen3-vl-235b-a22b-thinking",
-    caption=CaptionPromptTemplate(
-        system_instruction=None,
-        style_prompts={
-            "concise": ModalityPrompt(
-                image="Describe the primary subjects, their actions, and visible context in one vivid sentence.",
-                video="Describe the primary subjects, their actions, and visible context in one vivid sentence.",
-            ),
-            "detailed": ModalityPrompt(
-                image="Provide a multi-sentence caption that calls out subjects, relationships, scene intent, and any text embedded in the image.",
-                video="Provide a multi-sentence caption that calls out subjects, relationships, scene intent, and any text embedded in the video.",
-            ),
-        },
-    ),
-    question=QuestionPromptTemplate(
-        open_instruction=None,
-        grounded_instruction=(
-            "You are Qwen3-VL performing grounded reasoning. Give the answer and reference the relevant regions using structured tags when available. Report bbox coordinates in JSON format."
-        ),
-    ),
-    ocr=OcrPromptTemplate(
-        system_instruction=None,
-        prompts={
-            "plain": "Read all the text in the image.",
-            "markdown": "qwenvl markdown",
-            "html": "qwenvl html",
-        },
-        default_mode="plain",
-    ),
-    detect=DetectPromptTemplate(
-        general_instruction=ModalityPrompt(
-            image="Locate every object of interest and report bounding box coordinates in JSON format.",
-            video="Locate every object of interest and report bounding box coordinates in JSON format.",
-        ),
-        category_instruction_template=ModalityPrompt(
-            image='Locate every instance that belongs to the following categories: "{categories}". Report bbox coordinates in JSON format.',
-            video='Locate every instance that belongs to the following categories: "{categories}". Report bbox coordinates in JSON format.',
-        ),
-    ),
-)
-
-
 PROMPT_REGISTRY.register(
     _ISAAC_PROFILE.key,
     _ISAAC_PROFILE,
     is_default=True,
     aliases=("default", "isaac", "perceptron", "isaac-0.1"),
     prefixes=("isaac-",),
-)
-
-PROMPT_REGISTRY.register(
-    _QWEN_PROFILE.key,
-    _QWEN_PROFILE,
-    aliases=("qwen", "qwen3", "qwen3-vl", "qwen3-vl-235b"),
-    prefixes=("qwen3-",),
 )
 
 

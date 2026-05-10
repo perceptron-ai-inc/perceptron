@@ -600,7 +600,7 @@ def _expects_reasoning(expects: str | None) -> bool:
 def _is_thinking_model(model_name: str | None) -> bool:
     if not isinstance(model_name, str):
         return False
-    return "thinking" in model_name.lower() or model_name.lower().startswith("qwen3")
+    return "thinking" in model_name.lower()
 
 
 def _supports_reasoning(model_name: str | None, provider_cfg: dict | None = None) -> bool:

@@ -30,20 +30,6 @@ def _collect_text(content, *, role: str) -> list[str]:
     return [entry["content"] for entry in content if entry.get("type") == "text" and entry.get("role") == role]
 
 
-def test_caption_uses_qwen_prompt_text():
-    with cfg(api_key="test-key", provider="perceptron"):
-        res = caption(image(PNG_BYTES), style="concise", model="qwen3-vl-235b-a22b-thinking")
-
-    content = res.raw.get("content", [])
-    system_messages = _collect_text(content, role="system")
-    assert system_messages == []
-    user_messages = _collect_text(content, role="user")
-    assert any(
-        msg == "Describe the primary subjects, their actions, and visible context in one vivid sentence."
-        for msg in user_messages
-    )
-
-
 def test_caption_defaults_to_isaac_prompt_on_fal():
     with cfg(api_key="test-key", provider="fal"):
         res = caption(image(PNG_BYTES), style="concise")
@@ -55,61 +41,18 @@ def test_caption_defaults_to_isaac_prompt_on_fal():
     assert "Provide a concise, human-friendly caption for the upcoming image." in user_messages
 
 
-def test_select_model_rejects_qwen_for_fal():
-    fal_cfg = {"name": "fal", **_PROVIDER_CONFIG["fal"]}
-    with pytest.raises(BadRequestError):
-        _select_model(fal_cfg, "qwen3-vl-235b-a22b-thinking")
-
-
-def test_select_model_accepts_qwen_for_perceptron():
-    perceptron_cfg = {"name": "perceptron", **_PROVIDER_CONFIG["perceptron"]}
-    resolved = _select_model(perceptron_cfg, "qwen3-vl-235b-a22b-thinking")
-    assert resolved == "qwen3-vl-235b-a22b-thinking"
-
-
-def test_detect_qwen_prompt_reports_json_bbox():
-    categories = [
-        "plate/dish",
-        "scallop",
-        "wine bottle",
-        "tv",
-        "bowl",
-        "spoon",
-        "air conditioner",
-        "coconut drink",
-        "cup",
-        "chopsticks",
-        "person",
-    ]
-    with cfg(api_key="test-key", provider="perceptron"):
-        res = detect(image(PNG_BYTES), classes=categories, model="qwen3-vl-235b-a22b-thinking")
-
-    content = res.raw.get("content", [])
-    system_messages = _collect_text(content, role="system")
-    expected = (
-        'Locate every instance that belongs to the following categories: "'
-        + ", ".join(categories)
-        + '". Report bbox coordinates in JSON format.'
-    )
-    assert expected in system_messages
-
-
 def test_config_context_propagates_default_model():
     categories = ["plate/dish"]
-    with cfg(api_key="test-key", provider="perceptron", model="qwen3-vl-235b-a22b-thinking"):
+    with cfg(api_key="test-key", provider="perceptron", model="isaac-0.2-2b-preview"):
         res = detect(image(PNG_BYTES), classes=categories)
 
     content = res.raw.get("content", [])
     system_messages = _collect_text(content, role="system")
-    expected = (
-        'Locate every instance that belongs to the following categories: "plate/dish". '
-        "Report bbox coordinates in JSON format."
-    )
-    assert expected in system_messages
+    assert any("Your goal is to segment out the following categories: plate/dish" in msg for msg in system_messages)
 
 
 def test_env_default_model_applies(monkeypatch):
-    monkeypatch.setenv("PERCEPTRON_MODEL", "qwen3-vl-235b-a22b-thinking")
+    monkeypatch.setenv("PERCEPTRON_MODEL", "isaac-0.2-2b-preview")
 
     categories = ["plate/dish"]
     with cfg(api_key="test-key", provider="perceptron"):
@@ -117,16 +60,12 @@ def test_env_default_model_applies(monkeypatch):
 
     content = res.raw.get("content", [])
     system_messages = _collect_text(content, role="system")
-    expected = (
-        'Locate every instance that belongs to the following categories: "plate/dish". '
-        "Report bbox coordinates in JSON format."
-    )
-    assert expected in system_messages
+    assert any("Your goal is to segment out the following categories: plate/dish" in msg for msg in system_messages)
 
 
 def test_incompatible_default_model_raises():
     categories = ["plate/dish"]
-    with pytest.raises(BadRequestError), cfg(api_key="test-key", provider="fal", model="qwen3-vl-235b-a22b-thinking"):
+    with pytest.raises(BadRequestError), cfg(api_key="test-key", provider="fal", model="isaac-0.2-2b-preview"):
         detect(image(PNG_BYTES), classes=categories)
 
 
@@ -139,28 +78,3 @@ def test_isaac_markdown_ocr_prompt():
     assert "Transcribe every readable word in the image using Markdown formatting with headings, lists, tables, and other structural elements as appropriate." in user_messages
 
 
-def test_qwen_plain_ocr_prompt():
-    with cfg(api_key="test-key", provider="perceptron"):
-        res = ocr(image(PNG_BYTES), model="qwen3-vl-235b-a22b-thinking")
-
-    content = res.raw.get("content", [])
-    user_messages = _collect_text(content, role="user")
-    assert "Read all the text in the image." in user_messages
-
-
-def test_qwen_markdown_ocr_prompt():
-    with cfg(api_key="test-key", provider="perceptron"):
-        res = ocr_markdown(image(PNG_BYTES), model="qwen3-vl-235b-a22b-thinking")
-
-    content = res.raw.get("content", [])
-    user_messages = _collect_text(content, role="user")
-    assert "qwenvl markdown" in user_messages
-
-
-def test_qwen_html_ocr_prompt():
-    with cfg(api_key="test-key", provider="perceptron"):
-        res = ocr_html(image(PNG_BYTES), model="qwen3-vl-235b-a22b-thinking")
-
-    content = res.raw.get("content", [])
-    user_messages = _collect_text(content, role="user")
-    assert "qwenvl html" in user_messages
