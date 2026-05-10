@@ -41,7 +41,7 @@ _IMAGE_EXTENSIONS = {
     ".heif",
 }
 
-_VIDEO_EXTENSIONS = {".mp4"}
+_VIDEO_EXTENSIONS = {".mp4", ".webm"}
 
 _OUTPUT_FILENAMES = {
     "caption": "captions.json",

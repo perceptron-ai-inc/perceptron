@@ -527,9 +527,14 @@ def test_stream_render_final_text_overrides_buffer(monkeypatch):
         "https://example.com/clip.mp4?token=abc",
         "https://example.com/clip.mp4#fragment",
         "CLIP.MP4",  # case-insensitive
+        "clip.webm",
+        "/local/path/clip.webm",
+        "https://example.com/clip.webm",
+        "https://example.com/clip.webm?token=abc",
+        "CLIP.WEBM",
     ],
 )
-def test_looks_like_video_recognizes_mp4(media):
+def test_looks_like_video_recognizes_video_extensions(media):
     assert _looks_like_video(media) is True
 
 
