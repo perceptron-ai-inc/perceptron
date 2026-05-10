@@ -41,7 +41,7 @@ from .errors import (
     TimeoutError,
     TransportError,
 )
-from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
+from .highlevel import caption, detect, detect_from_coco, find_clips, ocr, ocr_html, ocr_markdown, question
 from .pointing.geometry import scale_points_to_pixels
 from .pointing.parser import (
     PointParser,
@@ -114,8 +114,10 @@ __all__ = [
     "configure",
     "detect",
     "detect_from_coco",
+    "clip",
     "extract_clips",
     "extract_points",
+    "find_clips",
     "image",
     "inspect_task",
     "json_schema_format",

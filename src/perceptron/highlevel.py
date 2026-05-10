@@ -20,6 +20,9 @@ from .dsl.nodes import (
     Sequence as SequenceNode,
 )
 from .dsl.nodes import (
+    Video as VideoNode,
+)
+from .dsl.nodes import (
     agent,
     system,
     text,
@@ -246,6 +249,82 @@ def question(
 
     return _run_perceive_sequence(
         builder=lambda: _question_sequence(media_obj, question_text, structured_expectation, question_template),
+        perceive_base_kwargs=base_kwargs,
+        gen_kwargs=gen_kwargs,
+        response_format=response_format,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Video Clipping
+# ---------------------------------------------------------------------------
+
+
+def _find_clips_sequence(media_node: VideoNode, query: str) -> SequenceNode:
+    return SequenceNode([media_node, text(f"Clip {query}.")])
+
+
+def find_clips(
+    media_obj: VideoNode,
+    query: str,
+    *,
+    multiple: bool = True,
+    stream: bool = False,
+    response_format: ResponseFormat | None = None,
+    **gen_kwargs: Any,
+):
+    """Localize one or more events in a video; returns ``Clip`` objects with timestamps.
+
+    Convenience wrapper around :func:`question` configured for temporal grounding:
+    sets ``expects="clip"``, defaults to allowing multiple results, and prepends
+    ``"Clip "`` to ``query`` so callers write a noun phrase rather than a full
+    imperative sentence.
+
+    Note:
+        This is the high-level capability helper. For the low-level
+        ``Clip``-annotation factory used to construct exemplars for in-context
+        learning, see :func:`perceptron.clip`.
+
+    Args:
+        media_obj: A ``video()`` node. Image inputs raise ``BadRequestError``.
+        query: Noun phrase describing the event(s) to locate. The helper sends
+            ``"Clip {query}."`` to the model.
+        multiple: When ``True`` (default), the model may return many clips.
+            When ``False``, parsing is constrained to at most one.
+        stream: When ``True``, returns a streaming iterator instead of a final
+            ``PerceiveResult``.
+        response_format: Optional structured-output schema; see
+            :func:`perceptron.json_schema_format` and :func:`perceptron.regex_format`.
+
+    Returns:
+        ``PerceiveResult`` with ``.clips`` populated. Each ``Clip`` carries
+        ``timestamp.at`` (start, seconds), optional ``timestamp.until`` (end,
+        seconds), and an optional ``mention`` string.
+
+    Example::
+
+        from perceptron import configure, find_clips, video
+
+        configure(provider="perceptron", model="isaac-0.3-max", api_key="...")
+        result = find_clips(video("game.mp4"), "every shot on goal")
+        for c in result.clips or []:
+            print(c.timestamp, c.mention)
+    """
+
+    if not isinstance(media_obj, VideoNode):
+        raise BadRequestError(
+            f"find_clips() requires a video() node; got {type(media_obj).__name__}. "
+            "Wrap your media with perceptron.video(...) before calling."
+        )
+
+    base_kwargs = {
+        "stream": stream,
+        "expects": "clip",
+        "allow_multiple": multiple,
+    }
+
+    return _run_perceive_sequence(
+        builder=lambda: _find_clips_sequence(media_obj, query),
         perceive_base_kwargs=base_kwargs,
         gen_kwargs=gen_kwargs,
         response_format=response_format,
