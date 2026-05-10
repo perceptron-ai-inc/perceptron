@@ -11,7 +11,6 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 | Notebook | What it covers | Colab |
 | --- | --- | --- |
 | [`quickstart_isaac`](quickstart/quickstart_isaac/quickstart_isaac.ipynb) | Run the Isaac 0.2 model to localize shipping boxes in a factory scene. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_isaac/quickstart_isaac.ipynb) |
-| [`quickstart_qwen`](quickstart/quickstart_qwen/quickstart_qwen.ipynb) | Use Qwen 3 VL to detect flowers with a single helper. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_qwen/quickstart_qwen.ipynb) |
 
 ---
 

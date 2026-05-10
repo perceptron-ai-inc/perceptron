@@ -172,7 +172,7 @@ def test_reasoning_hint_enables_reasoning_payload(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="think", model="qwen3-vl-235b-a22b-thinking", provider="perceptron")
+    @perceive(expects="think", model="isaac-0.2-2b-preview", provider="perceptron")
     def make_request():
         return text("Why did the robot stop working?")
 
@@ -181,24 +181,6 @@ def test_reasoning_hint_enables_reasoning_payload(monkeypatch):
 
     payload = captured["payload"]
     assert payload.get("reasoning") is True
-
-
-def test_reasoning_false_on_thinking_model_yields_warning(monkeypatch):
-    def _echo_task(self, task, **kwargs):  # pylint: disable=unused-argument
-        return {"text": "", "points": None, "parsed": None, "raw": task}
-
-    monkeypatch.setattr(client_mod.Client, "generate", _echo_task)
-
-    with cfg(api_key="test-key", provider="perceptron", model="qwen3-vl-235b-a22b-thinking"):
-        @perceive(reasoning=False)
-        def fn():
-            return text("Hi there")
-
-        res = fn()
-
-    assert any(
-        issue.get("code") == "reasoning_disabled_for_thinking_model" for issue in res.errors
-    )
 
 
 def test_reasoning_stripped_for_isaac_model(monkeypatch):
@@ -250,54 +232,6 @@ def test_reasoning_stripped_for_isaac_model(monkeypatch):
     assert any(issue.get("code") == "reasoning_not_supported" for issue in res.errors)
 
 
-def test_only_reasoning_model_forces_reasoning(monkeypatch):
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": "Answer",
-                            "reasoning_content": "Because...",
-                        }
-                    }
-                ]
-            }
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    # Do not pass reasoning, expect auto-enable for only_reasoning model
-    @perceive(model="qwen3-vl-235b-a22b-thinking")
-    def make_request():
-        return text("Hi there")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        res = make_request()
-
-    payload = captured.get("payload", {})
-    assert payload.get("reasoning") is True
-    assert any(issue.get("code") == "reasoning_required_for_model" for issue in res.errors)
-
-
 def test_reasoning_true_keeps_reasoning_in_payload(monkeypatch):
     captured: dict[str, dict] = {}
 
@@ -333,7 +267,7 @@ def test_reasoning_true_keeps_reasoning_in_payload(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(reasoning=True, model="qwen3-vl-235b-a22b-thinking", provider="perceptron")
+    @perceive(reasoning=True, model="isaac-0.2-2b-preview", provider="perceptron")
     def make_request():
         return text("Hi there")
 
@@ -943,47 +877,6 @@ def test_focus_with_polygon_expectation(monkeypatch):
     messages = payload.get("messages") or []
     # Should have <hint>POLYGON TOOLS</hint> (sorted alphabetically)
     assert any("<hint>POLYGON TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-
-
-def test_focus_skipped_for_thinking_model_with_skip_hints(monkeypatch):
-    """Test that focus hint is skipped for models with skip_structured_hints=True."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "Answer", "reasoning_content": "..."}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    # qwen3-vl-235b-a22b-thinking has skip_structured_hints=True
-    @perceive(focus=True, model="qwen3-vl-235b-a22b-thinking", provider="perceptron")
-    def make_request():
-        return text("Describe.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should NOT have any hint tags for this model
-    assert not any("<hint" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
 
 
 def test_focus_direct_invocation(monkeypatch):
