@@ -10,7 +10,8 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 
 | Notebook | What it covers | Colab |
 | --- | --- | --- |
-| [`quickstart_perceptron`](quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) | Run the Isaac 0.2 model to localize shipping boxes in a factory scene. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) |
+| [`quickstart_perceptron`](quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) | Ask Perceptron Mk1 a question about an image and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) |
+| [`quickstart_perceptron_video`](quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) | Ask Perceptron Mk1 a question about a video and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) |
 
 ---
 
