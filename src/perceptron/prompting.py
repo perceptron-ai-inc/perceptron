@@ -175,7 +175,7 @@ PROMPT_REGISTRY.register(
     _ISAAC_PROFILE.key,
     _ISAAC_PROFILE,
     is_default=True,
-    aliases=("default", "isaac", "perceptron", "isaac-0.1"),
+    aliases=("default", "isaac", "perceptron", "isaac-0.1", "mk1"),
     prefixes=("isaac-",),
 )
 

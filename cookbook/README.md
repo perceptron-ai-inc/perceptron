@@ -10,7 +10,8 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 
 | Notebook | What it covers | Colab |
 | --- | --- | --- |
-| [`quickstart_isaac`](quickstart/quickstart_isaac/quickstart_isaac.ipynb) | Run the Isaac 0.2 model to localize shipping boxes in a factory scene. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_isaac/quickstart_isaac.ipynb) |
+| [`quickstart_perceptron`](quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) | Ask Perceptron Mk1 a question about an image and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) |
+| [`quickstart_perceptron_video`](quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) | Ask Perceptron Mk1 a question about a video and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) |
 
 ---
 
@@ -28,20 +29,20 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 
 > **When to use `detect()` vs `@perceive`?** Use `detect()` for quick, single-shot helpers. Reach for `@perceive` when you want to embed custom prompts, streaming, or multi-step logic inside your own pipeline.
 
-### Isaac 0.3 Max sibling recipes
+### Perceptron Mk1 sibling recipes
 
-The same capabilities, configured for the flagship `isaac-0.3-max` model and using the post-v0.3.0 SDK API. Image-only legacy recipes above remain valid for the 0.x family.
+The same capabilities, configured for the flagship `mk1` model and using the post-v0.3.0 SDK API. Image-only legacy recipes above remain valid for the 0.x family.
 
 | Notebook | Scenario | Colab |
 | --- | --- | --- |
-| [`isaac-0.3-max/image-qa`](recipes/capabilities/isaac-0.3-max/image-qa.ipynb) | Grounded Q&A with bounding-box citations on a studio scene. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/image-qa.ipynb) |
-| [`isaac-0.3-max/image-captioning`](recipes/capabilities/isaac-0.3-max/image-captioning.ipynb) | Concise and detailed captions, optionally with grounded snippets. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/image-captioning.ipynb) |
-| [`isaac-0.3-max/object-detection`](recipes/capabilities/isaac-0.3-max/object-detection.ipynb) | PPE detection via the `@perceive` helper with `expects="box"`. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/object-detection.ipynb) |
-| [`isaac-0.3-max/ocr`](recipes/capabilities/isaac-0.3-max/ocr.ipynb) | OCR with custom prompts targeting product labels. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/ocr.ipynb) |
-| [`isaac-0.3-max/in-context-learning-image`](recipes/capabilities/isaac-0.3-max/in-context-learning-image.ipynb) | Single-image ICL: bootstrap an exemplar, apply to a new scene. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/in-context-learning-image.ipynb) |
-| [`isaac-0.3-max/video-qa`](recipes/capabilities/isaac-0.3-max/video-qa.ipynb) | Long-form video Q&A with reasoning enabled (robot-assembly walkthrough). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/video-qa.ipynb) |
-| [`isaac-0.3-max/video-clipping`](recipes/capabilities/isaac-0.3-max/video-clipping.ipynb) | Temporal grounding: return start/end timestamps via `expects="clip"`. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/video-clipping.ipynb) |
-| [`isaac-0.3-max/in-context-learning-video`](recipes/capabilities/isaac-0.3-max/in-context-learning-video.ipynb) | Multimodal ICL: example image + intent → query video → clip back. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.3-max/in-context-learning-video.ipynb) |
+| [`mk1/image-qa`](recipes/capabilities/mk1/image-qa.ipynb) | Grounded Q&A with bounding-box citations on a studio scene. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/image-qa.ipynb) |
+| [`mk1/image-captioning`](recipes/capabilities/mk1/image-captioning.ipynb) | Concise and detailed captions, optionally with grounded snippets. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/image-captioning.ipynb) |
+| [`mk1/object-detection`](recipes/capabilities/mk1/object-detection.ipynb) | PPE detection via the `@perceive` helper with `expects="box"`. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/object-detection.ipynb) |
+| [`mk1/ocr`](recipes/capabilities/mk1/ocr.ipynb) | OCR with custom prompts targeting product labels. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/ocr.ipynb) |
+| [`mk1/in-context-learning-image`](recipes/capabilities/mk1/in-context-learning-image.ipynb) | Single-image ICL: bootstrap an exemplar, apply to a new scene. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/in-context-learning-image.ipynb) |
+| [`mk1/video-qa`](recipes/capabilities/mk1/video-qa.ipynb) | Long-form video Q&A with reasoning enabled (robot-assembly walkthrough). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/video-qa.ipynb) |
+| [`mk1/video-clipping`](recipes/capabilities/mk1/video-clipping.ipynb) | Temporal grounding: return start/end timestamps via `expects="clip"`. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/video-clipping.ipynb) |
+| [`mk1/in-context-learning-video`](recipes/capabilities/mk1/in-context-learning-video.ipynb) | Multimodal ICL: example image + intent → query video → clip back. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/in-context-learning-video.ipynb) |
 
 ---
 
