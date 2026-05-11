@@ -184,7 +184,7 @@ class _StreamProcessor:
         if expects in _BUCKET_BY_EXPECTS and self._parsing_enabled and isinstance(content, str):
             bucket_name, extract = _BUCKET_BY_EXPECTS[expects]
             result[bucket_name] = extract(content)
-            result["parsed"] = parse_text(content)
+            result["parsed"] = parse_text(content, expects=expects)
         issues: list[dict[str, Any]] = []
         if not self._parsing_enabled:
             issues.append(
@@ -208,7 +208,7 @@ class _StreamProcessor:
         if expects not in _BUCKET_BY_EXPECTS:
             return events
         try:
-            segments = parse_text(self._cumulative)
+            segments = parse_text(self._cumulative, expects=expects)
         except Exception:
             return events
         for seg in segments:
@@ -783,7 +783,7 @@ class _ClientCore:
         if expects in _BUCKET_BY_EXPECTS and isinstance(content, str):
             bucket_name, extract = _BUCKET_BY_EXPECTS[expects]
             result[bucket_name] = extract(content)
-            result["parsed"] = parse_text(content)
+            result["parsed"] = parse_text(content, expects=expects)
         return result
 
 
