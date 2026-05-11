@@ -13,7 +13,7 @@
   <a href="https://codecov.io/github/perceptron-ai-inc/perceptron"><img src="https://codecov.io/github/perceptron-ai-inc/perceptron/graph/badge.svg?token=HW6JASKQJR" alt="codecov"></a>
 </p>
 
-**Perceptron is the Python SDK for building with perceptive-language models like Isaac 0.1.** Designed for physical AI applications—robotics, manufacturing, logistics, and security—it provides a unified interface for grounded perception: detection, localization, OCR, and visual Q&A with structured outputs ready for robotics, analytics, and edge deployment. Route tasks to specialized models, swap providers per call, and compose complex multimodal flows with a typed DSL. Efficient enough for edge deployment, flexible enough for any real-world task.
+**Perceptron is the Python SDK for building with perceptive-language models, from our flagship Perceptron Mk1 to edge-ready models like Isaac 0.2 2B (Preview).** Designed for physical AI applications—robotics, manufacturing, logistics, and security—it provides a unified interface for grounded perception: detection, localization, OCR, and visual Q&A with structured outputs ready for robotics, analytics, and edge deployment. Route tasks to specialized models, swap providers per call, and compose complex multimodal flows with a typed DSL. Efficient enough for edge deployment, flexible enough for any real-world task.
 
 <p align="center">
   <a href="https://www.perceptron.inc/" target="_blank"><strong>Website</strong></a> ·
@@ -31,8 +31,11 @@ Get precise localization and grounded answers with conversational pointing—eve
 **In-context learning for perception**
 Show a few annotated examples (defects, safety conditions, custom categories) in your prompt and the model adapts—no YOLO-style fine-tuning or custom detector stacks required. Learn novel tasks from a handful of examples.
 
-**Efficient frontier for real-world deployment**
-Isaac 0.1 matches models 50x its size while delivering edge-ready latencies and drastically lower serving costs. Perception workloads are continuous and latency-sensitive—Perceptron is built for the efficient frontier where capability meets real-world constraints.
+**Flagship reasoning across image and video**
+Perceptron Mk1, our flagship, brings grounded perception to long-form video—Q&A, temporal clipping, and multimodal in-context learning—on top of the image capabilities shared with the Isaac family. Built for cloud workloads where capability outweighs footprint.
+
+**Efficient frontier for edge deployment**
+The Isaac family is built for the edge—Isaac 0.1 matches models 50x its size, with Isaac 0.2 2B (Preview) extending the lineup. Both deliver edge-ready latencies and drastically lower serving costs. Perception workloads are continuous and latency-sensitive—Perceptron is built for the efficient frontier where capability meets real-world constraints.
 
 **Prompt for anything, control the output type**
 Ask for whatever you need in natural language—"find safety violations", "locate damaged components", "identify obstacles"—and specify the output format: bounding boxes, points, polygons, or text. The flexibility of language models with the structure your application needs.
@@ -70,7 +73,7 @@ The CLI entry point `perceptron` is available after install.
 ```python
 from perceptron import detect, caption
 
-# Detect objects with structured bounding boxes
+# Detect objects with structured bounding boxes (uses Perceptron Mk1 by default)
 result = detect(
     "warehouse.jpg",
     classes=["forklift", "person", "pallet"]
@@ -88,11 +91,12 @@ No credentials? The SDK returns compile-only payloads when API keys are missing,
 
 ## Configuration
 
-Set credentials once via environment, code, or the CLI. The SDK ships with the Perceptron backend enabled by default, and you can add or swap providers (e.g., `fal`) by extending `perceptron.client._PROVIDER_CONFIG`.
+Set credentials once via environment, code, or the CLI. The SDK ships with the Perceptron backend enabled by default and `mk1` selected as the default model — override per call with `model=...`. You can add or swap providers (e.g., `fal`) by extending `perceptron.client._PROVIDER_CONFIG`.
 
 **Environment variables (pick what you need):**
 - `PERCEPTRON_PROVIDER` – provider identifier (`perceptron` by default)
 - `PERCEPTRON_API_KEY` – API key for the selected provider
+- `PERCEPTRON_MODEL` – override the default model (e.g., `mk1`, `isaac-0.1`)
 - Provider-specific keys (e.g., `FAL_KEY`) when targeting alternates
 
 ```bash

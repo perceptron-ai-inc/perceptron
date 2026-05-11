@@ -518,7 +518,7 @@ _PROVIDER_CONFIG = {
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
         "env_keys": ["PERCEPTRON_API_KEY"],
-        "default_model": "isaac-0.1",
+        "default_model": "mk1",
         "supported_models": [
             "isaac-0.1",
             "isaac-0.2-1b",

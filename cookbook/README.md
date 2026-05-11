@@ -17,21 +17,9 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 
 ## Capability Recipes
 
-| Notebook | Scenario | Colab |
-| --- | --- | --- |
-| [`captioning`](recipes/capabilities/captioning/captioning.ipynb) | Generate concise or grounded captions (with bounding boxes). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/captioning/captioning.ipynb) |
-| [`ocr`](recipes/capabilities/ocr/ocr.ipynb) | Run OCR with custom prompts and parse the output. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/ocr/ocr.ipynb) |
-| [`object-detection`](recipes/capabilities/object-detection/object-detection.ipynb) | Detect PPE with a `@perceive` helper or the high-level `detect()` API. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/object-detection/object-detection.ipynb) |
-| [`visual-qa`](recipes/capabilities/visual-qa/visual-qa.ipynb) | Ask grounded questions and cite regions with bounding boxes. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/visual-qa/visual-qa.ipynb) |
-| [`in-context-learning`](recipes/capabilities/in-context-learning/in-context-learning.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/in-context-learning/in-context-learning.ipynb) |
-| [`multi-image-in-context-learning`](recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) |
-| [`constrained-decoding`](recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) | Force structured output with Pydantic schemas or regex patterns. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) |
+### Perceptron Mk1
 
-> **When to use `detect()` vs `@perceive`?** Use `detect()` for quick, single-shot helpers. Reach for `@perceive` when you want to embed custom prompts, streaming, or multi-step logic inside your own pipeline.
-
-### Perceptron Mk1 sibling recipes
-
-The same capabilities, configured for the flagship `mk1` model and using the post-v0.3.0 SDK API. Image-only legacy recipes above remain valid for the 0.x family.
+Image and video recipes for the flagship `mk1` model, using the v0.3.4+ SDK API. Mk1 adds long-form video Q&A, temporal clipping, and multimodal in-context learning on top of the image capabilities.
 
 | Notebook | Scenario | Colab |
 | --- | --- | --- |
@@ -44,9 +32,27 @@ The same capabilities, configured for the flagship `mk1` model and using the pos
 | [`mk1/video-clipping`](recipes/capabilities/mk1/video-clipping.ipynb) | Temporal grounding: return start/end timestamps via `expects="clip"`. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/video-clipping.ipynb) |
 | [`mk1/in-context-learning-video`](recipes/capabilities/mk1/in-context-learning-video.ipynb) | Multimodal ICL: example image + intent → query video → clip back. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/mk1/in-context-learning-video.ipynb) |
 
+> **When to use `detect()` vs `@perceive`?** Use `detect()` for quick, single-shot helpers. Reach for `@perceive` when you want to embed custom prompts, streaming, or multi-step logic inside your own pipeline.
+
+### Isaac family
+
+Image-only recipes pinned to the Isaac 0.1 / 0.2 family — useful as a reference when targeting the edge-tier models.
+
+| Notebook | Scenario | Colab |
+| --- | --- | --- |
+| [`captioning`](recipes/capabilities/captioning/captioning.ipynb) | Generate concise or grounded captions (with bounding boxes). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/captioning/captioning.ipynb) |
+| [`ocr`](recipes/capabilities/ocr/ocr.ipynb) | Run OCR with custom prompts and parse the output. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/ocr/ocr.ipynb) |
+| [`object-detection`](recipes/capabilities/object-detection/object-detection.ipynb) | Detect PPE with a `@perceive` helper or the high-level `detect()` API. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/object-detection/object-detection.ipynb) |
+| [`visual-qa`](recipes/capabilities/visual-qa/visual-qa.ipynb) | Ask grounded questions and cite regions with bounding boxes. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/visual-qa/visual-qa.ipynb) |
+| [`in-context-learning`](recipes/capabilities/in-context-learning/in-context-learning.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/in-context-learning/in-context-learning.ipynb) |
+| [`multi-image-in-context-learning`](recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) |
+| [`constrained-decoding`](recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) | Force structured output with Pydantic schemas or regex patterns. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) |
+
 ---
 
 ## Tutorials
+
+> For native video Q&A with Mk1, see the [`mk1/video-qa`](recipes/capabilities/mk1/video-qa.ipynb) recipe above.
 
 | Notebook | Description | Colab |
 | --- | --- | --- |
