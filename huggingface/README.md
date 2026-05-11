@@ -1,5 +1,7 @@
 # Isaac on HuggingFace 
 
+This page covers loading the Isaac 0.1 weights from HuggingFace. For our flagship Perceptron Mk1, see the [Perceptron SDK](https://github.com/perceptron-ai-inc/perceptron) and [docs](https://docs.perceptron.inc).
+
 ## Loading Isaac v0.1
 ```python
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
