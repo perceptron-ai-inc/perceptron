@@ -1273,3 +1273,141 @@ def test_perceptron_reasoning_uses_vision_config_not_top_level(monkeypatch):
     assert "reasoning" not in payload
     # And the SDK still extracts reasoning_content from the response
     assert res.reasoning == "Step-by-step thinking."
+
+
+def test_perceptron_expects_geometry_sets_annotation_format(monkeypatch):
+    """Regression: each non-text `expects` must populate vision_config.annotation_format
+    on the perceptron backend. Without this field the model emits prose instead of
+    structured tags and result.<bucket> comes back empty.
+    """
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "stub",
+                            "reasoning_content": None,
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    for expects_value in ("box", "point", "polygon", "clip"):
+        captured.clear()
+
+        @perceive(expects=expects_value, model="isaac-0.3-max", provider="perceptron")
+        def make_request():
+            return text("stub prompt")
+
+        with cfg(provider="perceptron", base_url="https://mock.api"):
+            make_request()
+
+        payload = captured["payload"]
+        vc = payload.get("vision_config") or {}
+        assert vc.get("annotation_format") == expects_value, (
+            f"expects={expects_value!r} on perceptron should set "
+            f"vision_config.annotation_format={expects_value!r}, got vision_config={vc!r}"
+        )
+
+
+def test_perceptron_expects_text_omits_annotation_format(monkeypatch):
+    """Sanity: expects='text' should NOT populate vision_config.annotation_format."""
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "stub", "reasoning_content": None}}]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(expects="text", model="isaac-0.3-max", provider="perceptron")
+    def make_request():
+        return text("stub prompt")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured["payload"]
+    vc = payload.get("vision_config") or {}
+    assert "annotation_format" not in vc
+
+
+def test_non_perceptron_provider_does_not_set_annotation_format(monkeypatch):
+    """Other providers (nebius/modal/fal) keep original behavior — no vision_config."""
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "stub", "reasoning_content": None}}]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("FAL_KEY", "test-key")
+
+    @perceive(expects="box", model="isaac-0.1", provider="fal")
+    def make_request():
+        return text("stub prompt")
+
+    with cfg(provider="fal", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured["payload"]
+    assert "vision_config" not in payload

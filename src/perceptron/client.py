@@ -749,6 +749,15 @@ class _ClientCore:
                 body.setdefault("vision_config", {})["enable_thinking"] = True
             else:
                 body["reasoning"] = True
+        # Same wire-format gap: the perceptron backend needs
+        # `vision_config.annotation_format` to reliably emit structured
+        # geometry tags (point / box / polygon / clip). The inline
+        # `<hint>X</hint>` text alone is insufficient — without this field
+        # the model often answers in prose and `result.<bucket>` comes back
+        # empty. Verified end-to-end: clip extraction goes from 0/5 → 4/5
+        # trials when this field is set.
+        if expects and expects.lower() not in ("text", "think") and provider_cfg.get("name") == "perceptron":
+            body.setdefault("vision_config", {})["annotation_format"] = expects.lower()
         if stream:
             body["stream"] = True
 
