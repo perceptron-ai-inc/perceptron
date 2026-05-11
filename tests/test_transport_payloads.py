@@ -1288,7 +1288,7 @@ def test_perceptron_reasoning_hint_is_system_message(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(reasoning=True, model="isaac-0.3-max", provider="perceptron")
+    @perceive(reasoning=True, model="mk1", provider="perceptron")
     def make_request():
         return text("Why?")
 
@@ -1353,7 +1353,7 @@ def test_perceptron_expects_geometry_emits_system_hint(monkeypatch):
     for expects_value in ("box", "point", "polygon", "clip"):
         captured.clear()
 
-        @perceive(expects=expects_value, model="isaac-0.3-max", provider="perceptron")
+        @perceive(expects=expects_value, model="mk1", provider="perceptron")
         def make_request():
             return text("stub prompt")
 
@@ -1403,7 +1403,7 @@ def test_perceptron_expects_text_no_system_hint(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="text", model="isaac-0.3-max", provider="perceptron")
+    @perceive(expects="text", model="mk1", provider="perceptron")
     def make_request():
         return text("stub prompt")
 

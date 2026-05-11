@@ -43,19 +43,19 @@ def test_caption_defaults_to_isaac_prompt_on_fal():
 
 def test_select_model_accepts_isaac_0_3_max_for_perceptron():
     perceptron_cfg = {"name": "perceptron", **_PROVIDER_CONFIG["perceptron"]}
-    resolved = _select_model(perceptron_cfg, "isaac-0.3-max")
-    assert resolved == "isaac-0.3-max"
+    resolved = _select_model(perceptron_cfg, "mk1")
+    assert resolved == "mk1"
 
 
 def test_select_model_rejects_isaac_0_3_max_for_fal():
     fal_cfg = {"name": "fal", **_PROVIDER_CONFIG["fal"]}
     with pytest.raises(BadRequestError):
-        _select_model(fal_cfg, "isaac-0.3-max")
+        _select_model(fal_cfg, "mk1")
 
 
 def test_isaac_0_3_max_models_entry_supports_reasoning_and_focus():
     perceptron_cfg = _PROVIDER_CONFIG["perceptron"]
-    entry = perceptron_cfg["models"]["isaac-0.3-max"]
+    entry = perceptron_cfg["models"]["mk1"]
     assert entry["reasoning"] is True
     assert entry["focus"] is True
     assert entry["skip_structured_hints"] is False
