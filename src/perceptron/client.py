@@ -742,7 +742,13 @@ class _ClientCore:
         if presence_penalty is not None:
             body["presence_penalty"] = presence_penalty
         if reasoning_flag:
-            body["reasoning"] = True
+            # The perceptron backend honors `vision_config.enable_thinking`,
+            # not a top-level `reasoning` field. Other providers keep the
+            # original behavior until each backend's exact format is verified.
+            if provider_cfg.get("name") == "perceptron":
+                body.setdefault("vision_config", {})["enable_thinking"] = True
+            else:
+                body["reasoning"] = True
         if stream:
             body["stream"] = True
 

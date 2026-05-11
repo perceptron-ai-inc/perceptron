@@ -180,7 +180,8 @@ def test_reasoning_hint_enables_reasoning_payload(monkeypatch):
         make_request()
 
     payload = captured["payload"]
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
 
 
 def test_reasoning_stripped_for_isaac_model(monkeypatch):
@@ -275,7 +276,8 @@ def test_reasoning_true_keeps_reasoning_in_payload(monkeypatch):
         res = make_request()
 
     payload = captured.get("payload", {})
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
     assert all(issue.get("code") != "reasoning_not_supported" for issue in res.errors)
     assert res.reasoning == "Because..."
     assert res.text == "Answer"
@@ -324,7 +326,8 @@ def test_isaac_02_reasoning_true_adds_think_hint(monkeypatch):
         make_request()
 
     payload = captured.get("payload", {})
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
     messages = payload.get("messages") or []
     assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "THINK" in m.get("content") for m in messages)
 
@@ -383,7 +386,8 @@ def test_payload_shape_matches_expected(monkeypatch):
     ]
 
     assert payload.get("model") == "isaac-0.2-1b"
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
     assert payload.get("messages") == expected_messages
     # Generation params not sent when using API defaults
     assert "temperature" not in payload
@@ -627,7 +631,8 @@ def test_focus_and_reasoning_combined_hint(monkeypatch):
     messages = payload.get("messages") or []
     # Both THINK and TOOLS should be in the hint (alphabetically sorted)
     assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "<hint>THINK TOOLS</hint>" in m.get("content") for m in messages)
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
 
 
 def test_focus_box_reasoning_combined_hint(monkeypatch):
@@ -954,7 +959,8 @@ def test_focus_with_expects_think(monkeypatch):
     # Should have <hint>THINK TOOLS</hint> (sorted alphabetically)
     assert any("<hint>THINK TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
     # reasoning should be enabled when expects="think"
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
 
 
 def test_focus_true_expects_think_exact_format(monkeypatch):
@@ -1125,7 +1131,8 @@ def test_expects_think_without_focus(monkeypatch):
     # Should have exactly <hint>THINK</hint> (no TOOLS)
     assert messages[0]["content"] == "<hint>THINK</hint>Explain."
     assert "TOOLS" not in messages[0]["content"]
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
 
 
 def test_focus_and_expects_think_on_isaac_01_no_hint(monkeypatch):
@@ -1207,6 +1214,62 @@ def test_focus_expects_think_reasoning_explicit_true(monkeypatch):
     messages = payload.get("messages") or []
     # Should have <hint>THINK TOOLS</hint>
     assert any("<hint>THINK TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-    assert payload.get("reasoning") is True
+    assert payload.get("vision_config", {}).get("enable_thinking") is True
+    assert "reasoning" not in payload
     assert res.reasoning == "Because..."
     assert res.text == "Answer"
+
+
+def test_perceptron_reasoning_uses_vision_config_not_top_level(monkeypatch):
+    """Regression: perceptron backend honors vision_config.enable_thinking,
+    not a top-level `reasoning` field. The previous SDK form silently produced
+    no reasoning_content in responses.
+    """
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Final answer.",
+                            "reasoning_content": "Step-by-step thinking.",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(reasoning=True, model="isaac-0.3-max", provider="perceptron")
+    def make_request():
+        return text("Why?")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        res = make_request()
+
+    payload = captured["payload"]
+    # The fix: enable_thinking lands inside vision_config
+    assert payload.get("vision_config") == {"enable_thinking": True}
+    # The old non-functional top-level field is gone
+    assert "reasoning" not in payload
+    # And the SDK still extracts reasoning_content from the response
+    assert res.reasoning == "Step-by-step thinking."
