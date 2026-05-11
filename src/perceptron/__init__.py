@@ -13,7 +13,7 @@ network access. Transport and streaming are added in later phases.
 
 import importlib
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 from .annotations import annotate_image
 from .client import (
