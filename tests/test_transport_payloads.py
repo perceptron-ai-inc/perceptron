@@ -180,7 +180,12 @@ def test_reasoning_hint_enables_reasoning_payload(monkeypatch):
         make_request()
 
     payload = captured["payload"]
-    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
+        f"Expected a system message containing THINK hint, got messages={messages!r}"
+    )
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
 
 
 def test_reasoning_stripped_for_isaac_model(monkeypatch):
@@ -275,7 +280,12 @@ def test_reasoning_true_keeps_reasoning_in_payload(monkeypatch):
         res = make_request()
 
     payload = captured.get("payload", {})
-    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
+        f"Expected a system message containing THINK hint, got messages={messages!r}"
+    )
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
     assert all(issue.get("code") != "reasoning_not_supported" for issue in res.errors)
     assert res.reasoning == "Because..."
     assert res.text == "Answer"
@@ -324,7 +334,12 @@ def test_isaac_02_reasoning_true_adds_think_hint(monkeypatch):
         make_request()
 
     payload = captured.get("payload", {})
-    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
+        f"Expected a system message containing THINK hint, got messages={messages!r}"
+    )
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
     messages = payload.get("messages") or []
     assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "THINK" in m.get("content") for m in messages)
 
@@ -376,14 +391,17 @@ def test_payload_shape_matches_expected(monkeypatch):
     payload = captured.get("payload") or {}
 
     expected_messages = [
-        {
-            "role": "user",
-            "content": "<hint>BOX THINK</hint>Describe the object.",
-        }
+        {"role": "system", "content": "<hint>BOX THINK</hint>"},
+        {"role": "user", "content": "Describe the object."},
     ]
 
     assert payload.get("model") == "isaac-0.2-1b"
-    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
+        f"Expected a system message containing THINK hint, got messages={messages!r}"
+    )
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
     assert payload.get("messages") == expected_messages
     # Generation params not sent when using API defaults
     assert "temperature" not in payload
@@ -627,7 +645,12 @@ def test_focus_and_reasoning_combined_hint(monkeypatch):
     messages = payload.get("messages") or []
     # Both THINK and TOOLS should be in the hint (alphabetically sorted)
     assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "<hint>THINK TOOLS</hint>" in m.get("content") for m in messages)
-    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
+        f"Expected a system message containing THINK hint, got messages={messages!r}"
+    )
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
 
 
 def test_focus_box_reasoning_combined_hint(monkeypatch):
@@ -714,8 +737,9 @@ def test_focus_only_hint_exact_format(monkeypatch):
 
     payload = captured.get("payload", {})
     messages = payload.get("messages") or []
-    # Should have exactly <hint>TOOLS</hint> prepended to the message
-    assert messages[0]["content"] == "<hint>TOOLS</hint>Describe."
+    # Should have exactly <hint>TOOLS</hint> as a system message
+    assert messages[0] == {"role": "system", "content": "<hint>TOOLS</hint>"}
+    assert messages[1] == {"role": "user", "content": "Describe."}
 
 
 def test_focus_false_no_tools_hint(monkeypatch):
@@ -954,7 +978,12 @@ def test_focus_with_expects_think(monkeypatch):
     # Should have <hint>THINK TOOLS</hint> (sorted alphabetically)
     assert any("<hint>THINK TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
     # reasoning should be enabled when expects="think"
-    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
+        f"Expected a system message containing THINK hint, got messages={messages!r}"
+    )
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
 
 
 def test_focus_true_expects_think_exact_format(monkeypatch):
@@ -1122,10 +1151,12 @@ def test_expects_think_without_focus(monkeypatch):
 
     payload = captured.get("payload", {})
     messages = payload.get("messages") or []
-    # Should have exactly <hint>THINK</hint> (no TOOLS)
-    assert messages[0]["content"] == "<hint>THINK</hint>Explain."
+    # Should have exactly <hint>THINK</hint> as a system message (no TOOLS)
+    assert messages[0] == {"role": "system", "content": "<hint>THINK</hint>"}
+    assert messages[1] == {"role": "user", "content": "Explain."}
     assert "TOOLS" not in messages[0]["content"]
-    assert payload.get("reasoning") is True
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
 
 
 def test_focus_and_expects_think_on_isaac_01_no_hint(monkeypatch):
@@ -1207,6 +1238,221 @@ def test_focus_expects_think_reasoning_explicit_true(monkeypatch):
     messages = payload.get("messages") or []
     # Should have <hint>THINK TOOLS</hint>
     assert any("<hint>THINK TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-    assert payload.get("reasoning") is True
+    messages = payload.get("messages") or []
+    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
+        f"Expected a system message containing THINK hint, got messages={messages!r}"
+    )
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
     assert res.reasoning == "Because..."
     assert res.text == "Answer"
+
+
+def test_perceptron_reasoning_hint_is_system_message(monkeypatch):
+    """Regression: the perceptron AI gateway only honors `<hint>...</hint>`
+    when it arrives as a system-role message. The old SDK prepended the hint
+    inside the user message, which the gateway ignored — `reasoning=True`
+    appeared to work but `result.reasoning` always came back None.
+    """
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "Final answer.",
+                            "reasoning_content": "Step-by-step thinking.",
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(reasoning=True, model="isaac-0.3-max", provider="perceptron")
+    def make_request():
+        return text("Why?")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        res = make_request()
+
+    payload = captured["payload"]
+    messages = payload.get("messages") or []
+    # The fix: <hint>THINK</hint> arrives as a system-role message, not in user content.
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    assert len(system_msgs) == 1, f"Expected exactly one system message, got {messages!r}"
+    assert "<hint>" in str(system_msgs[0].get("content") or "")
+    assert "THINK" in str(system_msgs[0].get("content") or "")
+    # Old non-functional fields are absent.
+    assert "reasoning" not in payload
+    assert "vision_config" not in payload
+    # User message has no hint prefix.
+    user_msgs = [m for m in messages if m.get("role") == "user"]
+    assert all("<hint>" not in str(m.get("content") or "") for m in user_msgs)
+    # And the SDK still extracts reasoning_content from the response.
+    assert res.reasoning == "Step-by-step thinking."
+
+
+def test_perceptron_expects_geometry_emits_system_hint(monkeypatch):
+    """Regression: each non-text `expects` value must surface as `<hint>X</hint>`
+    in a system-role message so the perceptron gateway emits structured tags.
+    """
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": "stub",
+                            "reasoning_content": None,
+                        }
+                    }
+                ]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    for expects_value in ("box", "point", "polygon", "clip"):
+        captured.clear()
+
+        @perceive(expects=expects_value, model="isaac-0.3-max", provider="perceptron")
+        def make_request():
+            return text("stub prompt")
+
+        with cfg(provider="perceptron", base_url="https://mock.api"):
+            make_request()
+
+        payload = captured["payload"]
+        messages = payload.get("messages") or []
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        assert len(system_msgs) == 1, (
+            f"expects={expects_value!r}: expected exactly one system message, got {messages!r}"
+        )
+        sys_content = str(system_msgs[0].get("content") or "")
+        assert expects_value.upper() in sys_content, (
+            f"expects={expects_value!r}: expected {expects_value.upper()!r} inside system hint, "
+            f"got system content={sys_content!r}"
+        )
+        assert "vision_config" not in payload
+
+
+def test_perceptron_expects_text_no_system_hint(monkeypatch):
+    """Sanity: expects='text' with reasoning=False emits no hint at all."""
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "stub", "reasoning_content": None}}]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+
+    @perceive(expects="text", model="isaac-0.3-max", provider="perceptron")
+    def make_request():
+        return text("stub prompt")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured["payload"]
+    messages = payload.get("messages") or []
+    # No system message at all — nothing to hint.
+    assert all(m.get("role") != "system" for m in messages), f"Expected no system message, got {messages!r}"
+
+
+def test_non_perceptron_provider_keeps_top_level_reasoning(monkeypatch):
+    """Other providers (nebius/modal/fal) keep the original top-level reasoning
+    field; no system hint is emitted by the perceptron-specific path.
+    """
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "stub", "reasoning_content": None}}]
+            }
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("FAL_KEY", "test-key")
+
+    @perceive(expects="box", model="isaac-0.1", provider="fal")
+    def make_request():
+        return text("stub prompt")
+
+    with cfg(provider="fal", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured["payload"]
+    assert "vision_config" not in payload

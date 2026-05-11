@@ -354,6 +354,9 @@ def test_examples_icl_detection_sequence(monkeypatch):
     assert any("classA" in msg and "(316,136) (703,906)" in msg for msg in assistant_messages)
     assert any("classB" in msg and "(161,48) (666,980)" in msg for msg in assistant_messages)
     system_msgs = [item.get("content", "") for item in content if item.get("role") == "system"]
-    assert system_msgs and "classA" in system_msgs[0] and "classB" in system_msgs[0]
+    # The categories prompt should appear in some system message; the hint
+    # injection may add an additional `<hint>BOX</hint>` system entry on
+    # the perceptron provider, so check across all system messages.
+    assert any("classA" in msg and "classB" in msg for msg in system_msgs)
     image_nodes = [item for item in content if item.get("type") == "image"]
     assert len(image_nodes) == 3
