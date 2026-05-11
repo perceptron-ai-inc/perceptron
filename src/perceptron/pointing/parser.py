@@ -5,16 +5,19 @@ Supported tags
 - <point_box [mention=...][t=FLOAT]> (x1,y1) (x2,y2) </point_box>
 - <polygon [mention=...][t=FLOAT]> (x1,y1) (x2,y2) (x3,y3) ... </polygon>
 - <collection> ...child point/box/polygon tags... </collection>
+- <clip [mention=...] t=FLOAT[ FLOAT] />  (self-closing; moment or [at, until] range)
 
 Helpers
 - parse_text(text) → ordered segments: text and structured tags with spans
 - extract_points(text, expected) → filtered list of point/box/polygon
+- extract_clips(text) → list of clip annotations (with mention inheritance inside collections)
 - strip_tags(text) → remove all canonical tags
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from html import escape, unescape
@@ -174,16 +177,40 @@ class PointParser:
         return [seg for seg in parse_text(text) if seg.get("kind") != "text"]
 
 
-def parse_text(text: str) -> list[dict[str, Any]]:
+def parse_text(text: str, *, expects: str | None = None) -> list[dict[str, Any]]:
     """Return ordered segments: text and tag segments with spans.
+
+    The `expects` parameter selects which tag family to scan for, so callers
+    don't pay for parsing tags they don't care about:
+      - ``"clip"``: scan self-closing ``<clip />`` tags only
+      - ``"point"`` | ``"box"`` | ``"polygon"`` | ``None``: scan
+        point/point_box/polygon/collection tags (default — preserves the
+        original geometry-only contract)
+      - anything else: no tag parsing; the input is returned as a single
+        text segment
 
     Segment shapes:
       - {"kind": "text", "text": str, "span": {"start": int, "end": int}}
       - {"kind": "point"|"box"|"polygon"|"collection", "value": obj, "span": {...}}
+      - {"kind": "clip", "value": Clip, "span": {...}}
     """
+    if expects == "clip":
+        pattern, handler = _CLIP_TAG, _clip_match_to_segment
+    elif expects is None or expects in {"point", "box", "polygon"}:
+        pattern, handler = _FULL_TAG, _shape_match_to_segment
+    else:
+        return [{"kind": "text", "text": text, "span": {"start": 0, "end": len(text)}}] if text else []
+    return _scan_segments(text, pattern, handler)
+
+
+def _scan_segments(
+    text: str,
+    pattern: re.Pattern[str],
+    handler: Callable[[re.Match[str]], tuple[str, Any]],
+) -> list[dict[str, Any]]:
     segments: list[dict[str, Any]] = []
     idx = 0
-    for m in _FULL_TAG.finditer(text):
+    for m in pattern.finditer(text):
         if m.start() > idx:
             segments.append(
                 {
@@ -192,27 +219,8 @@ def parse_text(text: str) -> list[dict[str, Any]]:
                     "span": {"start": idx, "end": m.start()},
                 }
             )
-        tag = m.group("tag").lower()
-        inner_body = m.group("body") or ""
-        attrs = _parse_attrs(m.group("attrs") or "")
-        if tag == "point":
-            obj = _parse_point_body(inner_body)
-            kind = "point"
-        elif tag == "point_box":
-            obj = _parse_box_body(inner_body)
-            kind = "box"
-        elif tag == "polygon":
-            obj = _parse_polygon_body(inner_body)
-            kind = "polygon"
-        else:  # collection
-            obj = _parse_collection_body(inner_body)
-            kind = "collection"
-        if "mention" in attrs:
-            obj.mention = attrs["mention"]
-            if "t" in attrs:
-                with suppress(ValueError):
-                    obj.t = float(attrs["t"])
-        segments.append({"kind": kind, "value": obj, "span": {"start": m.start(), "end": m.end()}})
+        kind, value = handler(m)
+        segments.append({"kind": kind, "value": value, "span": {"start": m.start(), "end": m.end()}})
         idx = m.end()
     if idx < len(text):
         segments.append(
@@ -223,6 +231,48 @@ def parse_text(text: str) -> list[dict[str, Any]]:
             }
         )
     return segments
+
+
+def _shape_match_to_segment(m: re.Match[str]) -> tuple[str, Any]:
+    tag = m.group("tag").lower()
+    inner_body = m.group("body") or ""
+    attrs = _parse_attrs(m.group("attrs") or "")
+    obj: SinglePoint | BoundingBox | Polygon | Collection
+    if tag == "point":
+        obj = _parse_point_body(inner_body)
+        kind = "point"
+    elif tag == "point_box":
+        obj = _parse_box_body(inner_body)
+        kind = "box"
+    elif tag == "polygon":
+        obj = _parse_polygon_body(inner_body)
+        kind = "polygon"
+    else:  # collection
+        obj = _parse_collection_body(inner_body)
+        kind = "collection"
+    if "mention" in attrs:
+        obj.mention = attrs["mention"]
+        if "t" in attrs:
+            with suppress(ValueError):
+                obj.t = float(attrs["t"])
+    return kind, obj
+
+
+def _clip_match_to_segment(m: re.Match[str]) -> tuple[str, Any]:
+    return "clip", _parse_clip_body(m.group("attrs") or "")
+
+
+def _parse_clip_body(attrs: str) -> Clip:
+    """Parse a self-closing `<clip />` tag's attributes into a Clip. Raises ParseError if t is missing or unparseable."""
+    ts = _parse_clip_t(attrs)
+    if ts is None:
+        raise ParseError(
+            f"Malformed <clip /> tag: expected a numeric t= attribute (e.g., t=1.5 or t=\"1.5 2.0\") but got attrs: {attrs!r}",
+            code="invalid_clip_timestamp",
+            details={"attrs": attrs},
+        )
+    mention = _parse_attrs(attrs).get("mention")
+    return Clip(timestamp=ts, mention=mention)
 
 
 def _kind_of(obj: Any) -> str | None:

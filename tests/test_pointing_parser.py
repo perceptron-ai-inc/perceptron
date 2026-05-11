@@ -9,6 +9,8 @@ from perceptron.pointing.parser import (
 )
 from perceptron.pointing.types import (
     BoundingBox,
+    Clip,
+    ClipTimestamp,
     Collection,
     Polygon,
     SinglePoint,
@@ -197,3 +199,61 @@ class TestParseErrorOnMalformedTags:
         segs = parse_text(text)
         assert len(segs) == 1
         assert segs[0]["kind"] == "polygon"
+
+
+class TestParseTextClipSegments:
+    """With expects='clip', parse_text scans only <clip /> tags."""
+
+    def test_top_level_clip_emits_clip_segment(self):
+        text = 'before <clip mention="intro" t=1.5/> after'
+        segs = parse_text(text, expects="clip")
+        kinds = [s["kind"] for s in segs]
+        assert kinds == ["text", "clip", "text"]
+        clip_seg = segs[1]
+        assert clip_seg["value"] == Clip(timestamp=ClipTimestamp(at=1.5), mention="intro")
+        assert clip_seg["span"]["start"] == len("before ")
+
+    def test_clip_range_t_attribute(self):
+        text = '<clip mention="action" t="10 20"/>'
+        segs = parse_text(text, expects="clip")
+        assert len(segs) == 1
+        assert segs[0]["kind"] == "clip"
+        assert segs[0]["value"] == Clip(
+            timestamp=ClipTimestamp(at=10.0, until=20.0), mention="action"
+        )
+
+    def test_clip_mode_ignores_point_tags(self):
+        """Clip mode does not scan geometry tags — they remain in the surrounding text segment."""
+        text = '<point>(1,2)</point> and <clip t=1.0/>'
+        segs = parse_text(text, expects="clip")
+        kinds = [s["kind"] for s in segs]
+        assert kinds == ["text", "clip"]
+        assert "<point>" in segs[0]["text"]
+
+    def test_clip_inside_collection_is_found_in_clip_mode(self):
+        """expects='clip' scans the whole text — nesting under <collection> doesn't hide the clip."""
+        text = '<collection mention="bundle"><point>(1,2)</point><clip t=1.0/></collection>'
+        segs = parse_text(text, expects="clip")
+        clip_segs = [s for s in segs if s["kind"] == "clip"]
+        assert len(clip_segs) == 1
+        assert clip_segs[0]["value"].timestamp == ClipTimestamp(at=1.0)
+
+    def test_clip_without_t_raises_parse_error(self):
+        text = '<clip mention="bare"/>'
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text, expects="clip")
+        assert exc_info.value.code == "invalid_clip_timestamp"
+
+    def test_clip_with_unparseable_t_raises_parse_error(self):
+        text = '<clip t="not-a-number"/>'
+        with pytest.raises(ParseError) as exc_info:
+            parse_text(text, expects="clip")
+        assert exc_info.value.code == "invalid_clip_timestamp"
+
+    def test_default_expects_does_not_parse_clips(self):
+        """Default mode preserves the geometry-only contract — clip tags stay in text segments."""
+        text = 'before <clip t=1.5/> after'
+        segs = parse_text(text)
+        assert len(segs) == 1
+        assert segs[0]["kind"] == "text"
+        assert "<clip" in segs[0]["text"]
