@@ -16,7 +16,7 @@ Optimal prompts for each SDK primitive with SDK and curl examples.
 ```python
 from perceptron import configure, caption
 
-configure(provider="perceptron", model="mk1", api_key="<your-api-key>")
+configure(provider="perceptron", model="perceptron-mk1", api_key="<your-api-key>")
 
 result = caption("image.jpg", style="concise")
 print(result.text)
@@ -29,7 +29,7 @@ curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "mk1",
+  "model": "perceptron-mk1",
   "messages": [
     {
       "role": "user",
@@ -56,7 +56,7 @@ You are an OCR (Optical Character Recognition) system. Accurately detect, extrac
 ```python
 from perceptron import configure, ocr
 
-configure(provider="perceptron", model="mk1", api_key="<your-api-key>")
+configure(provider="perceptron", model="perceptron-mk1", api_key="<your-api-key>")
 
 result = ocr("document.png")
 print(result.text)
@@ -73,7 +73,7 @@ curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "mk1",
+  "model": "perceptron-mk1",
   "messages": [
     {
       "role": "system",
@@ -105,7 +105,7 @@ curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
 ```python
 from perceptron import configure, detect
 
-configure(provider="perceptron", model="mk1", api_key="<your-api-key>")
+configure(provider="perceptron", model="perceptron-mk1", api_key="<your-api-key>")
 
 result = detect("warehouse.jpg", classes=["forklift", "person", "pallet"])
 
@@ -120,7 +120,7 @@ curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "mk1",
+  "model": "perceptron-mk1",
   "messages": [
     {
       "role": "user",
@@ -144,7 +144,7 @@ Pass your question directly as user content. For grounded responses, set `expect
 ```python
 from perceptron import configure, question
 
-configure(provider="perceptron", model="mk1", api_key="<your-api-key>")
+configure(provider="perceptron", model="perceptron-mk1", api_key="<your-api-key>")
 
 # Simple Q&A
 result = question("factory.jpg", "How many workers are visible?")
@@ -163,7 +163,7 @@ curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "mk1",
+  "model": "perceptron-mk1",
   "messages": [
     {
       "role": "user",
@@ -189,7 +189,7 @@ from perceptron import configure, perceive, image, text
 
 configure(provider="perceptron", api_key="<your-api-key>")
 
-@perceive(model="mk1", max_tokens=4096, reasoning=True)
+@perceive(model="perceptron-mk1", max_tokens=4096, reasoning=True)
 def count_objects(img_url: str, query: str):
     return image(img_url) + text(query)
 
@@ -207,7 +207,7 @@ curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
-  "model": "mk1",
+  "model": "perceptron-mk1",
   "messages": [
     {
       "role": "system",
@@ -238,7 +238,7 @@ class SceneAnalysis(BaseModel):
     main_subjects: list[str]
     mood: Literal["calm", "energetic", "dramatic", "peaceful", "tense"]
 
-@perceive(model="mk1", response_format=pydantic_format(SceneAnalysis))
+@perceive(model="perceptron-mk1", response_format=pydantic_format(SceneAnalysis))
 def analyze_scene(img_path: str):
     return image(img_path) + text("Analyze this scene. Output JSON.")
 

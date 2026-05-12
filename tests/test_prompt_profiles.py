@@ -41,21 +41,21 @@ def test_caption_defaults_to_isaac_prompt_on_fal():
     assert "Provide a concise, human-friendly caption for the upcoming image." in user_messages
 
 
-def test_select_model_accepts_mk1_for_perceptron():
+def test_select_model_accepts_perceptron_mk1_for_perceptron():
     perceptron_cfg = {"name": "perceptron", **_PROVIDER_CONFIG["perceptron"]}
-    resolved = _select_model(perceptron_cfg, "mk1")
-    assert resolved == "mk1"
+    resolved = _select_model(perceptron_cfg, "perceptron-mk1")
+    assert resolved == "perceptron-mk1"
 
 
-def test_select_model_rejects_mk1_for_fal():
+def test_select_model_rejects_perceptron_mk1_for_fal():
     fal_cfg = {"name": "fal", **_PROVIDER_CONFIG["fal"]}
     with pytest.raises(BadRequestError):
-        _select_model(fal_cfg, "mk1")
+        _select_model(fal_cfg, "perceptron-mk1")
 
 
-def test_mk1_models_entry_supports_reasoning_and_focus():
+def test_perceptron_mk1_models_entry_supports_reasoning_and_focus():
     perceptron_cfg = _PROVIDER_CONFIG["perceptron"]
-    entry = perceptron_cfg["models"]["mk1"]
+    entry = perceptron_cfg["models"]["perceptron-mk1"]
     assert entry["reasoning"] is True
     assert entry["focus"] is True
     assert entry["skip_structured_hints"] is False
