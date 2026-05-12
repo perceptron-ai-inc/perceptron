@@ -91,12 +91,12 @@ No credentials? The SDK returns compile-only payloads when API keys are missing,
 
 ## Configuration
 
-Set credentials once via environment, code, or the CLI. The SDK ships with the Perceptron backend enabled by default and `mk1` selected as the default model — override per call with `model=...`. You can add or swap providers (e.g., `fal`) by extending `perceptron.client._PROVIDER_CONFIG`.
+Set credentials once via environment, code, or the CLI. The SDK ships with the Perceptron backend enabled by default and `perceptron-mk1` selected as the default model — override per call with `model=...`. You can add or swap providers (e.g., `fal`) by extending `perceptron.client._PROVIDER_CONFIG`.
 
 **Environment variables (pick what you need):**
 - `PERCEPTRON_PROVIDER` – provider identifier (`perceptron` by default)
 - `PERCEPTRON_API_KEY` – API key for the selected provider
-- `PERCEPTRON_MODEL` – override the default model (e.g., `mk1`, `isaac-0.1`)
+- `PERCEPTRON_MODEL` – override the default model (e.g., `perceptron-mk1`, `isaac-0.1`)
 - Provider-specific keys (e.g., `FAL_KEY`) when targeting alternates
 
 ```bash

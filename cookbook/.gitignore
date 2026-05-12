@@ -39,14 +39,14 @@ recipes/capabilities/visual-qa/visual-qa.py
 recipes/tutorials/isaac_frame_by_frame/isaac_frame_by_frame.py
 recipes/capabilities/in-context-learning/in-context-learning.py
 recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.py
-recipes/capabilities/mk1/image-qa.py
-recipes/capabilities/mk1/image-captioning.py
-recipes/capabilities/mk1/object-detection.py
-recipes/capabilities/mk1/ocr.py
-recipes/capabilities/mk1/in-context-learning-image.py
-recipes/capabilities/mk1/in-context-learning-video.py
-recipes/capabilities/mk1/video-qa.py
-recipes/capabilities/mk1/video-clipping.py
+recipes/capabilities/perceptron-mk1/image-qa.py
+recipes/capabilities/perceptron-mk1/image-captioning.py
+recipes/capabilities/perceptron-mk1/object-detection.py
+recipes/capabilities/perceptron-mk1/ocr.py
+recipes/capabilities/perceptron-mk1/in-context-learning-image.py
+recipes/capabilities/perceptron-mk1/in-context-learning-video.py
+recipes/capabilities/perceptron-mk1/video-qa.py
+recipes/capabilities/perceptron-mk1/video-clipping.py
 
 # Tutorial-generated artifacts
 recipes/tutorials/**/frames/
