@@ -12,6 +12,8 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 | --- | --- | --- |
 | [`quickstart_perceptron`](quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) | Ask Perceptron Mk1 a question about an image and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) |
 | [`quickstart_perceptron_video`](quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) | Ask Perceptron Mk1 a question about a video and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) |
+| [`quickstart_isaac_0_2`](quickstart/quickstart_isaac_0_2/quickstart_isaac_0_2.ipynb) | Ask Isaac 0.2 a question about an image (defaults to `isaac-0.2-1b`); switch to `isaac-0.2-2b-preview` for reasoning. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_isaac_0_2/quickstart_isaac_0_2.ipynb) |
+| [`quickstart_isaac_0_1`](quickstart/quickstart_isaac_0_1/quickstart_isaac_0_1.ipynb) | Ask Isaac 0.1 a question about an image (legacy open-weights model; reasoning not supported). | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_isaac_0_1/quickstart_isaac_0_1.ipynb) |
 
 ---
 
