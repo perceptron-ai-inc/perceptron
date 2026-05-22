@@ -63,7 +63,6 @@ Original Isaac recipes pinned to `isaac-0.1`. Kept for existing integrations.
 | [`visual-qa`](recipes/capabilities/visual-qa/visual-qa.ipynb) | Ask grounded questions and cite regions with bounding boxes. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/visual-qa/visual-qa.ipynb) |
 | [`in-context-learning`](recipes/capabilities/in-context-learning/in-context-learning.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/in-context-learning/in-context-learning.ipynb) |
 | [`multi-image-in-context-learning`](recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) |
-| [`isaac-0.1/structured-outputs`](recipes/capabilities/isaac-0.1/structured-outputs.ipynb) | Structured output with Pydantic schemas or regex patterns (uses `isaac-0.1`). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.1/structured-outputs.ipynb) |
 
 ---
 
