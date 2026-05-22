@@ -36,9 +36,23 @@ Image and video recipes for the flagship `perceptron-mk1` model, using the v0.3.
 
 > **When to use `detect()` vs `@perceive`?** Use `detect()` for quick, single-shot helpers. Reach for `@perceive` when you want to embed custom prompts, streaming, or multi-step logic inside your own pipeline.
 
-### Isaac family
+### Isaac 0.2
 
-Image-only recipes pinned to the Isaac 0.1 / 0.2 family — useful as a reference when targeting the edge-tier models.
+Image-only recipes pinned to `isaac-0.2-1b`. Open-weights edge-tier model with reasoning support on the 2B Preview variant.
+
+| Notebook | Scenario | Colab |
+| --- | --- | --- |
+| [`isaac-0.2/image-qa`](recipes/capabilities/isaac-0.2/image-qa.ipynb) | Ask grounded questions and cite regions with bounding boxes. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/image-qa.ipynb) |
+| [`isaac-0.2/image-captioning`](recipes/capabilities/isaac-0.2/image-captioning.ipynb) | Generate concise or grounded captions (with bounding boxes). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/image-captioning.ipynb) |
+| [`isaac-0.2/object-detection`](recipes/capabilities/isaac-0.2/object-detection.ipynb) | Detect PPE with a `@perceive` helper or the high-level `detect()` API. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/object-detection.ipynb) |
+| [`isaac-0.2/ocr`](recipes/capabilities/isaac-0.2/ocr.ipynb) | Run OCR with custom prompts and parse the output. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/ocr.ipynb) |
+| [`isaac-0.2/in-context-learning-image`](recipes/capabilities/isaac-0.2/in-context-learning-image.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/in-context-learning-image.ipynb) |
+| [`isaac-0.2/multi-image-in-context-learning`](recipes/capabilities/isaac-0.2/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/multi-image-in-context-learning.ipynb) |
+| [`constrained-decoding`](recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) | Force structured output with Pydantic schemas or regex patterns (uses `isaac-0.2-1b`). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) |
+
+### Isaac 0.1 (legacy)
+
+Original Isaac recipes pinned to `isaac-0.1`. Kept for existing integrations.
 
 | Notebook | Scenario | Colab |
 | --- | --- | --- |
@@ -48,7 +62,6 @@ Image-only recipes pinned to the Isaac 0.1 / 0.2 family — useful as a referenc
 | [`visual-qa`](recipes/capabilities/visual-qa/visual-qa.ipynb) | Ask grounded questions and cite regions with bounding boxes. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/visual-qa/visual-qa.ipynb) |
 | [`in-context-learning`](recipes/capabilities/in-context-learning/in-context-learning.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/in-context-learning/in-context-learning.ipynb) |
 | [`multi-image-in-context-learning`](recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/multi-image-in-context-learning/multi-image-in-context-learning.ipynb) |
-| [`constrained-decoding`](recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) | Force structured output with Pydantic schemas or regex patterns. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) |
 
 ---
 
