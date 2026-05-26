@@ -49,7 +49,7 @@ Image-only recipes pinned to `isaac-0.2-1b`. Open-weights edge-tier model with r
 | [`isaac-0.2/ocr`](recipes/capabilities/isaac-0.2/ocr.ipynb) | Run OCR with custom prompts and parse the output. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/ocr.ipynb) |
 | [`isaac-0.2/in-context-learning-image`](recipes/capabilities/isaac-0.2/in-context-learning-image.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/in-context-learning-image.ipynb) |
 | [`isaac-0.2/multi-image-in-context-learning`](recipes/capabilities/isaac-0.2/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/multi-image-in-context-learning.ipynb) |
-| [`constrained-decoding`](recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) | Structured output with Pydantic schemas or regex patterns (uses `isaac-0.2-1b`). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/constrained-decoding/constrained-decoding.ipynb) |
+| [`isaac-0.2/structured-outputs`](recipes/capabilities/isaac-0.2/structured-outputs.ipynb) | Structured output with Pydantic schemas or regex patterns (uses `isaac-0.2-1b`). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/structured-outputs.ipynb) |
 
 ### Isaac 0.1 (legacy)
 
