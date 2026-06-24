@@ -34,6 +34,14 @@ dev = [
 ]
 torch = [
     "torch>=2.0",
+    "executorch>=1",
+    "coremltools==9.0b1",
+]
+huggingface = [
+    "torch>=2.0",
+    "transformers>=4.40.0",
+    "loguru>=0.7.0",
+    "executorch>=1.0",
 ]
 
 [tool.setuptools.package-dir]

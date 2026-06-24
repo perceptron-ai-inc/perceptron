@@ -382,6 +382,16 @@ class TensorStream:
             schedule=False,
         )
 
+    def __len__(self) -> int:
+        return sum(len(stream.events) for stream in self.streams)
+
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """Expose flattened event data for pytree traversal helpers."""
+        if idx < 0:
+            idx += len(self)
+        flat_events = [event for stream in self.streams for event in stream.events]
+        return flat_events[idx].data
+
     @property
     def device(self):
         return self._device

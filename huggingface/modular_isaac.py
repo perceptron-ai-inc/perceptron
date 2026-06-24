@@ -76,16 +76,6 @@ class PixelShuffleSiglip2VisionConfig(Siglip2VisionConfig):
         self.num_patches = num_patches
 
 
-def create_cumulative_seq_lengths(
-    seq_sizes: torch.Tensor, device: torch.device
-) -> tuple[torch.Tensor, int]:
-    """Create cumulative sequence lengths for variable-length attention."""
-    cu_seqlens = torch.zeros(len(seq_sizes) + 1, dtype=torch.int32, device=device)
-    cu_seqlens[1:] = seq_sizes.cumsum(0)
-    max_seqlen = int(seq_sizes.max().item()) if len(seq_sizes) > 0 else 0
-    return cu_seqlens, max_seqlen
-
-
 def _max_from_cu(cu: torch.Tensor | None, fallback: int) -> int:
     """Helper to compute max sequence length from cumulative sequence lengths."""
     if cu is None or len(cu) < 2:
@@ -163,15 +153,23 @@ def sdpa_document_mask_forward(
     attn_mask = None
     if cu_seqlens is not None:
         seq_sizes = (cu_seqlens[1:] - cu_seqlens[:-1]).long()
-        seg_ids = torch.repeat_interleave(
-            torch.arange(len(seq_sizes), device=q_lhd.device), seq_sizes
-        )
-        block_mask = (
-            seg_ids[:, None] != seg_ids[None, :]
-        )  # Cross-document attention blocked
-        attn_mask = (
-            torch.where(block_mask, -torch.inf, 0.0).to(q_lhd.dtype).view(1, 1, L, L)
-        )
+        if seq_sizes.numel() > 0:
+            positions = torch.arange(L, device=q_lhd.device, dtype=seq_sizes.dtype)
+            pos_i = positions.view(L, 1, 1)
+            pos_j = positions.view(1, L, 1)
+            doc_starts = cu_seqlens[:-1].to(device=q_lhd.device, dtype=seq_sizes.dtype)
+            doc_ends = cu_seqlens[1:].to(device=q_lhd.device, dtype=seq_sizes.dtype)
+            doc_starts = doc_starts.view(1, 1, -1)
+            doc_ends = doc_ends.view(1, 1, -1)
+            in_doc_i = (pos_i >= doc_starts) & (pos_i < doc_ends)
+            in_doc_j = (pos_j >= doc_starts) & (pos_j < doc_ends)
+            same_doc = (in_doc_i & in_doc_j).any(dim=-1)
+            block_mask = ~same_doc
+            attn_mask = (
+                torch.where(block_mask, -torch.inf, 0.0)
+                .to(q_lhd.dtype)
+                .view(1, 1, L, L)
+            )
 
     Y = F.scaled_dot_product_attention(
         Q, K, V, attn_mask=attn_mask, dropout_p=dropout, scale=scaling
@@ -196,7 +194,7 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
         self.position_embedding = nn.Embedding(self.num_patches, self.embed_dim)
 
     def positional_embeddings(
-        self, packed_seq_patches: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        self, token_grids: list[torch.Tensor]
     ) -> torch.Tensor:
         # Prepare positional embeddings grid: (1, embed_dim, h, w)
         positional_embeddings = (
@@ -207,13 +205,12 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
             .unsqueeze(0)
         )
 
-        _seq_patches, _seq_sizes, spatial_shapes = packed_seq_patches
         pos_embeds_list = []
         mode = "bilinear"
         align_corners = False
         antialias = True
-        for spatial_shape in spatial_shapes:
-            height, width = spatial_shape
+        for tg in token_grids:
+            height, width = tg.shape
             # Guard to ensure height and width are positive for torch.compile
             if height > 0 and width > 0:
                 resized_pos_embed = F.interpolate(
@@ -240,14 +237,14 @@ class Siglip2VariableSequenceEmbeddings(nn.Module):
         return pos_embeds
 
     def forward(
-        self, packed_seq_patches: tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-    ):
-        seq_patches, _seq_sizes, _spatial_shapes = packed_seq_patches
-
+        self, 
+        packed: tuple[torch.Tensor, list[torch.Tensor]] #i hate to do "packed" but can't get around nn.Sequential
+    ) -> torch.Tensor:
+        seq_patches, token_grids = packed 
         # Apply patch embeddings
         target_dtype = self.patch_embedding.weight.dtype
         patch_embeds = self.patch_embedding(seq_patches.to(dtype=target_dtype))
-        pos_embeds = self.positional_embeddings(packed_seq_patches)
+        pos_embeds = self.positional_embeddings(token_grids)
 
         # Add positional embeddings to patch embeddings
         embeddings = patch_embeds + pos_embeds
@@ -395,10 +392,9 @@ class IsaacEncoder(nn.Module):
 
 
 def create_pixel_shuffle_index_map(
-    seq_sizes: torch.Tensor,
-    token_grids: torch.Tensor,
+    token_grids: list[torch.Tensor],
+    device: torch.device,
     scale_factor: int = 1,
-    device: torch.device | None = None,
 ) -> torch.Tensor:
     """
     Build a gather-index map that tells us, for every *output* token after
@@ -406,10 +402,9 @@ def create_pixel_shuffle_index_map(
 
     Args
     ----
-    seq_sizes     : (num_images,)  - #patches in each image (row-major order)
-    token_grids   : (num_images,2) - (height, width) for every image
+    token_grids   : list[(H,W)] - (height, width) for every image
     scale_factor  : spatial down-scale factor (≥2)
-    device        : (optional) overrides `seq_sizes.device`
+    device        : torch.device
 
     Returns
     -------
@@ -418,27 +413,23 @@ def create_pixel_shuffle_index_map(
                  packed sequence for the j-th sub-patch that forms the
                  i-th output token.
     """
-    if device is None:
-        device = seq_sizes.device
-
     r = int(scale_factor)
     if r < 2:
         raise ValueError("`scale_factor` must be ≥ 2")
 
     # Safety: all spatial dims must be divisible by r
     # Cannot run under torch compile fullgraph mode hence
-    if not torch.compiler.is_compiling():
-        if not (
-            (token_grids[:, 0] % r == 0).all() and (token_grids[:, 1] % r == 0).all()
-        ):
-            raise AssertionError(
-                f"Every (H,W) in `token_grids` must be divisible by scale_factor={r}, got {token_grids.tolist()}"
-            )
+    if not all(map(lambda x: x.shape[0] % r == 0 and x.shape[1] % r == 0, token_grids)):
+        raise AssertionError(
+            f"Every (H,W) in `token_grids` must be divisible by scale_factor={r}, got {token_grids}"
+        )
 
     gather_chunks: list[torch.Tensor] = []
     tok_offset = 0
 
-    for seq_len, (h, w) in zip(seq_sizes.tolist(), token_grids.tolist(), strict=False):
+    for tg in token_grids:
+        h, w = tg.shape[0], tg.shape[1]
+        seq_len = h * w
         # Build the (H, W) grid of flat indices for this image
         grid = torch.arange(seq_len, device=device, dtype=torch.int64) + tok_offset
         grid = grid.view(h, w)  # (H, W)
@@ -462,7 +453,7 @@ def create_pixel_shuffle_index_map(
 
 def pixel_shuffle_varlen(
     x: torch.Tensor,
-    token_grids: torch.Tensor,
+    token_grids: list[torch.Tensor],
     scale_factor: int = 1,
 ) -> torch.Tensor:
     r"""Apply pixel shuffle to a packed vision sequence without unpacking per image.
@@ -498,11 +489,10 @@ def pixel_shuffle_varlen(
     r = int(scale_factor)
 
     # Calculate seq_sizes from token_grids
-    seq_sizes = torch.prod(token_grids, dim=-1)
+    seq_sizes = x_.new_tensor([tg.shape[0] * tg.shape[1] for tg in token_grids], dtype=torch.int32)
 
     # Build index map and gather in one go
     gather_idx = create_pixel_shuffle_index_map(
-        seq_sizes=seq_sizes,
         token_grids=token_grids,
         scale_factor=r,
         device=x_.device,
@@ -531,20 +521,25 @@ class Siglip2SequenceVisionTransformer(nn.Module):
         )
         self.pixel_shuffle_scale_factor = config.pixel_shuffle_scale_factor
 
-    def forward(self, packed_seq_patches: tuple[torch.Tensor, torch.Tensor]):
-        seq_patches, token_grids = packed_seq_patches
-        seq_sizes = torch.prod(token_grids, dim=-1)
+    def forward(
+        self,
+        packed: tuple[torch.Tensor,list[torch.Tensor]],
+    ) -> torch.Tensor:
+        seq_patches, token_grids = packed
+        seq_sizes = seq_patches.new_tensor(
+            [tg.shape[0] * tg.shape[1] for tg in token_grids],
+            dtype=torch.int32,
+        )
+        max_seqlen = max([tg.shape[0] * tg.shape[1] for tg in token_grids]) if len(token_grids) > 0 else 0
 
         # Get embeddings from packed sequence
-        hidden_states = self.embeddings((seq_patches, seq_sizes, token_grids))
-
+        hidden_states = self.embeddings(packed)
         # Add a pseudo batch dimension for the encoder
         hidden_states = hidden_states.unsqueeze(0)
 
         # Generate cumulative sequence lengths for variable-length attention
-        cu_seqlens, max_seqlen = create_cumulative_seq_lengths(
-            seq_sizes, hidden_states.device
-        )
+        cu_seqlens = seq_sizes.new_zeros((seq_sizes.shape[0] + 1,))
+        cu_seqlens[1:] = seq_sizes.cumsum(0)
 
         # Pass through encoder with variable-length attention parameters
         hidden_states, _, _ = self.encoder(
@@ -711,10 +706,6 @@ def get_image_size_for_max_num_patches(
         return target_height, target_width
 
 
-_MEAN_TENSOR = torch.tensor(VISION_MEAN, dtype=torch.float32).view(1, 1, 1, -1)
-_STD_TENSOR = torch.tensor(VISION_STD, dtype=torch.float32).view(1, 1, 1, -1)
-
-
 def prepare_image_tensor(
     image: torch.Tensor,
     scale: float = VISION_SCALE,
@@ -734,9 +725,9 @@ def prepare_image_tensor(
         image = image.float()
     rescaled = image * scale
 
-    # Use precomputed tensors and move to the correct device if needed
-    mean_tensor = _MEAN_TENSOR.to(image.device)
-    std_tensor = _STD_TENSOR.to(image.device)
+    # Materialize normalization stats directly on the incoming tensor's device/dtype
+    mean_tensor = image.new_tensor(VISION_MEAN, dtype=torch.float32).view(1, 1, 1, -1)
+    std_tensor = image.new_tensor(VISION_STD, dtype=torch.float32).view(1, 1, 1, -1)
 
     normalized = (rescaled - mean_tensor) / std_tensor
     return normalized
@@ -887,8 +878,12 @@ def precompute_cos_sin_3d(
     device = position_ids.device
 
     # Initialize with full dimension (not half) to match LLaMA
-    cos_3d = torch.zeros((B, T, dim_half * 2), dtype=torch.float32, device=device)
-    sin_3d = torch.zeros((B, T, dim_half * 2), dtype=torch.float32, device=device)
+    cos_3d = position_ids.new_zeros(
+        (B, T, dim_half * 2), dtype=torch.float32
+    )
+    sin_3d = position_ids.new_zeros(
+        (B, T, dim_half * 2), dtype=torch.float32
+    )
 
     offset = 0
     for d in range(3):
@@ -1329,11 +1324,12 @@ class IsaacModel(Qwen3Model):
         return h
 
     def embed_vision(
-        self, vision_tokens: tuple[torch.Tensor, torch.Tensor]
+        self,
+        seq_patches: torch.Tensor,
+        token_grids: list[torch.Tensor],
     ) -> torch.Tensor:
         """Embed vision tokens using the vision encoder."""
-        # vision tokens is (seq_patches, token_grids)
-        return self.vision_embedding(vision_tokens)
+        return self.vision_embedding((seq_patches, token_grids))
 
     def embed_stream(self, tensor_stream: TensorStream) -> torch.Tensor:
         """
@@ -1352,22 +1348,20 @@ class IsaacModel(Qwen3Model):
         token_grids = defaultdict(list)
         for stream in tensor_stream.streams:
             for event in stream:
-                token_grids[event.type].append(event.dims(virtual=False))
+                token_grids[event.type].append(torch.empty(event.dims(virtual=False)[1:], device="meta"))#type: ignore
 
         embedded_compact = {}
         for stream_type, modality_payload_tensor in per_modality_compact_stream.items():
             if stream_type.modality == VisionType:
-                # Build a (N_events, 2) grid tensor with spatial dims only
                 grids = token_grids.get(stream_type, [])
                 if len(grids) == 0:
-                    input_tensor = modality_payload_tensor
-                else:
-                    token_grids_tensor = torch.tensor(
-                        grids, dtype=torch.long, device=tensor_stream.device
-                    )[:, 1:]
-                    input_tensor = (modality_payload_tensor, token_grids_tensor)
+                    raise ValueError(
+                        "Vision events missing spatial grid metadata; cannot embed."
+                    )
+
                 embedded_compact[stream_type] = self.embed_fns[stream_type.modality](
-                    input_tensor
+                    modality_payload_tensor,
+                    grids,
                 )
             else:
                 embedded_compact[stream_type] = self.embed_fns[stream_type.modality](
@@ -1756,8 +1750,12 @@ class IsaacForConditionalGeneration(Qwen3ForCausalLM, GenerationMixin):
                 rope_delta, int
             ):  # otherwise `deltas` is an int `0`
                 batch_size = input_ids.shape[0]
-                rope_delta = rope_delta.repeat_interleave(
-                    batch_size // rope_delta.shape[0], dim=0
+                repeat_factor = batch_size // rope_delta.shape[0]
+                # Expand along a new axis then flatten so we only use reshape/expand
+                rope_delta = (
+                    rope_delta.unsqueeze(1)
+                    .expand(-1, repeat_factor, -1)
+                    .reshape(-1, rope_delta.shape[-1])
                 )
             position_ids = position_ids.add(rope_delta)
 
