@@ -242,6 +242,29 @@ def test_caption_command_forwards_reasoning_effort(monkeypatch):
     assert captured["kwargs"]["reasoning_effort"] == "high"
 
 
+def test_question_command_forwards_audio_in_video_with_reasoning_effort(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    def _fake_question(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _StubResult("cat")
+
+    monkeypatch.setattr("perceptron.cli.question_image", _fake_question)
+    result = runner.invoke(
+        app,
+        [
+            "question",
+            "https://example.com/clip.mp4",
+            "What is said?",
+            "--audio-in-video",
+            "--reasoning-effort",
+            "medium",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert captured["kwargs"] == {"expects": "text", "enable_audio_in_video": True, "reasoning_effort": "medium"}
+
+
 def test_question_command_box_json(monkeypatch):
     res = _StubResult("box answer")
     res.boxes = [
