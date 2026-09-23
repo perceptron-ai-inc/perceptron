@@ -17,6 +17,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from . import audio as audio_node
 from . import caption as caption_image
 from . import detect as detect_image
 from . import image as image_node
@@ -42,6 +43,8 @@ _IMAGE_EXTENSIONS = {
 }
 
 _VIDEO_EXTENSIONS = {".mp4", ".webm"}
+
+_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac"}
 
 _OUTPUT_FILENAMES = {
     "caption": "captions.json",
@@ -77,18 +80,28 @@ def _resolve_media(media: str) -> str | bytes:
     return media
 
 
-def _looks_like_video(media: str) -> bool:
-    """True if the path or URL ends with a known video extension."""
+def _has_extension(media: str, extensions: set[str]) -> bool:
+    """True if the path or URL (ignoring query/fragment) ends with one of ``extensions``."""
 
     base = media.lower().split("?", 1)[0].split("#", 1)[0]
-    return any(base.endswith(ext) for ext in _VIDEO_EXTENSIONS)
+    return any(base.endswith(ext) for ext in extensions)
+
+
+def _looks_like_video(media: str) -> bool:
+    return _has_extension(media, _VIDEO_EXTENSIONS)
+
+
+def _looks_like_audio(media: str) -> bool:
+    return _has_extension(media, _AUDIO_EXTENSIONS)
 
 
 def _make_media_node(media_input: str, media_data: str | bytes):
-    """Wrap resolved media data in `image()` or `video()` based on the input's extension."""
+    """Wrap resolved media data in `image()`, `video()`, or `audio()` based on the input's extension."""
 
     if _looks_like_video(media_input):
         return video_node(media_data)
+    if _looks_like_audio(media_input):
+        return audio_node(media_data)
     return image_node(media_data)
 
 
@@ -678,10 +691,11 @@ def config(
 
 @app.command()
 def caption(
-    media: str = typer.Argument(..., help="Image or video path or URL."),
+    media: str = typer.Argument(..., help="Image, video, or audio path or URL."),
     style: str = typer.Option("concise", help="Captioning style."),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    audio_in_video: bool = typer.Option(False, "--audio-in-video", help="Also process the soundtrack of video input."),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
         "--format",
@@ -717,10 +731,11 @@ def caption(
 
     node = _make_media_node(media, media_data)
     expects_value = expects.value
+    gen_kwargs = {"enable_audio_in_video": True} if audio_in_video else {}
 
     if stream:
         _stream_render(
-            caption_image(node, style=style, expects=expects_value, stream=True),
+            caption_image(node, style=style, expects=expects_value, stream=True, **gen_kwargs),
             title="Caption",
             output_format=output_format,
             show_raw=show_raw,
@@ -729,7 +744,7 @@ def caption(
         )
         return
 
-    res = caption_image(node, style=style, expects=expects_value)
+    res = caption_image(node, style=style, expects=expects_value, **gen_kwargs)
     _render_result(
         res,
         title="Caption",
@@ -831,7 +846,7 @@ def detect(
 
 @app.command()
 def question(
-    media: str = typer.Argument(..., help="Image or video path or URL."),
+    media: str = typer.Argument(..., help="Image, video, or audio path or URL."),
     prompt: str = typer.Argument(..., help="Question to answer about the media."),
     expects: ExpectationType = typer.Option(
         ExpectationType.TEXT,
@@ -841,6 +856,7 @@ def question(
     ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
+    audio_in_video: bool = typer.Option(False, "--audio-in-video", help="Also process the soundtrack of video input."),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
         "--format",
@@ -849,7 +865,7 @@ def question(
         help="Output format (text or json).",
     ),
 ):
-    """Answer a question about an image or video."""
+    """Answer a question about an image, video, or audio clip."""
 
     path = Path(media)
     if path.is_dir():
@@ -862,10 +878,11 @@ def question(
 
     node = _make_media_node(media, media_data)
     expects_value = expects.value
+    gen_kwargs = {"enable_audio_in_video": True} if audio_in_video else {}
 
     if stream:
         _stream_render(
-            question_image(node, prompt, expects=expects_value, stream=True),
+            question_image(node, prompt, expects=expects_value, stream=True, **gen_kwargs),
             title="Question",
             output_format=output_format,
             show_raw=show_raw,
@@ -874,7 +891,7 @@ def question(
         )
         return
 
-    res = question_image(node, prompt, expects=expects_value)
+    res = question_image(node, prompt, expects=expects_value, **gen_kwargs)
     show_points = expects in {
         ExpectationType.POINT,
         ExpectationType.BOX,

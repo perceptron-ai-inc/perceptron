@@ -67,6 +67,9 @@ from .nodes import (
 from .nodes import (
     Video as VideoNode,
 )
+from .nodes import (
+    Audio as AudioNode,
+)
 
 _IMAGE_SIGNATURES = (
     b"\x89PNG\r\n\x1a\n",
@@ -227,6 +230,75 @@ def _to_b64_video(obj: Any) -> tuple[str, dict[str, Any]]:
     raise TypeError(f"Unsupported video object: {type(obj)}")
 
 
+_WAV_SIGNATURE_LENGTH = 12
+_MP3_FRAME_SYNC = b"\xff\xe0"
+
+
+def _is_wav(data: bytes) -> bool:
+    return len(data) >= _WAV_SIGNATURE_LENGTH and data[:4] == b"RIFF" and data[8:12] == b"WAVE"
+
+
+def _is_mp3(data: bytes) -> bool:
+    # ID3v2 tag, or a bare MPEG frame sync (first 11 bits set)
+    if data.startswith(b"ID3"):
+        return True
+    return len(data) >= len(_MP3_FRAME_SYNC) and bytes([data[0], data[1] & _MP3_FRAME_SYNC[1]]) == _MP3_FRAME_SYNC
+
+
+def _detect_audio_format(data: bytes) -> str | None:
+    """Wire-protocol audio format from magic bytes (wav/mp3/flac only)."""
+
+    if _is_wav(data):
+        return "wav"
+    if data.startswith(b"fLaC"):
+        return "flac"
+    if _is_mp3(data):
+        return "mp3"
+    return None
+
+
+def _to_b64_audio(obj: Any) -> tuple[str, dict[str, Any]]:
+    """Return (base64-or-URL, metadata).
+
+    Accepts: Path/str (path or http/https URL) or bytes. URLs are returned
+    verbatim with ``meta["url"]=True``; bytes are base64-encoded and the
+    format is detected from magic bytes (wav / mp3 / flac).
+    """
+
+    meta: dict[str, Any] = {}
+
+    if isinstance(obj, str) and urlparse(obj).scheme in {"http", "https"}:
+        meta["url"] = True
+        return obj, meta
+
+    if isinstance(obj, (str, Path)):
+        p = Path(obj)
+        data = p.read_bytes()
+        fmt = _detect_audio_format(data)
+        if fmt is None:
+            raise BadRequestError(
+                "Audio format could not be detected. The wire protocol supports wav, mp3, and flac.",
+                code="invalid_audio",
+                details={"origin": str(p)},
+            )
+        meta["format"] = fmt
+        b64 = base64.b64encode(data).decode("ascii")
+        return b64, meta
+
+    if isinstance(obj, bytes):
+        fmt = _detect_audio_format(obj)
+        if fmt is None:
+            raise BadRequestError(
+                "Audio format could not be detected from bytes. The wire protocol supports wav, mp3, and flac.",
+                code="invalid_audio",
+            )
+        meta["format"] = fmt
+        b64 = base64.b64encode(obj).decode("ascii")
+        return b64, meta
+
+    raise TypeError(f"Unsupported audio object: {type(obj)}")
+
+
 def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) -> tuple[dict, list[dict]]:
     """Compile DSL nodes into a Task JSON and return (task, issues)."""
     seq = nodes if isinstance(nodes, Sequence) else Sequence([nodes])
@@ -281,6 +353,17 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
             content.append(
                 {
                     "type": "video",
+                    "role": "user",
+                    "content": payload,
+                    "format": meta.get("format"),
+                    "url": bool(meta.get("url")),
+                }
+            )
+        elif isinstance(node, AudioNode):
+            payload, meta = _to_b64_audio(node.obj)
+            content.append(
+                {
+                    "type": "audio",
                     "role": "user",
                     "content": payload,
                     "format": meta.get("format"),
@@ -408,7 +491,7 @@ def _prepare_client_kwargs(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
-    focus: bool | None,
+    enable_audio_in_video: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float | None,
@@ -431,8 +514,8 @@ def _prepare_client_kwargs(
     }
     if reasoning_enabled:
         client_kwargs["reasoning"] = True
-    if focus is True:
-        client_kwargs["focus"] = True
+    if enable_audio_in_video is not None:
+        client_kwargs["enable_audio_in_video"] = enable_audio_in_video
     if model_override is not None:
         client_kwargs["model"] = model_override
     if response_format is not None:
@@ -516,7 +599,7 @@ def _prepare_execution_context(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
-    focus: bool | None,
+    enable_audio_in_video: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float | None,
@@ -532,7 +615,7 @@ def _prepare_execution_context(
         model_override=model_override,
         expects=expects,
         reasoning=reasoning,
-        focus=focus,
+        enable_audio_in_video=enable_audio_in_video,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -652,21 +735,12 @@ def _prepare_task_with_hints(
         or (expects and expects.lower() == "think")
         or _requires_reasoning(model_name, provider_cfg)
     )
-    # Respect per-model focus capability
-    models_cfg = provider_cfg.get("models") if isinstance(provider_cfg, dict) else None
-    supports_focus = True
-    if isinstance(models_cfg, dict):
-        entry = models_cfg.get(model_name)
-        if isinstance(entry, dict) and entry.get("focus") is False:
-            supports_focus = False
-    include_focus = bool(client_kwargs.get("focus") is True and supports_focus)
     return _inject_expectation_hint(
         task,
         expects,
         model_name=model_name,
         provider_cfg=provider_cfg,
         include_reasoning=include_reasoning,
-        include_focus=include_focus,
     )
 
 
@@ -711,7 +785,7 @@ def _execute_sync_task(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
-    focus: bool | None,
+    enable_audio_in_video: bool | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float | None,
@@ -730,7 +804,7 @@ def _execute_sync_task(
         model_override=model_override,
         expects=expects,
         reasoning=reasoning,
-        focus=focus,
+        enable_audio_in_video=enable_audio_in_video,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -770,7 +844,7 @@ def perceive(
     visual_reasoning: str | None = None,
     expects: str | None = None,
     reasoning: bool | None = None,
-    focus: bool | None = None,
+    enable_audio_in_video: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float | None = None,
@@ -815,7 +889,7 @@ def perceive(
                 model_override=model,
                 expects=expects,
                 reasoning=reasoning,
-                focus=focus,
+                enable_audio_in_video=enable_audio_in_video,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
@@ -857,7 +931,7 @@ def perceive(
         presence_penalty=presence_penalty,
         reasoning=reasoning,
         response_format=response_format,
-        focus=focus,
+        enable_audio_in_video=enable_audio_in_video,
     )
 
 
@@ -866,7 +940,7 @@ def async_perceive(
     visual_reasoning: str | None = None,
     expects: str | None = None,
     reasoning: bool | None = None,
-    focus: bool | None = None,
+    enable_audio_in_video: bool | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float | None = None,
@@ -908,7 +982,7 @@ def async_perceive(
                         model_override=model,
                         expects=expects,
                         reasoning=reasoning,
-                        focus=focus,
+                        enable_audio_in_video=enable_audio_in_video,
                         allow_multiple=allow_multiple,
                         max_outputs=max_outputs,
                         temperature=temperature,
@@ -946,7 +1020,7 @@ def async_perceive(
                 model_override=model,
                 expects=expects,
                 reasoning=reasoning,
-                focus=focus,
+                enable_audio_in_video=enable_audio_in_video,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,

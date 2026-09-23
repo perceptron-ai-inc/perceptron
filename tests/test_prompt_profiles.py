@@ -53,11 +53,10 @@ def test_select_model_rejects_perceptron_mk1_for_fal():
         _select_model(fal_cfg, "perceptron-mk1")
 
 
-def test_perceptron_mk1_models_entry_supports_reasoning_and_focus():
+def test_perceptron_mk1_models_entry_supports_reasoning():
     perceptron_cfg = _PROVIDER_CONFIG["perceptron"]
     entry = perceptron_cfg["models"]["perceptron-mk1"]
     assert entry["reasoning"] is True
-    assert entry["focus"] is True
     assert entry["skip_structured_hints"] is False
 
 

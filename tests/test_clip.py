@@ -142,5 +142,5 @@ def test_clip_hint_emitted_for_clip_expectation():
     """``<hint>CLIP</hint>`` should be appended when expects="clip" is set."""
     from perceptron.client import _build_hint_content
 
-    hint = _build_hint_content("clip", include_reasoning=False, include_focus=False)
+    hint = _build_hint_content("clip", include_reasoning=False)
     assert hint == "<hint>CLIP</hint>"

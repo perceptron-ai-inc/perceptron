@@ -153,6 +153,24 @@ result = ocr("schematic.png", prompt="Extract all component labels and their val
 print(result.text)
 ```
 
+### Audio and video soundtracks
+Wrap audio input with `audio()`; the format (wav, mp3, flac) is detected from the bytes, and URLs are passed through. Video soundtracks are ignored unless you opt in with `enable_audio_in_video=True`.
+
+```python
+from perceptron import audio, question, video
+
+result = question(audio("call.wav"), "Summarize the conversation.", model="perceptron-mk1.5-preview")
+print(result.text)
+
+result = question(
+    video("clip.mp4"),
+    "What is being said while the door opens?",
+    model="perceptron-mk1.5-preview",
+    enable_audio_in_video=True,
+)
+print(result.text)
+```
+
 ### Streaming responses
 Stream incremental text and coordinate deltas for real-time applications:
 
@@ -169,8 +187,9 @@ for event in detect("frame.png", classes=["person"], stream=True):
 ```
 
 ### High-level helper surface
-- `caption(image, *, style="concise", stream=False, **kwargs)` – describe or summarize images.
-- `detect(image, *, classes=None, examples=None, stream=False, **kwargs)` – grounded detection with points/boxes/polygons.
+- `caption(media, *, style="concise", stream=False, **kwargs)` – describe or summarize images, video, or audio.
+- `question(media, question_text, *, expects="text", stream=False, **kwargs)` – answer questions about images, video, or audio, optionally grounded.
+- `detect(media, *, classes=None, examples=None, stream=False, **kwargs)` – grounded detection with points/boxes/polygons.
 - `ocr(image, *, prompt=None, stream=False, **kwargs)` – text extraction with optional instructions.
 - `detect_from_coco(dataset_dir, *, split=None, classes=None, shots=0, limit=None, **kwargs)` – auto-build few-shot prompts from datasets.
 - `perceive(nodes, *, expects="text", stream=False, **kwargs)` / `@perceive` – compose arbitrary multimodal workflows with the DSL.
@@ -194,6 +213,10 @@ perceptron detect ./frames --classes forklift,person,pallet
 
 # Visual Q&A with grounding
 perceptron question scene.jpg "Where is the safety equipment?" --expects box
+
+# Audio Q&A, and video Q&A that also hears the soundtrack
+perceptron question call.wav "Summarize the conversation."
+perceptron question clip.mp4 "What is said as the door opens?" --audio-in-video
 ```
 
 Directory mode disables streaming, writes JSON summaries (`detections.json`) alongside the input folder, and logs per-file validation issues for easier auditing.
