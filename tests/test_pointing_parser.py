@@ -218,13 +218,11 @@ class TestParseTextClipSegments:
         segs = parse_text(text, expects="clip")
         assert len(segs) == 1
         assert segs[0]["kind"] == "clip"
-        assert segs[0]["value"] == Clip(
-            timestamp=ClipTimestamp(at=10.0, until=20.0), mention="action"
-        )
+        assert segs[0]["value"] == Clip(timestamp=ClipTimestamp(at=10.0, until=20.0), mention="action")
 
     def test_clip_mode_ignores_point_tags(self):
         """Clip mode does not scan geometry tags — they remain in the surrounding text segment."""
-        text = '<point>(1,2)</point> and <clip t=1.0/>'
+        text = "<point>(1,2)</point> and <clip t=1.0/>"
         segs = parse_text(text, expects="clip")
         kinds = [s["kind"] for s in segs]
         assert kinds == ["text", "clip"]
@@ -252,7 +250,7 @@ class TestParseTextClipSegments:
 
     def test_default_expects_does_not_parse_clips(self):
         """Default mode preserves the geometry-only contract — clip tags stay in text segments."""
-        text = 'before <clip t=1.5/> after'
+        text = "before <clip t=1.5/> after"
         segs = parse_text(text)
         assert len(segs) == 1
         assert segs[0]["kind"] == "text"

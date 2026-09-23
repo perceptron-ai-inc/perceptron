@@ -1,5 +1,5 @@
-from perceptron.expectations import resolve_structured_expectation
 from perceptron.dsl.perceive import _is_thinking_model
+from perceptron.expectations import resolve_structured_expectation
 
 
 def test_resolve_reasoning_expectation_allows_think():

@@ -5,10 +5,7 @@ from .errors import BadRequestError
 STRUCTURED_EXPECTATIONS: frozenset[str] = frozenset({"point", "box", "polygon", "clip"})
 REASONING_EXPECTATIONS: frozenset[str] = frozenset({"think"})
 TEXT_EXPECTATIONS: frozenset[str] = frozenset({"text"})
-VALID_EXPECTATIONS: frozenset[str] = frozenset(
-    STRUCTURED_EXPECTATIONS | TEXT_EXPECTATIONS | REASONING_EXPECTATIONS
-)
-
+VALID_EXPECTATIONS: frozenset[str] = frozenset(STRUCTURED_EXPECTATIONS | TEXT_EXPECTATIONS | REASONING_EXPECTATIONS)
 
 
 def resolve_structured_expectation(expects: str, *, context: str) -> tuple[str | None, bool]:
@@ -23,8 +20,8 @@ def resolve_structured_expectation(expects: str, *, context: str) -> tuple[str |
 
 
 __all__ = [
-    "STRUCTURED_EXPECTATIONS",
     "REASONING_EXPECTATIONS",
+    "STRUCTURED_EXPECTATIONS",
     "VALID_EXPECTATIONS",
     "resolve_structured_expectation",
 ]

@@ -271,7 +271,7 @@ def _ocr_sequence(
     return SequenceNode(nodes)
 
 
-def _run_ocr(
+def _run_ocr(  # noqa: PLR0913
     image_node_obj: ImageNode,
     *,
     prompt: str | None,

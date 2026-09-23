@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import pytest
+from _image_fixtures import PNG_BYTES
 
-from perceptron import caption, detect, image, ocr, ocr_html, ocr_markdown
+from perceptron import caption, detect, image, ocr_markdown
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.client import _PROVIDER_CONFIG, _select_model
 from perceptron.errors import BadRequestError
-
-from _image_fixtures import PNG_BYTES  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -94,6 +93,7 @@ def test_isaac_markdown_ocr_prompt():
 
     content = res.raw.get("content", [])
     user_messages = _collect_text(content, role="user")
-    assert "Transcribe every readable word in the image using Markdown formatting with headings, lists, tables, and other structural elements as appropriate." in user_messages
-
-
+    assert (
+        "Transcribe every readable word in the image using Markdown formatting with headings, lists, tables, and other structural elements as appropriate."
+        in user_messages
+    )

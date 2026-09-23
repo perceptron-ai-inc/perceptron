@@ -98,13 +98,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**.py" = ["PLR2004"]
+# Tests import inside functions to keep optional dependencies (pydantic) and fixtures local.
+"tests/**.py" = ["PLR2004", "PLC0415"]
 "src/perceptron/annotations.py" = ["PLR2004", "PLR0911", "PLR0912"]
 "src/perceptron/cli.py" = ["PLR0912", "PLR0913", "PLR0915", "PLR2004", "B008", "RUF034"]
 "src/perceptron/client.py" = ["PLR2004", "PLR0912", "PLR0915", "SIM117", "SIM102"]
 "src/perceptron/config.py" = ["PLW0602", "PLW0603"]
 "src/perceptron/dsl/nodes.py" = ["PLR0913"]
-"src/perceptron/dsl/perceive.py" = ["PLR0912", "PLR0915", "PLR0913"]
+"src/perceptron/dsl/perceive.py" = ["PLR0912", "PLR0915", "PLR0913", "PLR2004"]
 
 [tool.ruff.format]
 quote-style = "double"
