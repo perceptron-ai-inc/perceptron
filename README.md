@@ -171,6 +171,17 @@ result = question(
 print(result.text)
 ```
 
+### Reasoning effort
+Pick how much the model reasons before it answers with `reasoning_effort`: `none`, `minimal`, `low`, `medium`, or `high`. Any tier other than `none` turns reasoning on. It works alongside `reasoning=True`, which only switches reasoning on without choosing a tier, and the CLI exposes it as `--reasoning-effort` on `caption` and `question`.
+
+```python
+from perceptron import image, question
+
+result = question(image("scene.jpg"), "How many people are behind the counter?", reasoning_effort="high")
+print(result.reasoning)
+print(result.text)
+```
+
 ### Streaming responses
 Stream incremental text and coordinate deltas for real-time applications:
 

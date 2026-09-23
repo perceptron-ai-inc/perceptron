@@ -492,6 +492,7 @@ def _prepare_client_kwargs(
     expects: str | None,
     reasoning: bool | None,
     enable_audio_in_video: bool | None,
+    reasoning_effort: str | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float | None,
@@ -516,6 +517,8 @@ def _prepare_client_kwargs(
         client_kwargs["reasoning"] = True
     if enable_audio_in_video is not None:
         client_kwargs["enable_audio_in_video"] = enable_audio_in_video
+    if reasoning_effort is not None:
+        client_kwargs["reasoning_effort"] = reasoning_effort
     if model_override is not None:
         client_kwargs["model"] = model_override
     if response_format is not None:
@@ -600,6 +603,7 @@ def _prepare_execution_context(
     expects: str | None,
     reasoning: bool | None,
     enable_audio_in_video: bool | None,
+    reasoning_effort: str | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float | None,
@@ -616,6 +620,7 @@ def _prepare_execution_context(
         expects=expects,
         reasoning=reasoning,
         enable_audio_in_video=enable_audio_in_video,
+        reasoning_effort=reasoning_effort,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -786,6 +791,7 @@ def _execute_sync_task(
     expects: str | None,
     reasoning: bool | None,
     enable_audio_in_video: bool | None,
+    reasoning_effort: str | None,
     allow_multiple: bool,
     max_outputs: int | None,
     temperature: float | None,
@@ -805,6 +811,7 @@ def _execute_sync_task(
         expects=expects,
         reasoning=reasoning,
         enable_audio_in_video=enable_audio_in_video,
+        reasoning_effort=reasoning_effort,
         allow_multiple=allow_multiple,
         max_outputs=max_outputs,
         temperature=temperature,
@@ -845,6 +852,7 @@ def perceive(
     expects: str | None = None,
     reasoning: bool | None = None,
     enable_audio_in_video: bool | None = None,
+    reasoning_effort: str | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float | None = None,
@@ -890,6 +898,7 @@ def perceive(
                 expects=expects,
                 reasoning=reasoning,
                 enable_audio_in_video=enable_audio_in_video,
+                reasoning_effort=reasoning_effort,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,
@@ -932,6 +941,7 @@ def perceive(
         reasoning=reasoning,
         response_format=response_format,
         enable_audio_in_video=enable_audio_in_video,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -941,6 +951,7 @@ def async_perceive(
     expects: str | None = None,
     reasoning: bool | None = None,
     enable_audio_in_video: bool | None = None,
+    reasoning_effort: str | None = None,
     model: str | None = None,
     provider: str | None = None,
     temperature: float | None = None,
@@ -983,6 +994,7 @@ def async_perceive(
                         expects=expects,
                         reasoning=reasoning,
                         enable_audio_in_video=enable_audio_in_video,
+                        reasoning_effort=reasoning_effort,
                         allow_multiple=allow_multiple,
                         max_outputs=max_outputs,
                         temperature=temperature,
@@ -1021,6 +1033,7 @@ def async_perceive(
                 expects=expects,
                 reasoning=reasoning,
                 enable_audio_in_video=enable_audio_in_video,
+                reasoning_effort=reasoning_effort,
                 allow_multiple=allow_multiple,
                 max_outputs=max_outputs,
                 temperature=temperature,

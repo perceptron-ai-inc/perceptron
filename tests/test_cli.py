@@ -207,6 +207,41 @@ def test_question_command(monkeypatch):
     assert "cat" in result.stdout
 
 
+def test_question_command_forwards_reasoning_effort(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    def _fake_question(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _StubResult("cat")
+
+    monkeypatch.setattr("perceptron.cli.question_image", _fake_question)
+    result = runner.invoke(app, ["question", "https://example.com/img", "What is shown?", "--reasoning-effort", "Low"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["kwargs"]["reasoning_effort"] == "low"
+    assert "enable_audio_in_video" not in captured["kwargs"]
+
+
+def test_question_command_rejects_unknown_reasoning_effort(monkeypatch):
+    monkeypatch.setattr("perceptron.cli.question_image", lambda *a, **k: _StubResult("cat"))
+    result = runner.invoke(
+        app, ["question", "https://example.com/img", "What is shown?", "--reasoning-effort", "extreme"]
+    )
+    assert result.exit_code != 0
+
+
+def test_caption_command_forwards_reasoning_effort(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    def _fake_caption(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _StubResult("hello")
+
+    monkeypatch.setattr("perceptron.cli.caption_image", _fake_caption)
+    result = runner.invoke(app, ["caption", "https://example.com/img", "--reasoning-effort", "high"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["kwargs"]["reasoning_effort"] == "high"
+
+
 def test_question_command_box_json(monkeypatch):
     res = _StubResult("box answer")
     res.boxes = [

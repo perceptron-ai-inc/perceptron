@@ -69,3 +69,5 @@ class ParseError(SDKError):
 REASONING_NOT_SUPPORTED = "reasoning_not_supported"
 REASONING_REQUIRED_FOR_MODEL = "reasoning_required_for_model"
 REASONING_DISABLED_FOR_THINKING_MODEL = "reasoning_disabled_for_thinking_model"
+# Raised client-side, before any request, for a `reasoning_effort` outside the API's tiers.
+INVALID_REASONING_EFFORT = "invalid_reasoning_effort"
