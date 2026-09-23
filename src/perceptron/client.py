@@ -354,6 +354,26 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
             current_role = role
             current_content.append(video_part)
             contains_non_text = True
+        elif itype == "audio":
+            payload = item.get("content")
+            if payload is None:
+                continue
+            if _is_url_payload(item):
+                audio_part = {"type": "audio_url", "audio_url": {"url": payload}}
+            else:
+                fmt = item.get("format")
+                if fmt is None:
+                    raise BadRequestError(
+                        "Could not determine audio format from input. The wire protocol "
+                        "supports wav, mp3, and flac.",
+                        code="invalid_audio_format",
+                    )
+                audio_part = {"type": "input_audio", "input_audio": {"data": payload, "format": fmt}}
+            if current_role not in {role, None}:
+                _flush()
+            current_role = role
+            current_content.append(audio_part)
+            contains_non_text = True
         else:
             continue
     _flush()
@@ -369,21 +389,18 @@ def _model_entry(model_name: str | None, provider_cfg: dict[str, Any] | None) ->
     return None
 
 
-def _model_capabilities(model_name: str | None, provider_cfg: dict[str, Any] | None) -> tuple[bool, bool, bool, bool]:
+def _model_capabilities(model_name: str | None, provider_cfg: dict[str, Any] | None) -> tuple[bool, bool, bool]:
     entry = _model_entry(model_name, provider_cfg) or {}
     supports_reasoning = bool(entry.get("reasoning", True))
     requires_reasoning = bool(entry.get("only_reasoning", False))
     skip_hints = bool(entry.get("skip_structured_hints", False))
-    supports_focus = bool(entry.get("focus", True))
-    return supports_reasoning, requires_reasoning, skip_hints, supports_focus
+    return supports_reasoning, requires_reasoning, skip_hints
 
 
-def _build_hint_content(expects: str | None, include_reasoning: bool, include_focus: bool) -> str | None:
+def _build_hint_content(expects: str | None, include_reasoning: bool) -> str | None:
     tokens: list[str] = []
     if expects and expects.lower() in STRUCTURED_EXPECTATIONS:
         tokens.append(expects.upper())
-    if include_focus:
-        tokens.append("TOOLS")
     if include_reasoning:
         tokens.append("THINK")
     if not tokens:
@@ -398,10 +415,8 @@ def _inject_expectation_hint(
     model_name: str | None,
     provider_cfg: dict[str, Any] | None,
     include_reasoning: bool,
-    include_focus: bool = False,
 ) -> dict:
-    _, _, skip_hints, supports_focus = _model_capabilities(model_name, provider_cfg)
-    include_focus = include_focus and supports_focus
+    _, _, skip_hints = _model_capabilities(model_name, provider_cfg)
     if skip_hints:
         content = task.get("content") or []
         filtered = [
@@ -418,7 +433,7 @@ def _inject_expectation_hint(
         new_task["content"] = filtered
         return new_task
 
-    hint = _build_hint_content(expects, include_reasoning, include_focus)
+    hint = _build_hint_content(expects, include_reasoning)
     if hint is None:
         return task
 
@@ -459,9 +474,8 @@ def _apply_reasoning_and_hints(
     model_name: str | None,
     provider_cfg: dict[str, Any] | None,
     reasoning_flag: bool | None,
-    focus_flag: bool | None = None,
-) -> tuple[dict, bool, bool]:
-    supports, requires, _, supports_focus = _model_capabilities(model_name, provider_cfg)
+) -> tuple[dict, bool]:
+    supports, requires, _ = _model_capabilities(model_name, provider_cfg)
 
     final_reasoning = reasoning_flag  # None means "auto"
 
@@ -477,9 +491,6 @@ def _apply_reasoning_and_hints(
     if final_reasoning is True and not supports:
         final_reasoning = False
 
-    # Focus is allowed only if the model supports it
-    final_focus = focus_flag if focus_flag is True and supports_focus else False
-
     include_reasoning_hint = bool((final_reasoning is True) or requires or (expects and expects.lower() == "think"))
     task_with_hint = _inject_expectation_hint(
         task,
@@ -487,10 +498,9 @@ def _apply_reasoning_and_hints(
         model_name=model_name,
         provider_cfg=provider_cfg,
         include_reasoning=include_reasoning_hint,
-        include_focus=final_focus,
     )
 
-    return task_with_hint, final_reasoning, final_focus
+    return task_with_hint, final_reasoning
 
 
 def _requires_reasoning(model_name: str | None, provider_cfg: dict[str, Any] | None) -> bool:
@@ -508,7 +518,7 @@ _PROVIDER_CONFIG = {
         "default_model": "isaac-0.1",
         "supported_models": ["isaac-0.1"],
         "models": {
-            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False, "focus": False},
+            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
         },
         "stream": True,
     },
@@ -524,12 +534,14 @@ _PROVIDER_CONFIG = {
             "isaac-0.2-1b",
             "isaac-0.2-2b-preview",
             "perceptron-mk1",
+            "perceptron-mk1.5-preview",
         ],
         "models": {
-            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False, "focus": False},
-            "isaac-0.2-1b": {"reasoning": True, "skip_structured_hints": False, "focus": True},
-            "isaac-0.2-2b-preview": {"reasoning": True, "skip_structured_hints": False, "focus": True},
-            "perceptron-mk1": {"reasoning": True, "skip_structured_hints": False, "focus": True},
+            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
+            "isaac-0.2-1b": {"reasoning": True, "skip_structured_hints": False},
+            "isaac-0.2-2b-preview": {"reasoning": True, "skip_structured_hints": False},
+            "perceptron-mk1": {"reasoning": True, "skip_structured_hints": False},
+            "perceptron-mk1.5-preview": {"reasoning": True, "skip_structured_hints": False},
         },
         "stream": True,
     },
@@ -715,7 +727,7 @@ class _ClientCore:
         s = self._settings
         local_kwargs = dict(gen_kwargs)
         reasoning_flag = local_kwargs.pop("reasoning", None)
-        focus_flag = local_kwargs.pop("focus", None)
+        enable_audio_in_video = local_kwargs.pop("enable_audio_in_video", None)
         provider_cfg = _resolve_provider(local_kwargs.pop("provider", None) or s.provider)
         temperature = local_kwargs.pop("temperature", s.temperature)
         max_tokens = local_kwargs.pop("max_tokens", s.max_tokens)
@@ -728,13 +740,12 @@ class _ClientCore:
         if "model" not in local_kwargs and s.model is not None:
             local_kwargs["model"] = s.model
         model = _pop_and_resolve_model(provider_cfg, local_kwargs)
-        task_with_hint, reasoning_flag, focus_flag = _apply_reasoning_and_hints(
+        task_with_hint, reasoning_flag = _apply_reasoning_and_hints(
             task=task,
             expects=expects,
             model_name=model,
             provider_cfg=provider_cfg,
             reasoning_flag=reasoning_flag,
-            focus_flag=focus_flag,
         )
         prepared_task, url, headers, resolved_cfg = _prepare_transport(s, provider_cfg, task_with_hint, stream=stream)
         messages = _task_to_openai_messages(prepared_task)
@@ -764,6 +775,8 @@ class _ClientCore:
                 body["reasoning"] = True
         if stream:
             body["stream"] = True
+        if enable_audio_in_video is not None:
+            body["vision_config"] = {"enable_audio_in_video": bool(enable_audio_in_video)}
 
         # Add constrained decoding field (json_schema → response_format, regex → regex)
         format_result = _build_response_format(response_format)

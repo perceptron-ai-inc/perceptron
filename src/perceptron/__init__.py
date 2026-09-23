@@ -28,7 +28,7 @@ from .client import (
     regex_format,
 )
 from .config import config, configure, settings
-from .dsl.nodes import agent, block, box, image, point, polygon, system, text, video
+from .dsl.nodes import agent, audio, block, box, image, point, polygon, system, text, video
 from .dsl.perceive import PerceiveResult, async_perceive, inspect_task, perceive
 from .errors import (
     AnchorError,
@@ -104,6 +104,7 @@ __all__ = [
     "agent",
     "annotate_image",
     "async_perceive",
+    "audio",
     "bbox",
     "block",
     "box",

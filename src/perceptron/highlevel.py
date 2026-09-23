@@ -163,8 +163,8 @@ def caption(
 ):
     """Generate a caption for media using predefined best-practice prompts.
 
-    ``media_obj`` must be wrapped with :func:`perceptron.image` or
-    :func:`perceptron.video`.
+    ``media_obj`` must be wrapped with :func:`perceptron.image`,
+    :func:`perceptron.video`, or :func:`perceptron.audio`.
 
     Args:
         response_format: Optional constraint for output format. Use
@@ -225,8 +225,8 @@ def question(
 ):
     """Answer a question about media, optionally requesting structured outputs.
 
-    ``media_obj`` must be wrapped with :func:`perceptron.image` or
-    :func:`perceptron.video`.
+    ``media_obj`` must be wrapped with :func:`perceptron.image`,
+    :func:`perceptron.video`, or :func:`perceptron.audio`.
 
     Args:
         response_format: Optional constraint for output format. Use

@@ -506,203 +506,7 @@ def test_model_default_used_when_not_explicit(monkeypatch):
     assert payload.get("model") == "isaac-0.2-1b"
 
 
-def test_isaac_02_focus_true_adds_tools_hint(monkeypatch):
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": "Answer",
-                        }
-                    }
-                ]
-            }
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(focus=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Describe the scene.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "TOOLS" in m.get("content") for m in messages)
-
-
-def test_focus_not_added_for_isaac_01(monkeypatch):
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": "Answer",
-                        }
-                    }
-                ]
-            }
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("FAL_KEY", "test-key")
-
-    @perceive(focus=True, model="isaac-0.1", provider="fal")
-    def make_request():
-        return text("Describe the scene.")
-
-    with cfg(provider="fal", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # TOOLS should NOT be in the hint for Isaac 0.1 (doesn't support focus)
-    assert not any(isinstance(m, dict) and isinstance(m.get("content"), str) and "TOOLS" in m.get("content") for m in messages)
-
-
-def test_focus_and_reasoning_combined_hint(monkeypatch):
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": "Answer",
-                            "reasoning_content": "Because...",
-                        }
-                    }
-                ]
-            }
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Describe the scene.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Both THINK and TOOLS should be in the hint (alphabetically sorted)
-    assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "<hint>THINK TOOLS</hint>" in m.get("content") for m in messages)
-    messages = payload.get("messages") or []
-    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
-        f"Expected a system message containing THINK hint, got messages={messages!r}"
-    )
-    assert "reasoning" not in payload
-    assert "vision_config" not in payload
-
-
-def test_focus_box_reasoning_combined_hint(monkeypatch):
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "content": "Answer",
-                            "reasoning_content": "Because...",
-                        }
-                    }
-                ]
-            }
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(expects="box", focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Find the object.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # BOX, THINK, and TOOLS should all be in the hint (alphabetically sorted)
-    assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "<hint>BOX THINK TOOLS</hint>" in m.get("content") for m in messages)
-
-
-def test_focus_only_hint_exact_format(monkeypatch):
-    """Test that focus=True alone produces exactly <hint>TOOLS</hint>."""
+def test_enable_audio_in_video_sets_vision_config(monkeypatch):
     captured: dict[str, dict] = {}
 
     class _Resp:
@@ -728,183 +532,18 @@ def test_focus_only_hint_exact_format(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(focus=True, model="isaac-0.2-1b", provider="perceptron")
+    @perceive(enable_audio_in_video=True, model="perceptron-mk1.5-preview", provider="perceptron")
     def make_request():
-        return text("Describe.")
+        return text("What is said in the clip?")
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
         make_request()
 
     payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should have exactly <hint>TOOLS</hint> as a system message
-    assert messages[0] == {"role": "system", "content": "<hint>TOOLS</hint>"}
-    assert messages[1] == {"role": "user", "content": "Describe."}
+    assert payload.get("vision_config") == {"enable_audio_in_video": True}
 
 
-def test_focus_false_no_tools_hint(monkeypatch):
-    """Test that focus=False does not add TOOLS hint."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "Answer"}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(focus=False, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Describe.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should NOT have TOOLS in the hint
-    assert not any("TOOLS" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-
-
-def test_focus_none_no_tools_hint(monkeypatch):
-    """Test that focus=None (default) does not add TOOLS hint."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "Answer"}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    # No focus parameter specified (defaults to None)
-    @perceive(model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Describe.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should NOT have TOOLS in the hint
-    assert not any("TOOLS" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-
-
-def test_focus_with_point_expectation(monkeypatch):
-    """Test that focus works with expects='point'."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "<point>(50, 50)</point>"}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(expects="point", focus=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Find the center.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should have <hint>POINT TOOLS</hint> (sorted alphabetically)
-    assert any("<hint>POINT TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-
-
-def test_focus_with_polygon_expectation(monkeypatch):
-    """Test that focus works with expects='polygon'."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "<polygon>(0,0)(100,0)(100,100)(0,100)</polygon>"}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(expects="polygon", focus=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Outline the region.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should have <hint>POLYGON TOOLS</hint> (sorted alphabetically)
-    assert any("<hint>POLYGON TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-
-
-def test_focus_direct_invocation(monkeypatch):
-    """Test that focus works with direct perceive invocation (not decorator)."""
+def test_enable_audio_in_video_false_is_sent_explicitly(monkeypatch):
     captured: dict[str, dict] = {}
 
     class _Resp:
@@ -931,101 +570,10 @@ def test_focus_direct_invocation(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
-        # Direct invocation with nodes
-        perceive(text("Describe the scene."), focus=True, model="isaac-0.2-1b", provider="perceptron")
+        perceive(text("Describe."), enable_audio_in_video=False, model="perceptron-mk1.5-preview", provider="perceptron")
 
     payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    assert any("<hint>TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-
-
-def test_focus_with_expects_think(monkeypatch):
-    """Test that focus=True with expects='think' produces <hint>THINK TOOLS</hint>."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "Answer", "reasoning_content": "Because..."}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(expects="think", focus=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Why is the sky blue?")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should have <hint>THINK TOOLS</hint> (sorted alphabetically)
-    assert any("<hint>THINK TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-    # reasoning should be enabled when expects="think"
-    messages = payload.get("messages") or []
-    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
-        f"Expected a system message containing THINK hint, got messages={messages!r}"
-    )
-    assert "reasoning" not in payload
-    assert "vision_config" not in payload
-
-
-def test_focus_true_expects_think_exact_format(monkeypatch):
-    """Test exact message format with focus=True and expects='think'."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "Answer", "reasoning_content": "Because..."}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(expects="think", focus=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Explain.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should have <hint>THINK TOOLS</hint> in the content
-    assert messages and messages[0]["content"].startswith("<hint>THINK TOOLS</hint>")
-    # Ensure only one hint tag is present (no duplication)
-    assert messages[0]["content"].count("<hint") == 1
+    assert payload.get("vision_config") == {"enable_audio_in_video": False}
 
 
 def test_hint_tokens_are_sorted_and_deduped(monkeypatch):
@@ -1062,7 +610,7 @@ def test_hint_tokens_are_sorted_and_deduped(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(expects="box", focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
+    @perceive(expects="box", reasoning=True, model="isaac-0.2-1b", provider="perceptron")
     def make_request():
         return text("Describe")
 
@@ -1070,7 +618,7 @@ def test_hint_tokens_are_sorted_and_deduped(monkeypatch):
         make_request()
 
     messages = (captured.get("payload", {}).get("messages") or [])
-    assert messages and messages[0]["content"].startswith("<hint>BOX THINK TOOLS</hint>")
+    assert messages and messages[0]["content"].startswith("<hint>BOX THINK</hint>")
     assert messages[0]["content"].count("<hint") == 1
 
 
@@ -1115,8 +663,8 @@ def test_manual_think_hint_does_not_get_double_injected(monkeypatch):
     assert messages[0]["content"].startswith("<hint>THINK</hint>")
 
 
-def test_expects_think_without_focus(monkeypatch):
-    """Test that expects='think' without focus only produces <hint>THINK</hint>."""
+def test_expects_think_exact_hint(monkeypatch):
+    """Test that expects='think' produces exactly <hint>THINK</hint>."""
     captured: dict[str, dict] = {}
 
     class _Resp:
@@ -1151,101 +699,11 @@ def test_expects_think_without_focus(monkeypatch):
 
     payload = captured.get("payload", {})
     messages = payload.get("messages") or []
-    # Should have exactly <hint>THINK</hint> as a system message (no TOOLS)
+    # Should have exactly <hint>THINK</hint> as a system message
     assert messages[0] == {"role": "system", "content": "<hint>THINK</hint>"}
     assert messages[1] == {"role": "user", "content": "Explain."}
-    assert "TOOLS" not in messages[0]["content"]
     assert "reasoning" not in payload
     assert "vision_config" not in payload
-
-
-def test_focus_and_expects_think_on_isaac_01_no_hint(monkeypatch):
-    """Test that focus with expects='think' on Isaac 0.1 doesn't add TOOLS (unsupported)."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "Answer"}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("FAL_KEY", "test-key")
-
-    @perceive(expects="think", focus=True, model="isaac-0.1", provider="fal")
-    def make_request():
-        return text("Explain.")
-
-    with cfg(provider="fal", base_url="https://mock.api"):
-        make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # TOOLS should NOT be present (Isaac 0.1 doesn't support focus)
-    # THINK hint may still be present but reasoning won't work
-    assert not any("TOOLS" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-
-
-def test_focus_expects_think_reasoning_explicit_true(monkeypatch):
-    """Test focus + expects='think' + reasoning=True all together."""
-    captured: dict[str, dict] = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "Answer", "reasoning_content": "Because..."}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-
-    @perceive(expects="think", focus=True, reasoning=True, model="isaac-0.2-1b", provider="perceptron")
-    def make_request():
-        return text("Think carefully.")
-
-    with cfg(provider="perceptron", base_url="https://mock.api"):
-        res = make_request()
-
-    payload = captured.get("payload", {})
-    messages = payload.get("messages") or []
-    # Should have <hint>THINK TOOLS</hint>
-    assert any("<hint>THINK TOOLS</hint>" in m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-    messages = payload.get("messages") or []
-    assert any(m.get("role") == "system" and "THINK" in str(m.get("content") or "") for m in messages), (
-        f"Expected a system message containing THINK hint, got messages={messages!r}"
-    )
-    assert "reasoning" not in payload
-    assert "vision_config" not in payload
-    assert res.reasoning == "Because..."
-    assert res.text == "Answer"
 
 
 def test_perceptron_reasoning_hint_is_system_message(monkeypatch):

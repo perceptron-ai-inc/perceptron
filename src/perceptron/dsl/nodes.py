@@ -49,7 +49,14 @@ class Video(DSLNode):
     obj: Any
 
 
-Media = Image | Video
+@dataclass
+class Audio(DSLNode):
+    """Audio content. Accepts path/str (URL or file)/bytes; format auto-detected from magic bytes."""
+
+    obj: Any
+
+
+Media = Image | Video | Audio
 
 
 @dataclass
@@ -132,6 +139,16 @@ def video(obj: Any) -> Video:
     response.
     """
     return Video(obj)
+
+
+def audio(obj: Any) -> Audio:
+    """Create an audio node from path/str (URL or file)/bytes.
+
+    Format is auto-detected from magic bytes (wav / mp3 / flac) for bytes and
+    path input; HTTP(S) URLs are passed through and the server infers from the
+    response.
+    """
+    return Audio(obj)
 
 
 def point(

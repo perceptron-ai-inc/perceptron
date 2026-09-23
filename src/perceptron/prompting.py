@@ -11,22 +11,25 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from .dsl.nodes import Image, Media, Video
+from .dsl.nodes import Audio, Image, Media, Video
 
 
 @dataclass(frozen=True)
 class ModalityPrompt:
-    """Prompt text that varies by media modality (image vs video)."""
+    """Prompt text that varies by media modality (image, video, or audio)."""
 
     image: str
     video: str
+    audio: str | None = None
 
     def get(self, media: Media) -> str:
         if isinstance(media, Image):
             return self.image
         if isinstance(media, Video):
             return self.video
-        raise TypeError(f"ModalityPrompt.get expected Image or Video, got {type(media).__name__}")
+        if isinstance(media, Audio):
+            return self.audio if self.audio is not None else self.image
+        raise TypeError(f"ModalityPrompt.get expected Image, Video, or Audio, got {type(media).__name__}")
 
 
 @dataclass(frozen=True)
@@ -137,10 +140,12 @@ _ISAAC_PROFILE = HighLevelPromptProfile(
             "concise": ModalityPrompt(
                 image="Provide a concise, human-friendly caption for the upcoming image.",
                 video="Provide a concise, human-friendly caption for the upcoming video.",
+                audio="Provide a concise, human-friendly description of the upcoming audio.",
             ),
             "detailed": ModalityPrompt(
                 image="Provide a detailed caption describing key objects, relationships, and context in the upcoming image.",
                 video="Provide a detailed caption describing key objects, relationships, and context in the upcoming video.",
+                audio="Provide a detailed description of the upcoming audio: speech content, speakers, sounds, and context.",
             ),
         },
     ),
