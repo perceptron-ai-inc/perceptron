@@ -80,7 +80,7 @@ with config(max_tokens=512, timeout=300):
 | --- | --- | --- |
 | `provider` | `PERCEPTRON_PROVIDER` | `perceptron` or `fal` (see above) |
 | `api_key` | `PERCEPTRON_API_KEY` (provider `fal`: `FAL_KEY`) | a key set in code is used by whichever provider is selected, and selects the Perceptron API when you choose no provider |
-| `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1`, `isaac-0.3-fast` |
+| `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1` |
 | `base_url` | `PERCEPTRON_BASE_URL` | replaces the provider's URL on every surface; include `/v1` for provider `perceptron` |
 | `timeout` | | seconds per request, default 125 (Multilook waits at least 305) |
 | `retries` | | accepted, but the SDK does not retry requests |

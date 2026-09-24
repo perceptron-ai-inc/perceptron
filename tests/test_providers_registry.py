@@ -33,7 +33,6 @@ def test_perceptron_registry_defaults_to_mk15_and_lists_released_models():
     perceptron = _providers._PROVIDER_CONFIG["perceptron"]
     assert perceptron["default_model"] == "perceptron-mk1.5"
     assert perceptron["supported_models"] == [
-        "isaac-0.3-fast",
         "perceptron-mk1",
         "perceptron-mk1.5",
     ]
@@ -41,7 +40,7 @@ def test_perceptron_registry_defaults_to_mk15_and_lists_released_models():
     assert _providers._PROVIDER_CONFIG["fal"]["default_model"] == "isaac-0.1"
 
 
-@pytest.mark.parametrize("model", ["perceptron-mk1.5", "perceptron-mk1", "isaac-0.3-fast"])
+@pytest.mark.parametrize("model", ["perceptron-mk1.5", "perceptron-mk1"])
 def test_perceptron_accepts_released_models(model):
     assert _providers._select_model(_cfg("perceptron"), model) == model
 
@@ -228,5 +227,5 @@ def test_surface_model_prefers_argument_then_settings_then_default():
     with cfg(model="perceptron-mk1"):
         settings_obj = settings()
         assert _providers.surface_model(perceptron, None, settings_obj) == "perceptron-mk1"
-        assert _providers.surface_model(perceptron, "isaac-0.3-fast", settings_obj) == "isaac-0.3-fast"
+        assert _providers.surface_model(perceptron, "perceptron-mk1.5", settings_obj) == "perceptron-mk1.5"
     assert _providers.surface_model(perceptron, None, settings()) == "perceptron-mk1.5"
