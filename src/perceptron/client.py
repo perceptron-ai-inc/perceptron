@@ -17,9 +17,11 @@ Additional transports can be registered by extending `_PROVIDER_CONFIG`.
 - error: a terminal error (HTTP error, error event, cut or malformed stream, or malformed markup with `strict=True`)
   with its `details` and what arrived before it (`partial`); no `final` follows
 
-Connections: each `Client` sends every request (all surfaces) through one pooled `httpx.Client` (HTTP/2), created on
-first use, and each `AsyncClient` through one `httpx.AsyncClient`; close them with `close()` / `await aclose()` or a
-`with` / `async with` block. Pass `http_client=` to use your own httpx client instead; the SDK never closes it.
+Connections: each `Client` sends every request (all surfaces) through one pooled `httpx.Client`, created on first
+use, and each `AsyncClient` through one `httpx.AsyncClient`; close them with `close()` / `await aclose()` or a `with` /
+`async with` block. The pools keep HTTP/1.1 connections alive between requests; a stream closed before its end closes
+its connection, so the server stops sending. Pass `http_client=` to use your own httpx client instead; the SDK never
+closes it.
 """
 
 from __future__ import annotations
@@ -568,14 +570,20 @@ _map_http_error = http_error_from_response
 
 
 def _http_client(timeout: float | None) -> httpx.Client:
-    """The pooled HTTP client a :class:`Client` creates on first use; looked up at call time so tests can patch it."""
-    return httpx.Client(timeout=timeout, http2=True)
+    """The pooled HTTP client a :class:`Client` creates on first use; looked up at call time so tests can patch it.
+
+    HTTP/1.1 keep-alive, not HTTP/2: an HTTP/1.1 response closed before its end closes its connection, so the server
+    sees an abandoned stream or download at once and stops. httpcore closes an HTTP/2 response without resetting its
+    stream: the server would keep generating, and its unread data would fill the shared connection's flow-control
+    window until other requests on that connection stall.
+    """
+    return httpx.Client(timeout=timeout)
 
 
 def _async_http_client(timeout: float | None) -> httpx.AsyncClient:
-    """The pooled HTTP client an :class:`AsyncClient` creates on first use; looked up at call time so tests can patch
-    it."""
-    return httpx.AsyncClient(timeout=timeout, http2=True)
+    """The pooled HTTP client an :class:`AsyncClient` creates on first use (HTTP/1.1 keep-alive, as in
+    :func:`_http_client`); looked up at call time so tests can patch it."""
+    return httpx.AsyncClient(timeout=timeout)
 
 
 class _ClientCore:
@@ -817,11 +825,13 @@ class Client(_ClientCore):
     in the answer is an ``errors`` entry; ``strict=True`` raises ``ParseError`` instead (streams end with an ``error``
     event). Unknown keyword arguments raise ``TypeError``; the retired ``focus`` and ``visual_reasoning`` say so.
 
-    Every request goes through one pooled HTTP client (``httpx.Client`` with HTTP/2), created on first use and reused
-    by ``generate``/``stream``, ``chat``, ``files``, ``models`` and multilook. Close it with :meth:`close` or a ``with
-    Client() as client:`` block; a closed client cannot send requests. ``http_client=`` supplies your own
+    Every request goes through one pooled HTTP client (``httpx.Client`` keeping HTTP/1.1 connections alive), created
+    on first use and reused by ``generate``/``stream``, ``chat``, ``files``, ``models`` and multilook. A stream closed
+    before its end closes its connection, so the server stops generating. Close the client with :meth:`close` or a
+    ``with Client() as client:`` block; a closed client cannot send requests. ``http_client=`` supplies your own
     ``httpx.Client`` (proxies, custom transports, limits): the client uses it as is and never closes it, and each
-    request still carries the SDK's timeout (``timeout``, or a per-call one).
+    request still carries the SDK's timeout (``timeout``, or a per-call one). With ``httpx.Client(http2=True)``, a
+    stream closed early is not cancelled: the server keeps generating it.
     """
 
     def _new_session(self, timeout: float | None) -> httpx.Client:
@@ -997,7 +1007,7 @@ class Client(_ClientCore):
 
 
 class AsyncClient(_ClientCore):
-    """Asynchronous variant of :class:`Client` (same parameters) over one pooled ``httpx.AsyncClient`` (HTTP/2).
+    """Asynchronous variant of :class:`Client` (same parameters) over one pooled ``httpx.AsyncClient`` (HTTP/1.1).
 
     Close it with ``await client.aclose()`` or an ``async with AsyncClient() as client:`` block; use it on one event
     loop. ``http_client=`` takes your own ``httpx.AsyncClient``, which the SDK never closes.

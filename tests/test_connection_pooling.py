@@ -116,7 +116,7 @@ def _count_acloses(pool: httpx.AsyncClient) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def test_created_clients_use_http2_and_the_configured_timeout(monkeypatch):
+def test_created_clients_are_http1_pools_with_the_configured_timeout(monkeypatch):
     made = []
 
     class _Client(httpx.Client):
@@ -135,7 +135,8 @@ def test_created_clients_use_http2_and_the_configured_timeout(monkeypatch):
     Client(timeout=42.0)._session().close()
     asyncio.run(AsyncClient(timeout=7.0)._session().aclose())
 
-    assert made == [("sync", {"timeout": 42.0, "http2": True}), ("async", {"timeout": 7.0, "http2": True})]
+    # No http2=True: closing an HTTP/2 stream early would not cancel it (see the early-close test below).
+    assert made == [("sync", {"timeout": 42.0}), ("async", {"timeout": 7.0})]
 
 
 def test_one_http_client_serves_every_call_and_surface(http):
@@ -433,11 +434,13 @@ class _SocketServer(httpcore.NetworkBackend):
 
     def __init__(self) -> None:
         self.connects = 0
+        self.connections: list[socket.socket] = []  # the client's end of each connection
         self.release = threading.Event()
 
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
         self.connects += 1
         ours, theirs = socket.socketpair()
+        self.connections.append(ours)
         threading.Thread(target=self._serve, args=(theirs,), daemon=True).start()
         return _SocketStream(ours)
 
@@ -511,6 +514,30 @@ def test_a_real_pool_reuses_its_connection_and_gets_it_back_from_streams(socket_
 
     assert socket_server.connects == 4  # a half-read HTTP/1.1 connection is discarded, not reused
     client.close()
+
+
+def test_closing_a_stream_early_closes_its_connection(socket_server):
+    # An HTTP/1.1 response closed before its end takes its connection with it, so the server sees the client leave and
+    # stops generating. (httpcore closes an HTTP/2 response without resetting its stream: the server would go on.)
+    client = _socket_client()
+    stream = client.chat.completions.create(messages=[USER], stream=True)
+    next(stream)
+    assert socket_server.connections[-1].fileno() != -1
+    stream.close()
+    events = client.stream(TASK)
+    next(events)
+    events.close()
+    dropped = client.chat.completions.create(messages=[USER], stream=True)
+    next(dropped)
+    del dropped
+    gc.collect()
+    assert client.chat.completions.create(messages=[USER]).text == "Hello"
+
+    *abandoned, last = socket_server.connections
+    assert len(abandoned) == 3 and all(connection.fileno() == -1 for connection in abandoned)
+    assert last.fileno() != -1  # a finished request keeps its connection alive for the next one
+    client.close()
+    assert last.fileno() == -1
 
 
 def test_closing_a_client_ends_its_open_streams_with_a_truncation_error(socket_server):

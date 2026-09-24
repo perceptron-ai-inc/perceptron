@@ -534,7 +534,8 @@ def open_stream(  # noqa: PLR0913 - keyword-only request options
     """Open a streaming request and check its status (reading the body of an error first).
 
     Returns ``(response, closer)``; the caller owns ``closer``, an ``ExitStack`` holding only the response: closing it
-    hands the connection back to the client's pool, which stays open.
+    hands the connection back to the client's pool once the body was read to its end, and closes the connection (so the
+    server stops sending) before that. The pool stays open.
     """
     url, headers, effective_timeout = _prepare(
         client, path, has_json=json is not None, timeout=timeout, provider_cfg=provider_cfg

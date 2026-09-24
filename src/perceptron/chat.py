@@ -695,9 +695,10 @@ class ChatCompletionStream(_StreamBase):
 
     ``.completion`` holds the :class:`ChatCompletion` once the stream is exhausted; ``get_final_completion()`` consumes
     the rest and returns it. Error events, malformed chunks and a missing ``[DONE]`` raise mapped errors carrying
-    ``.partial``. The stream owns its response (not the client's connection pool) and closes it, handing the connection
-    back to the pool, when exhausted, on error, on ``close()``, on exit, or when it is garbage collected unfinished
-    (never iterated, or left mid-way).
+    ``.partial``. The stream owns its response (not the client's connection pool) and closes it when exhausted, on
+    error, on ``close()``, on exit, or when it is garbage collected unfinished (never iterated, or left mid-way): a
+    finished response hands its connection back to the pool, and one closed early closes its connection, so the server
+    stops generating.
     """
 
     def __init__(self, response: Any, closer: Any, *, request_id: str | None = None, asset_count: int | None = None):

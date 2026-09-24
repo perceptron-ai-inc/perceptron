@@ -96,7 +96,7 @@ A value set with `configure()` or `config()` wins over its environment variable,
 
 Without an API key for the selected provider, requests raise `AuthError` with code `credentials_missing` before anything is sent; use `inspect_task` (see [Composing tasks](#composing-tasks-with-the-dsl)) to look at a compiled prompt offline. `perceptron config` prints the `export` lines for your shell (it does not save anything).
 
-**Clients and connections.** A `Client` sends all its requests (`generate`/`stream`, the message API, Files, Models, and Multilook) through one HTTP/2 connection pool, opened on first use. Reuse one client, and close it when you are done with `client.close()` or a `with` block (`AsyncClient`: `await client.aclose()` or `async with`). The helpers and `perceive` open a client for each call and close it afterwards. To set up HTTP yourself (proxies, connection limits, a custom transport), pass your own `httpx.Client` (`httpx.AsyncClient` for `AsyncClient`) as `http_client=`: the SDK uses it as is and never closes it, and each request still uses the SDK's `timeout`.
+**Clients and connections.** A `Client` sends all its requests (`generate`/`stream`, the message API, Files, Models, and Multilook) through one connection pool, opened on first use, that keeps HTTP/1.1 connections alive between requests. Reuse one client, and close it when you are done with `client.close()` or a `with` block (`AsyncClient`: `await client.aclose()` or `async with`). The helpers and `perceive` open a client for each call and close it afterwards. To set up HTTP yourself (proxies, connection limits, a custom transport), pass your own `httpx.Client` (`httpx.AsyncClient` for `AsyncClient`) as `http_client=`: the SDK uses it as is and never closes it, and each request still uses the SDK's `timeout`. HTTP/2 (`httpx.Client(http2=True)`) works too, with one caveat: a stream or download you close before its end is not cancelled, so the server keeps sending it, and enough abandoned data stalls later requests on that connection.
 
 ```python
 import httpx
@@ -284,7 +284,7 @@ with client.chat.completions.create(
 print("\n", completion.finish_reason, completion.usage)
 ```
 
-A stream that fails mid-way raises the mapped error (with `.partial`); one that ends without `[DONE]` raises `IncompleteStreamError`. The connection opens when `create()` returns, so use `with`/`async with` (or `close()`) when you may stop early; closing a stream hands its connection back to the client's pool. A stream dropped unfinished is closed when it is garbage collected (an async one on its event loop, unless that loop has been closed). `AsyncClient` mirrors everything:
+A stream that fails mid-way raises the mapped error (with `.partial`); one that ends without `[DONE]` raises `IncompleteStreamError`. The connection opens when `create()` returns, so use `with`/`async with` (or `close()`) when you may stop early; closing a stream before its end closes its connection, so the server stops generating (a finished stream hands its connection back to the client's pool). A stream dropped unfinished is closed when it is garbage collected (an async one on its event loop, unless that loop has been closed). `AsyncClient` mirrors everything:
 
 ```python
 import asyncio
