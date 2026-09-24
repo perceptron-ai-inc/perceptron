@@ -1,4 +1,4 @@
-"""One provider rule for every surface, and fal's key isolation (DESIGN §14.1).
+"""One provider rule for every surface, fal's key isolation, and the default timeout (DESIGN §14.1, §14.2).
 
 The provider you choose wins; otherwise ``fal`` only when ``FAL_KEY`` is set and ``PERCEPTRON_API_KEY`` is not;
 otherwise ``perceptron``. Provider ``fal`` never receives a key read from ``PERCEPTRON_API_KEY``, and files, models and
@@ -326,3 +326,48 @@ def test_client_keeps_its_provider_and_key_pairing(http, monkeypatch):
 
     assert [str(request.url) for request in http.requests] == [PERCEPTRON_CHAT, PERCEPTRON_CHAT]
     assert {request.headers["authorization"] for request in http.requests} == {"Bearer sk-test"}
+
+
+# ---------------------------------------------------------------------------
+# Default timeout (125 s) and the multilook floor (305 s)
+# ---------------------------------------------------------------------------
+
+
+def _timeout(request) -> float:
+    timeouts = request.extensions["timeout"]
+    assert len(set(timeouts.values())) == 1
+    return timeouts["read"]
+
+
+def test_default_timeout_is_125_seconds_on_the_wire(http, monkeypatch):
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
+    assert settings().timeout == 125.0
+    assert settings().retries == 3  # accepted, never used
+
+    for call in (
+        lambda: perceive(_img(), text("Hi")),
+        lambda: list(Client().stream(TASK)),
+        lambda: asyncio.run(AsyncClient().generate(TASK)),
+        lambda: Client().chat.completions.create(messages=[USER]),
+        lambda: Client().chat.completions.create(messages=[USER], stream=True).get_final_completion(),
+        lambda: Client().files.list(),
+        lambda: Client().models.list(),
+    ):
+        call()
+        assert _timeout(http.last) == 125.0
+
+
+def test_multilook_keeps_its_305_second_floor(http, monkeypatch):
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
+
+    def _multilook(client=None, **kwargs):
+        (client or Client()).chat.completions.multilook(context=[], prompts=["q"], **kwargs)
+        return _timeout(http.last)
+
+    assert _multilook() == 305.0
+    assert _multilook(timeout=10.0) == 10.0  # an explicit timeout is used as given
+    assert _multilook(Client(timeout=400.0)) == 400.0
+    with config(timeout=30.0):
+        assert _multilook() == 305.0
+        Client().chat.completions.create(messages=[USER])
+        assert _timeout(http.last) == 30.0

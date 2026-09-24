@@ -29,7 +29,7 @@ class Settings:
     provider: str | None = None  # "perceptron" or "fal"; None = the default rule (see above)
     model: str | None = None  # None = the provider's default model
 
-    timeout: float = 60.0  # seconds per request (multilook waits at least 305 s)
+    timeout: float = 125.0  # seconds per request, past the gateway's 120 s chat budget (multilook waits >= 305 s)
     retries: int = 3  # accepted for compatibility; the SDK does not retry requests
 
     strict: bool = False
@@ -107,7 +107,7 @@ def configure(**kwargs: Any) -> None:
     """Configure global SDK defaults. A configured field wins over its environment variable.
 
     Example:
-        configure(api_key="sk_live_...", model="perceptron-mk1.5", timeout=60)
+        configure(api_key="sk_live_...", model="perceptron-mk1.5", timeout=180)
     """
     global _global_settings, _explicit_fields
     for k, v in kwargs.items():

@@ -71,7 +71,7 @@ from perceptron import config, configure
 
 configure(api_key="sk_live_...")
 
-with config(max_tokens=512, timeout=120):
+with config(max_tokens=512, timeout=300):
     ...  # temporary overrides inside the block
 ```
 
@@ -89,7 +89,7 @@ with config(max_tokens=512, timeout=120):
 | `api_key` | `PERCEPTRON_API_KEY` (provider `fal`: `FAL_KEY`) | a key set in code is used by whichever provider is selected |
 | `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1`, `isaac-0.3-fast`, `isaac-0.2-2b-preview`, `isaac-0.2-1b`, `isaac-0.1` |
 | `base_url` | `PERCEPTRON_BASE_URL` | replaces the provider's URL on every surface; include `/v1` for provider `perceptron` |
-| `timeout` | | seconds per request, default 60 (Multilook waits at least 305) |
+| `timeout` | | seconds per request, default 125 (Multilook waits at least 305) |
 | `retries` | | accepted, but the SDK does not retry requests |
 
 A value set with `configure()` or `config()` wins over its environment variable, and `Client(...)` keyword arguments win over both for that client. A per-call `model=` wins over all of them, and so does a per-call `provider=` on the helpers, `perceive`, and `Client.generate`/`stream`. `perceptron-mk1.5-preview` was renamed to `perceptron-mk1.5` (the old id raises `BadRequestError` with code `model_renamed`).
