@@ -67,6 +67,24 @@ class ExpectationType(str, Enum):
     THINK = "think"
 
 
+class ReasoningEffort(str, Enum):
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+def _generation_kwargs(*, audio_in_video: bool, reasoning_effort: ReasoningEffort | None) -> dict[str, Any]:
+    """Keyword arguments a command forwards to its helper; only flags the user set are included."""
+    gen_kwargs: dict[str, Any] = {}
+    if audio_in_video:
+        gen_kwargs["enable_audio_in_video"] = True
+    if reasoning_effort is not None:
+        gen_kwargs["reasoning_effort"] = reasoning_effort.value
+    return gen_kwargs
+
+
 def _resolve_media(media: str) -> str | bytes:
     """Resolve a media argument to a URL string or local-file bytes."""
 
@@ -696,6 +714,12 @@ def caption(
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
     audio_in_video: bool = typer.Option(False, "--audio-in-video", help="Also process the soundtrack of video input."),
+    reasoning_effort: ReasoningEffort | None = typer.Option(
+        None,
+        "--reasoning-effort",
+        case_sensitive=False,
+        help="How much the model reasons before answering (none, minimal, low, medium, or high).",
+    ),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
         "--format",
@@ -731,7 +755,7 @@ def caption(
 
     node = _make_media_node(media, media_data)
     expects_value = expects.value
-    gen_kwargs = {"enable_audio_in_video": True} if audio_in_video else {}
+    gen_kwargs = _generation_kwargs(audio_in_video=audio_in_video, reasoning_effort=reasoning_effort)
 
     if stream:
         _stream_render(
@@ -857,6 +881,12 @@ def question(
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
     audio_in_video: bool = typer.Option(False, "--audio-in-video", help="Also process the soundtrack of video input."),
+    reasoning_effort: ReasoningEffort | None = typer.Option(
+        None,
+        "--reasoning-effort",
+        case_sensitive=False,
+        help="How much the model reasons before answering (none, minimal, low, medium, or high).",
+    ),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
         "--format",
@@ -878,7 +908,7 @@ def question(
 
     node = _make_media_node(media, media_data)
     expects_value = expects.value
-    gen_kwargs = {"enable_audio_in_video": True} if audio_in_video else {}
+    gen_kwargs = _generation_kwargs(audio_in_video=audio_in_video, reasoning_effort=reasoning_effort)
 
     if stream:
         _stream_render(

@@ -1,8 +1,10 @@
+import pytest
 from _image_fixtures import PNG_BYTES
 
 from perceptron import agent, box, image, inspect_task, perceive, text
 from perceptron import client as client_mod
 from perceptron import config as cfg
+from perceptron.errors import INVALID_REASONING_EFFORT, BadRequestError
 from perceptron.pointing.parser import PointParser
 from perceptron.pointing.types import SinglePoint, bbox
 
@@ -578,6 +580,82 @@ def test_enable_audio_in_video_false_is_sent_explicitly(monkeypatch):
 
     payload = captured.get("payload", {})
     assert payload.get("vision_config") == {"enable_audio_in_video": False}
+
+
+def _capture_payload(monkeypatch) -> dict[str, dict]:
+    """Patch the HTTP client so the next request's JSON body lands in the returned dict."""
+    captured: dict[str, dict] = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Answer"}}]}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, headers=None, json=None):
+            captured["payload"] = json
+            return _Resp()
+
+        def stream(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+    return captured
+
+
+@pytest.mark.parametrize("effort", ["none", "minimal", "low", "medium", "high"])
+def test_reasoning_effort_is_sent_top_level(monkeypatch, effort):
+    captured = _capture_payload(monkeypatch)
+
+    @perceive(reasoning_effort=effort, model="perceptron-mk1.5-preview", provider="perceptron")
+    def make_request():
+        return text("Count the cars.")
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        make_request()
+
+    payload = captured["payload"]
+    assert payload["reasoning_effort"] == effort
+    # The tier is independent of the boolean flag's THINK hint.
+    assert "reasoning" not in payload
+    assert all(message.get("role") != "system" for message in payload["messages"])
+
+
+def test_reasoning_effort_is_normalized_before_sending(monkeypatch):
+    captured = _capture_payload(monkeypatch)
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        perceive(text("Describe."), reasoning_effort=" High ", model="perceptron-mk1.5-preview", provider="perceptron")
+
+    assert captured["payload"]["reasoning_effort"] == "high"
+
+
+def test_reasoning_effort_absent_by_default(monkeypatch):
+    captured = _capture_payload(monkeypatch)
+
+    with cfg(provider="perceptron", base_url="https://mock.api"):
+        perceive(text("Describe."), model="perceptron-mk1.5-preview", provider="perceptron")
+
+    assert "reasoning_effort" not in captured["payload"]
+
+
+def test_reasoning_effort_outside_the_tiers_fails_before_any_request(monkeypatch):
+    captured = _capture_payload(monkeypatch)
+
+    with cfg(provider="perceptron", base_url="https://mock.api"), pytest.raises(BadRequestError) as excinfo:
+        perceive(text("Describe."), reasoning_effort="extreme", model="perceptron-mk1.5-preview", provider="perceptron")
+
+    assert excinfo.value.code == INVALID_REASONING_EFFORT
+    assert "extreme" in str(excinfo.value)
+    assert "payload" not in captured
 
 
 def test_hint_tokens_are_sorted_and_deduped(monkeypatch):

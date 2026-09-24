@@ -22,6 +22,7 @@ import httpx
 
 from .config import settings
 from .errors import (
+    INVALID_REASONING_EFFORT,
     AuthError,
     BadRequestError,
     RateLimitError,
@@ -32,6 +33,22 @@ from .errors import (
 )
 from .expectations import STRUCTURED_EXPECTATIONS
 from .pointing.parser import extract_clips, extract_points, parse_text
+
+# The `reasoning_effort` tiers the API accepts, sent as the top-level request field.
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+
+
+def _normalize_reasoning_effort(value: Any) -> str | None:
+    """Lower-case a `reasoning_effort` tier, or raise before any request for a value the API rejects."""
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized not in REASONING_EFFORTS:
+        raise BadRequestError(
+            f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)}; got {value!r}.",
+            code=INVALID_REASONING_EFFORT,
+        )
+    return normalized
 
 # Maps each structured `expects` value to (PerceiveResult bucket name, extractor).
 _BUCKET_BY_EXPECTS = {
@@ -724,6 +741,7 @@ class _ClientCore:
         s = self._settings
         local_kwargs = dict(gen_kwargs)
         reasoning_flag = local_kwargs.pop("reasoning", None)
+        reasoning_effort = _normalize_reasoning_effort(local_kwargs.pop("reasoning_effort", None))
         enable_audio_in_video = local_kwargs.pop("enable_audio_in_video", None)
         provider_cfg = _resolve_provider(local_kwargs.pop("provider", None) or s.provider)
         temperature = local_kwargs.pop("temperature", s.temperature)
@@ -772,6 +790,10 @@ class _ClientCore:
                 body["reasoning"] = True
         if stream:
             body["stream"] = True
+        if reasoning_effort is not None:
+            # Top-level, as the API defines it. Independent of the `<hint>` THINK encoding of
+            # `reasoning=True`: the API turns reasoning on for any tier other than `none`.
+            body["reasoning_effort"] = reasoning_effort
         if enable_audio_in_video is not None:
             body["vision_config"] = {"enable_audio_in_video": bool(enable_audio_in_video)}
 
