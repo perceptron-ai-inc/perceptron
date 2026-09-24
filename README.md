@@ -13,7 +13,7 @@
   <a href="https://codecov.io/github/perceptron-ai-inc/perceptron"><img src="https://codecov.io/github/perceptron-ai-inc/perceptron/graph/badge.svg?token=HW6JASKQJR" alt="codecov"></a>
 </p>
 
-**Perceptron is the Python SDK for building with perceptive-language models, from our flagship Perceptron Mk1.5 to edge-ready models like Isaac 0.2 2B (Preview).** Designed for physical AI applications—robotics, manufacturing, logistics, and security—it provides a unified interface for grounded perception: detection, localization, tracking, OCR, and visual, video, and audio Q&A with structured outputs ready for robotics, analytics, and edge deployment. Compose multimodal prompts with a typed DSL, or use the OpenAI-compatible message API with tool calling.
+**Perceptron is the Python SDK for building with perceptive-language models, including our flagship Perceptron Mk1.5 and Perceptron Mk1.** Designed for physical AI applications—robotics, manufacturing, logistics, and security—it provides a unified interface for grounded perception: detection, localization, tracking, OCR, and visual, video, and audio Q&A with structured outputs ready for robotics, analytics, and edge deployment. Compose multimodal prompts with a typed DSL, or use the OpenAI-compatible message API with tool calling.
 
 <p align="center">
   <a href="https://www.perceptron.inc/" target="_blank"><strong>Website</strong></a> ·
@@ -33,9 +33,6 @@ Show a few annotated examples (defects, safety conditions, custom categories) in
 
 **Flagship reasoning across image, video, and audio**
 Perceptron Mk1.5, our flagship, brings grounded perception to long-form video—Q&A, temporal clipping, object tracking, and multimodal in-context learning—plus audio understanding and tool calling. Built for cloud workloads where capability outweighs footprint.
-
-**Efficient frontier for edge deployment**
-The Isaac family is built for the edge—Isaac 0.1 matches models 50x its size, with Isaac 0.2 2B (Preview) extending the lineup. Both deliver edge-ready latencies and drastically lower serving costs.
 
 **Prompt for anything, control the output type**
 Ask for whatever you need in natural language—"find safety violations", "locate damaged components", "identify obstacles"—and choose the output: bounding boxes, points, polygons, clips, tracks, or text.
@@ -83,12 +80,12 @@ with config(max_tokens=512, timeout=300):
 | --- | --- | --- |
 | `provider` | `PERCEPTRON_PROVIDER` | `perceptron` or `fal` (see above) |
 | `api_key` | `PERCEPTRON_API_KEY` (provider `fal`: `FAL_KEY`) | a key set in code is used by whichever provider is selected, and selects the Perceptron API when you choose no provider |
-| `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1`, `isaac-0.3-fast`, `isaac-0.2-2b-preview`, `isaac-0.2-1b`, `isaac-0.1` |
+| `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1`, `isaac-0.3-fast` |
 | `base_url` | `PERCEPTRON_BASE_URL` | replaces the provider's URL on every surface; include `/v1` for provider `perceptron` |
 | `timeout` | | seconds per request, default 125 (Multilook waits at least 305) |
 | `retries` | | accepted, but the SDK does not retry requests |
 
-A value set with `configure()` or `config()` wins over its environment variable, and `Client(...)` keyword arguments win over both for that client. A per-call `model=` wins over all of them, and so does a per-call `provider=` on the helpers, `perceive`, and `Client.generate`/`stream`. `perceptron-mk1.5-preview` was renamed to `perceptron-mk1.5` (the old id raises `BadRequestError` with code `model_renamed`).
+A value set with `configure()` or `config()` wins over its environment variable, and `Client(...)` keyword arguments win over both for that client. A per-call `model=` wins over all of them, and so does a per-call `provider=` on the helpers, `perceive`, and `Client.generate`/`stream`. `perceptron-mk1.5-preview` was renamed to `perceptron-mk1.5` (the old id raises `BadRequestError` with code `model_renamed`). `isaac-0.1`, `isaac-0.2-1b`, and `isaac-0.2-2b-preview` are retired on the Perceptron API: requests for them raise `NotFoundError` (HTTP 404, code `model_not_found`).
 
 Without an API key for the selected provider, requests raise `AuthError` with code `credentials_missing` before anything is sent; use `inspect_task` (see [Composing tasks](#composing-tasks-with-the-dsl)) to look at a compiled prompt offline. `perceptron config` prints the `export` lines for your shell (it does not save anything).
 

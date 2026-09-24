@@ -33,9 +33,6 @@ def test_perceptron_registry_defaults_to_mk15_and_lists_released_models():
     perceptron = _providers._PROVIDER_CONFIG["perceptron"]
     assert perceptron["default_model"] == "perceptron-mk1.5"
     assert perceptron["supported_models"] == [
-        "isaac-0.1",
-        "isaac-0.2-1b",
-        "isaac-0.2-2b-preview",
         "isaac-0.3-fast",
         "perceptron-mk1",
         "perceptron-mk1.5",
@@ -78,9 +75,11 @@ def test_fal_rejects_perceptron_models_with_an_actionable_message():
     assert "when FAL_KEY is set and neither PERCEPTRON_API_KEY nor a key set in code is" in message  # why fal is in use
 
 
-def test_fal_rejects_other_ids_without_the_perceptron_hint():
+# Retired ids (isaac-0.2-*) are no longer Perceptron API models, so fal must not point callers there.
+@pytest.mark.parametrize("model", ["some-other-model", "isaac-0.2-1b", "isaac-0.2-2b-preview"])
+def test_fal_rejects_other_ids_without_the_perceptron_hint(model):
     with pytest.raises(BadRequestError) as excinfo:
-        _providers._select_model(_cfg("fal"), "some-other-model")
+        _providers._select_model(_cfg("fal"), model)
 
     assert "PERCEPTRON_PROVIDER" not in str(excinfo.value)
 
@@ -229,5 +228,5 @@ def test_surface_model_prefers_argument_then_settings_then_default():
     with cfg(model="perceptron-mk1"):
         settings_obj = settings()
         assert _providers.surface_model(perceptron, None, settings_obj) == "perceptron-mk1"
-        assert _providers.surface_model(perceptron, "isaac-0.2-1b", settings_obj) == "isaac-0.2-1b"
+        assert _providers.surface_model(perceptron, "isaac-0.3-fast", settings_obj) == "isaac-0.3-fast"
     assert _providers.surface_model(perceptron, None, settings()) == "perceptron-mk1.5"

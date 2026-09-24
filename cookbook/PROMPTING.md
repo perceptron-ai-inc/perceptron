@@ -189,7 +189,7 @@ from perceptron import configure, perceive, image, text
 
 configure(provider="perceptron", api_key="<your-api-key>")
 
-@perceive(model="perceptron-mk1", max_tokens=4096, reasoning=True)
+@perceive(model="perceptron-mk1", max_tokens=4096, reasoning_effort="high")
 def count_objects(img_url: str, query: str):
     return image(img_url) + text(query)
 
@@ -208,11 +208,8 @@ curl -X POST "https://api.perceptron.inc/v1/chat/completions" \
   -H "Authorization: Bearer <your-api-key>" \
   -d '{
   "model": "perceptron-mk1",
+  "reasoning_effort": "high",
   "messages": [
-    {
-      "role": "system",
-      "content": [{"type": "text", "text": "<hint>THINK</hint>"}]
-    },
     {
       "role": "user",
       "content": [
