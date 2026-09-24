@@ -150,6 +150,12 @@ def test_caption_accepts_audio():
     assert len(parts) == 1
 
 
+def test_caption_audio_defaults_to_text():
+    with cfg(api_key="test", provider="fal"):
+        res = caption(audio("https://x.com/a.mp3"))
+    assert res.raw["expects"] is None
+
+
 def test_question_accepts_audio():
     with cfg(api_key="test", provider="fal"):
         res = question(audio("https://x.com/a.mp3"), "what is said?")

@@ -198,7 +198,7 @@ for event in detect("frame.png", classes=["person"], stream=True):
 ```
 
 ### High-level helper surface
-- `caption(media, *, style="concise", stream=False, **kwargs)` – describe or summarize images, video, or audio.
+- `caption(media, *, style="concise", expects=None, stream=False, **kwargs)` – describe or summarize images, video, or audio. `expects` defaults to `"box"` for images and `"text"` for video and audio.
 - `question(media, question_text, *, expects="text", stream=False, **kwargs)` – answer questions about images, video, or audio, optionally grounded.
 - `detect(media, *, classes=None, examples=None, stream=False, **kwargs)` – grounded detection with points/boxes/polygons.
 - `ocr(image, *, prompt=None, stream=False, **kwargs)` – text extraction with optional instructions.
