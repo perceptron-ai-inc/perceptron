@@ -47,14 +47,10 @@ Ask for whatever you need in natural language—"find safety violations", "locat
 Requires Python 3.10+.
 
 ```bash
-pip install perceptron            # the latest published release (0.3.5)
+pip install "perceptron>=0.4.0"
 ```
 
-This README describes the SDK on `main`. The features marked **Mk1.5** below (the `perceptron-mk1.5` model, the message API and tool calling, Files, Models, Multilook, `asset_idx`, tracks, `video_frames`, audio input, `reasoning_effort`) and the new result fields (`finish_reason`, `usage`, `tool_calls`, `tracks`, `request_id`) ship in the next release after 0.3.5 (planned as 0.4.0). Until that release is on PyPI, install from GitHub:
-
-```bash
-pip install "git+https://github.com/perceptron-ai-inc/perceptron"
-```
+The features marked **Mk1.5** below (the `perceptron-mk1.5` model, the message API and tool calling, Files, Models, Multilook, `asset_idx`, tracks, `video_frames`, audio input, `reasoning_effort`) and the result fields `finish_reason`, `usage`, `tool_calls`, `tracks` and `request_id` require 0.4.0 or later.
 
 Optional extras: `pip install "perceptron[torch]"` (tensor utilities, requires PyTorch) and `pip install "perceptron[dev]"` (ruff, pytest, pre-commit). `uv pip install ...` works the same way. The install also provides the `perceptron` command-line tool.
 
