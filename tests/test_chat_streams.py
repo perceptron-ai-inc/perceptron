@@ -4,14 +4,12 @@ import asyncio
 import gc
 import json
 import warnings
-from types import SimpleNamespace
 
 import httpx
 import pytest
 from _http_mock import Body, FailingBody, chunk, install, json_response, sse_body, sse_response
 
 from perceptron import AsyncClient, Client
-from perceptron import client as client_mod
 from perceptron.chat import (
     AsyncChatCompletionStream,
     ChatCompletionChunk,
@@ -764,47 +762,18 @@ def test_async_failure_mid_body_raises_with_partial(monkeypatch, exc, expected_c
     assert body.closed
 
 
-def test_async_stream_with_the_stub_httpx(monkeypatch):
-    """The legacy async test stub: exception classes are `Exception`, the response only has `aiter_lines`."""
-    lines = [f"data: {json.dumps(chunk({'content': 'hi'}))}", f"data: {json.dumps(chunk({}, finish_reason='stop'))}"]
-
-    class _Response:
-        status_code = 200
-        headers: dict = {}  # noqa: RUF012
-
-        async def aiter_lines(self):
-            for line in lines:
-                yield line
-
-    class _StreamContext:
-        async def __aenter__(self):
-            return _Response()
-
-        async def __aexit__(self, *exc):
-            return False
-
-    class _Session:
-        def __init__(self, timeout):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        def stream(self, method, url, headers=None, content=None):
-            json.loads(content)
-            return _StreamContext()
-
-    stub = SimpleNamespace(AsyncClient=_Session, TimeoutException=Exception, HTTPError=Exception)
-    monkeypatch.setattr(client_mod, "httpx", stub)
+def test_async_eof_after_the_finish_without_done_is_truncated(monkeypatch):
+    """The truncation error surfaces as itself on the async path, not as a transport error."""
+    _, body = _serve(monkeypatch, [chunk({"content": "hi"}), chunk({}, finish_reason="stop")], done=False)
 
     async def _run():
         stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
         return await stream.get_final_completion()
 
-    # No [DONE]: the truncation error must surface as itself, not be swallowed by the stub's `Exception` handlers.
     with pytest.raises(IncompleteStreamError) as excinfo:
         asyncio.run(_run())
+    assert excinfo.value.code == STREAM_TRUNCATED
     assert excinfo.value.partial.text == "hi"
+    assert excinfo.value.partial.finish_reason == "stop"
+    assert not excinfo.value.partial.complete
+    assert body.closed

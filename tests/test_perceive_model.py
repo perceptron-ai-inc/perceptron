@@ -1,146 +1,102 @@
+"""`perceive` / `async_perceive` send the `model` they were given, over `httpx.MockTransport` (see `_http_mock`)."""
+
 import asyncio
+import json
 
 import pytest
+from _http_mock import chunk, completion, install, json_response, sse_response
+from _image_fixtures import PNG_BYTES
 
 from perceptron import async_perceive, perceive
 from perceptron.dsl.nodes import image, text
 from perceptron.errors import AuthError
 
-
-class _StubClient:
-    last_kwargs: dict | None = None
-
-    def __init__(self, **overrides):  # pylint: disable=unused-argument
-        pass
-
-    def generate(self, task, **kwargs):  # pylint: disable=unused-argument
-        type(self).last_kwargs = kwargs
-        return {
-            "text": "ok",
-            "points": None,
-            "parsed": None,
-            "raw": {"choices": [{"message": {"content": "ok"}}]},
-        }
+URL = "https://api.perceptron.inc/v1/chat/completions"
 
 
-class _StubStreamClient(_StubClient):
-    def stream(self, task, **kwargs):  # pylint: disable=unused-argument
-        type(self).last_kwargs = kwargs
-
-        def _gen():
-            yield {
-                "type": "final",
-                "result": {
-                    "text": "ok",
-                    "points": None,
-                    "parsed": None,
-                    "usage": None,
-                    "errors": [],
-                    "raw": None,
-                },
-            }
-
-        return _gen()
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    for key in ("FAL_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    # The Perceptron API passes model ids it does not know through to the gateway.
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
 
 
-class _StubAsyncClient:
-    last_kwargs: dict | None = None
+@pytest.fixture
+def http(monkeypatch):
+    def _handler(request):
+        if json.loads(request.content).get("stream"):
+            return sse_response([chunk({"content": "ok"}), chunk({}, finish_reason="stop")])
+        return json_response(completion("ok"))
 
-    def __init__(self, **overrides):  # pylint: disable=unused-argument
-        pass
-
-    async def generate(self, task, **kwargs):  # pylint: disable=unused-argument
-        type(self).last_kwargs = kwargs
-        return {
-            "text": "async",
-            "points": None,
-            "parsed": None,
-            "raw": {"choices": [{"message": {"content": "async"}}]},
-        }
+    return install(monkeypatch, _handler)
 
 
-class _StubAsyncStreamClient(_StubAsyncClient):
-    def stream(self, task, **kwargs):  # pylint: disable=unused-argument
-        type(self).last_kwargs = kwargs
-
-        async def _agen():
-            yield {
-                "type": "final",
-                "result": {
-                    "text": "async",
-                    "points": None,
-                    "parsed": None,
-                    "usage": None,
-                    "errors": [],
-                    "raw": None,
-                },
-            }
-
-        return _agen()
+def _sent_once(http):
+    """The body of the only request, a POST to the Perceptron API; the call's client was closed."""
+    assert [(request.method, str(request.url)) for request in http.requests] == [("POST", URL)]
+    assert [client.is_closed for client in http.clients] == [True]
+    return http.last_body
 
 
-def test_perceive_passes_model_to_client(monkeypatch):
-    monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.Client", _StubClient)
-
+def test_perceive_passes_model_to_client(http):
     @perceive(model="custom-model")
     def describe(img):
         return image(img) + text("Describe")
 
-    result = describe(b"bytes")
+    result = describe(PNG_BYTES)
     assert result.text == "ok"
-    assert _StubClient.last_kwargs["model"] == "custom-model"
+    body = _sent_once(http)
+    assert body["model"] == "custom-model"
+    assert "stream" not in body
 
 
-def test_perceive_stream_passes_model(monkeypatch):
-    monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.Client", _StubStreamClient)
-
+def test_perceive_stream_passes_model(http):
     @perceive(model="stream-model", stream=True)
     def describe(img):
         return image(img) + text("Describe")
 
-    events = list(describe(b"bytes"))
+    events = list(describe(PNG_BYTES))
     assert events[-1]["type"] == "final"
-    assert _StubStreamClient.last_kwargs["model"] == "stream-model"
+    assert events[-1]["result"]["text"] == "ok"
+    body = _sent_once(http)
+    assert body["model"] == "stream-model"
+    assert body["stream"] is True
 
 
-def test_async_perceive_passes_model(monkeypatch):
-    monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubAsyncClient)
-
+def test_async_perceive_passes_model(http):
     @async_perceive(model="async-model")
     def describe(img):
         return image(img) + text("Describe")
 
-    res = asyncio.run(describe(b"bytes"))
-    assert res.text == "async"
-    assert _StubAsyncClient.last_kwargs["model"] == "async-model"
+    res = asyncio.run(describe(PNG_BYTES))
+    assert res.text == "ok"
+    body = _sent_once(http)
+    assert body["model"] == "async-model"
+    assert "stream" not in body
 
 
-def test_async_perceive_stream_passes_model(monkeypatch):
-    monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubAsyncStreamClient)
-
+def test_async_perceive_stream_passes_model(http):
     @async_perceive(model="async-stream", stream=True)
     def describe(img):
         return image(img) + text("Describe")
 
     async def _collect():
         events_local = []
-        async for ev in describe(b"bytes"):
+        async for ev in describe(PNG_BYTES):
             events_local.append(ev)
         return events_local
 
     collected = asyncio.run(_collect())
     assert collected[-1]["type"] == "final"
-    assert _StubAsyncStreamClient.last_kwargs["model"] == "async-stream"
+    assert collected[-1]["result"]["text"] == "ok"
+    body = _sent_once(http)
+    assert body["model"] == "async-stream"
+    assert body["stream"] is True
 
 
-def test_perceive_missing_credentials_raises(monkeypatch):
-    monkeypatch.delenv("PERCEPTRON_PROVIDER", raising=False)
-    monkeypatch.delenv("FAL_KEY", raising=False)
-    monkeypatch.delenv("PERCEPTRON_API_KEY", raising=False)
+def test_perceive_missing_credentials_raises(monkeypatch, http):
+    monkeypatch.delenv("PERCEPTRON_API_KEY")
 
     @perceive()
     def describe(img):
@@ -153,3 +109,4 @@ def test_perceive_missing_credentials_raises(monkeypatch):
     task = details.get("task")
     assert task and isinstance(task, dict)
     assert task["content"][0]["type"] == "image"
+    assert not http.requests  # raised before sending

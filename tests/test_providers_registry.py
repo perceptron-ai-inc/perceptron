@@ -1,6 +1,7 @@
 """Model registry and provider resolution (`perceptron._providers`)."""
 
 import pytest
+from _http_mock import install, json_response
 
 from perceptron import _providers, perceive, settings, text
 from perceptron import client as client_mod
@@ -141,32 +142,14 @@ def test_configured_provider_wins_over_the_rule(monkeypatch):
 
 
 def test_legacy_perceptron_default_model_is_mk15(monkeypatch):
-    captured = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "ok"}}]}
-
-    class _Session:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["body"] = json
-            return _Resp()
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Session())
+    http = install(monkeypatch, lambda request: json_response({"choices": [{"message": {"content": "ok"}}]}))
     monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
 
     with cfg(provider="perceptron"):
-        perceive(text("Hi"))
+        assert perceive(text("Hi")).text == "ok"
 
-    assert captured["body"]["model"] == "perceptron-mk1.5"
+    assert [str(request.url) for request in http.requests] == ["https://api.perceptron.inc/v1/chat/completions"]
+    assert http.last_body["model"] == "perceptron-mk1.5"
 
 
 # ---------------------------------------------------------------------------

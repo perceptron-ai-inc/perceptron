@@ -11,7 +11,6 @@ from _http_mock import completion, install, json_response, text_response
 from _image_fixtures import PNG_BYTES
 
 from perceptron import AsyncClient, Client, agent, audio, image, settings, system, text, tool_result, video
-from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.chat import (
     ChatCompletion,
@@ -41,6 +40,7 @@ from perceptron.errors import (
     UNSUPPORTED_TOOLS_COMBINATION,
     BadRequestError,
     ParseError,
+    RateLimitError,
     ServerError,
 )
 
@@ -741,39 +741,18 @@ def test_async_create_checks_temperature_before_sending(http):
     assert not http.requests
 
 
-def test_async_errors_are_mapped_with_the_stub_httpx(monkeypatch):
-    """With the stub namespace (both exception classes are `Exception`), SDK errors must not become TransportErrors."""
-
-    class _Response:
-        status_code = 429
-        headers = {"Retry-After": "7", "x-trace-id": "t-async"}  # noqa: RUF012
-
-        def json(self):
-            return {"error": {"message": "slow down", "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
-
-    class _Session:
-        def __init__(self, timeout):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def post(self, url, headers=None, content=None):
-            json.loads(content)
-            return _Response()
-
-    stub = SimpleNamespace(AsyncClient=_Session, TimeoutException=Exception, HTTPError=Exception)
-    monkeypatch.setattr(client_mod, "httpx", stub)
+def test_async_http_errors_are_mapped_with_retry_after_and_request_id(monkeypatch):
+    """The async path maps an HTTP error to its SDK error (not a transport error), with its headers."""
+    error = {"error": {"message": "slow down", "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
+    headers = {"Retry-After": "7", "x-trace-id": "t-async"}
+    http = install(monkeypatch, lambda request: json_response(error, 429, headers=headers))
 
     async def _run():
         await AsyncClient().chat.completions.create(messages=[USER])
-
-    from perceptron.errors import RateLimitError
 
     with pytest.raises(RateLimitError) as excinfo:
         asyncio.run(_run())
     assert excinfo.value.retry_after == 7.0
     assert excinfo.value.request_id == "t-async"
+    assert excinfo.value.status_code == 429
+    assert http.last_body == {"model": "perceptron-mk1.5", "messages": [USER]}

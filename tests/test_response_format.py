@@ -9,6 +9,8 @@ Tests cover:
 """
 
 import pytest
+from _http_mock import install, json_response
+from _image_fixtures import PNG_BYTES
 
 from perceptron import client as client_mod
 from perceptron import (
@@ -267,32 +269,24 @@ def test_build_response_format_unknown_type_raises():
 # ---------------------------------------------------------------------------
 
 
-from _image_fixtures import PNG_BYTES  # noqa: E402
+MOCK_URL = "https://mock.api/perceptron/isaac-01/openai/v1/chat/completions"
+
+
+def _serve(monkeypatch, content):
+    """Answer every request with a completion whose answer is ``content``."""
+    monkeypatch.setenv("FAL_KEY", "test-key")
+    return install(monkeypatch, lambda request: json_response({"choices": [{"message": {"content": content}}]}))
+
+
+def _sent_body(http):
+    """The body of the only request, a POST to the configured base URL."""
+    assert [(request.method, str(request.url)) for request in http.requests] == [("POST", MOCK_URL)]
+    return http.last_body
 
 
 def test_response_format_in_payload(monkeypatch):
     """Test that response_format is included in the request body."""
-    captured = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": '{"name": "test"}'}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("FAL_KEY", "test-key")
+    http = _serve(monkeypatch, '{"name": "test"}')
 
     schema = {"type": "object", "properties": {"name": {"type": "string"}}}
 
@@ -303,34 +297,13 @@ def test_response_format_in_payload(monkeypatch):
     with cfg(provider="fal", base_url="https://mock.api"):
         make_request()
 
-    payload = captured["payload"]
-    assert "response_format" in payload
-    assert payload["response_format"]["type"] == "json_schema"
+    payload = _sent_body(http)
+    assert payload["response_format"] == {"type": "json_schema", "json_schema": {"name": "response", "schema": schema}}
 
 
 def test_response_format_regex_in_payload(monkeypatch):
     """Test that regex is passed as separate 'regex' field in the request body."""
-    captured = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "yes"}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("FAL_KEY", "test-key")
+    http = _serve(monkeypatch, "yes")
 
     @perceive(response_format=regex_format(r"(yes|no)"))
     def make_request():
@@ -339,7 +312,7 @@ def test_response_format_regex_in_payload(monkeypatch):
     with cfg(provider="fal", base_url="https://mock.api"):
         make_request()
 
-    payload = captured["payload"]
+    payload = _sent_body(http)
     # regex goes to separate "regex" field, not inside response_format
     assert "regex" in payload
     assert payload["regex"] == r"(yes|no)"
@@ -348,27 +321,7 @@ def test_response_format_regex_in_payload(monkeypatch):
 
 def test_no_response_format_when_none(monkeypatch):
     """Test that response_format is not in payload when not specified."""
-    captured = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": "test"}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("FAL_KEY", "test-key")
+    http = _serve(monkeypatch, "test")
 
     @perceive()
     def make_request():
@@ -377,8 +330,9 @@ def test_no_response_format_when_none(monkeypatch):
     with cfg(provider="fal", base_url="https://mock.api"):
         make_request()
 
-    payload = captured["payload"]
+    payload = _sent_body(http)
     assert "response_format" not in payload
+    assert "regex" not in payload
 
 
 def test_pydantic_format_in_payload(monkeypatch):
@@ -389,27 +343,7 @@ def test_pydantic_format_in_payload(monkeypatch):
     class Output(BaseModel):
         value: str
 
-    captured = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": '{"value": "test"}'}}]}
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("FAL_KEY", "test-key")
+    http = _serve(monkeypatch, '{"value": "test"}')
 
     @perceive(response_format=pydantic_format(Output))
     def make_request():
@@ -418,10 +352,11 @@ def test_pydantic_format_in_payload(monkeypatch):
     with cfg(provider="fal", base_url="https://mock.api"):
         result = make_request()
 
-    payload = captured["payload"]
+    payload = _sent_body(http)
     assert "response_format" in payload
     assert payload["response_format"]["type"] == "json_schema"
     assert payload["response_format"]["json_schema"]["name"] == "Output"
+    assert payload["response_format"]["json_schema"]["schema"] == Output.model_json_schema()
 
     # Verify result can be parsed back
     output = Output.model_validate_json(result.text)

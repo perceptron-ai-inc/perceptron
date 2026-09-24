@@ -1,9 +1,14 @@
-"""Error mapping (`http_error_from_response`), the error classes, and SSE `data:` parsing."""
+"""Error mapping (`http_error_from_response`), the error classes, SSE `data:` parsing, and the request helpers.
 
+Responses are real `httpx.Response` objects; requests go through `httpx.MockTransport` (see `_http_mock`).
+"""
+
+import asyncio
 import json
 
 import httpx
 import pytest
+from _http_mock import Body, FailingBody, install, json_response, text_response
 
 from perceptron import _transport
 from perceptron import client as client_mod
@@ -86,17 +91,17 @@ def test_gateway_fields_become_attributes_and_request_id_comes_from_trace_header
 def test_details_is_a_copy_of_the_server_error():
     payload = {"error": {"message": "nope", "code": "x"}}
 
-    class _Resp:
-        status_code = 400
-        headers: dict = {}  # noqa: RUF012
+    class _SharedJson(httpx.Response):
+        """Hands out one parsed body, so an error that aliased it would change it."""
 
-        def json(self):
+        def json(self, **kwargs):
             return payload
 
-    err = _transport.http_error_from_response(_Resp())
+    err = _transport.http_error_from_response(_SharedJson(400, json=payload))
     err.details["extra"] = 1
 
-    assert "extra" not in payload["error"]
+    assert err.details == {"message": "nope", "code": "x", "extra": 1}
+    assert payload["error"] == {"message": "nope", "code": "x"}
 
 
 def test_code_falls_back_to_type_and_auth_default():
@@ -111,15 +116,8 @@ def test_code_falls_back_to_type_and_auth_default():
     assert err.code == "auth_error"
 
 
-def test_trace_header_lookup_is_case_insensitive_on_plain_dicts():
-    class _Resp:
-        status_code = 400
-        headers = {"X-Trace-Id": "abc"}  # noqa: RUF012
-
-        def json(self):
-            return {"error": {"message": "bad"}}
-
-    err = _transport.http_error_from_response(_Resp())
+def test_trace_header_lookup_is_case_insensitive():
+    err = _transport.http_error_from_response(_error_response(400, {"message": "bad"}, headers={"X-Trace-Id": "abc"}))
 
     assert err.request_id == "abc"
     assert err.details["request_id"] == "abc"
@@ -235,33 +233,33 @@ def test_detect_error_shape_is_parsed():
     assert err.error_type == "authentication_error"
 
 
-def test_mapper_tolerates_missing_json_text_and_headers():
-    class _Bare:
-        status_code = 500
+@pytest.mark.parametrize(
+    "body",
+    [None, Body(b'{"error": {"message": "unread"}}')],
+    ids=["empty", "unread"],
+)
+def test_mapper_falls_back_to_the_status_without_a_body(body):
+    # An unread streamed body (e.g. its read failed) makes `json()` and `text` raise `ResponseNotRead`.
+    resp = httpx.Response(500) if body is None else httpx.Response(500, stream=body)
 
-    err = _transport.http_error_from_response(_Bare())
+    err = _transport.http_error_from_response(resp)
 
     assert type(err) is ServerError
     assert str(err) == "server error: 500"
     assert err.request_id is None
 
 
-def test_streamed_error_body_is_read_before_mapping(monkeypatch):
+def test_streamed_error_body_is_read_before_mapping(monkeypatch, perceptron_env):
     """A non-2xx streaming response is unread (like a socket); its body must still reach the error."""
-
-    class _Unread(httpx.SyncByteStream):
-        def __iter__(self):
-            yield json.dumps({"error": _gateway_error("bad tool", code="unsupported_parameter")}).encode()
-
-    transport = httpx.MockTransport(lambda request: httpx.Response(400, stream=_Unread()))
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: httpx.Client(transport=transport, timeout=timeout))
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
+    body = Body(json.dumps({"error": _gateway_error("bad tool", code="unsupported_parameter")}).encode())
+    install(monkeypatch, lambda request: httpx.Response(400, stream=body))
 
     with pytest.raises(BadRequestError) as excinfo:
         _transport.open_stream(client_mod.Client(), "POST", "/chat/completions", json={"model": "m"})
 
     assert str(excinfo.value) == "bad tool"
     assert excinfo.value.code == "unsupported_parameter"
+    assert body.closed  # the response was closed before the error was raised
 
 
 # ---------------------------------------------------------------------------
@@ -327,8 +325,6 @@ def test_iter_sse_data_yields_payloads_and_done_sentinel():
 
 
 def test_aiter_sse_data_matches_sync():
-    import asyncio
-
     async def _lines():
         for line in ["data: x", ": ping", "data: [DONE]"]:
             yield line
@@ -341,18 +337,10 @@ def test_aiter_sse_data_matches_sync():
     assert out[1] is _transport.DONE
 
 
-class _Stub:
-    """A response with only ``iter_bytes``, yielding ``chunks``."""
-
-    def __init__(self, chunks):
-        self._chunks = chunks
-
-    def iter_bytes(self, chunk_size=None):
-        yield from self._chunks
-
-
 def _lines_in_chunks(body: bytes, size: int) -> list[str]:
-    return list(_transport.iter_response_lines(_Stub([body[i : i + size] for i in range(0, len(body), size)])))
+    # A streamed response whose body arrives in `size`-byte chunks.
+    chunks = [body[i : i + size] for i in range(0, len(body), size)]
+    return list(_transport.iter_response_lines(httpx.Response(200, content=chunks)))
 
 
 @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\u0085"])
@@ -373,15 +361,12 @@ def test_response_lines_drop_an_unterminated_last_line_except_done():
 
 
 def test_aiter_response_lines_matches_sync():
-    import asyncio
-
-    class _AsyncStub:
-        async def aiter_bytes(self, chunk_size=None):
-            for piece in ("data: x\u2028y".encode(), b"\r", b"\ndata: [DONE]"):
-                yield piece
+    async def _chunks():
+        for piece in ("data: x\u2028y".encode(), b"\r", b"\ndata: [DONE]"):
+            yield piece
 
     async def _collect():
-        return [line async for line in _transport.aiter_response_lines(_AsyncStub())]
+        return [line async for line in _transport.aiter_response_lines(httpx.Response(200, content=_chunks()))]
 
     assert asyncio.run(_collect()) == ["data: x\u2028y", "data: [DONE]"]
 
@@ -399,8 +384,6 @@ def perceptron_env(monkeypatch):
 
 
 def test_request_json_builds_url_auth_and_params(monkeypatch, perceptron_env):
-    from _http_mock import install, json_response
-
     recorder = install(monkeypatch, lambda request: json_response({"data": []}, headers={"x-trace-id": "t"}))
 
     payload, headers = _transport.request_json(client_mod.Client(), "GET", "/files", params={"limit": 2})
@@ -414,8 +397,6 @@ def test_request_json_builds_url_auth_and_params(monkeypatch, perceptron_env):
 
 
 def test_request_sends_multipart_without_forcing_a_content_type(monkeypatch, perceptron_env):
-    from _http_mock import install, json_response
-
     recorder = install(monkeypatch, lambda request: json_response({"id": "file-x"}))
 
     _transport.request(
@@ -430,8 +411,6 @@ def test_request_sends_multipart_without_forcing_a_content_type(monkeypatch, per
 
 
 def test_request_maps_http_errors_and_transport_failures(monkeypatch, perceptron_env):
-    from _http_mock import install, json_response
-
     error = {"error": {"message": "No such file", "type": "invalid_request_error", "param": "id", "code": None}}
     install(monkeypatch, lambda request: json_response(error, 404, headers={"x-trace-id": "t404"}))
     with pytest.raises(NotFoundError) as excinfo:
@@ -456,8 +435,6 @@ def test_request_maps_http_errors_and_transport_failures(monkeypatch, perceptron
 @pytest.mark.parametrize("padding", ["\n", "\r\n", " ", "\t"])
 def test_api_key_whitespace_is_stripped(monkeypatch, perceptron_env, padding):
     # Keys read from a file or secret mount often end with a newline, which is an illegal header value.
-    from _http_mock import install, json_response
-
     recorder = install(monkeypatch, lambda request: json_response({"data": []}))
     monkeypatch.setenv("PERCEPTRON_API_KEY", f"{padding}sk-test{padding}")
 
@@ -468,8 +445,6 @@ def test_api_key_whitespace_is_stripped(monkeypatch, perceptron_env, padding):
 
 @pytest.mark.parametrize("key", ["\u201csk-secret\u201d", "sk-sec ret", "sk-sec\x01ret"])
 def test_malformed_api_key_raises_auth_error_without_echoing_it(monkeypatch, perceptron_env, key):
-    from _http_mock import install, json_response
-
     recorder = install(monkeypatch, lambda request: json_response({"data": []}))
     monkeypatch.setenv("PERCEPTRON_API_KEY", key)
 
@@ -486,8 +461,6 @@ def test_malformed_api_key_raises_auth_error_without_echoing_it(monkeypatch, per
 
 def test_local_protocol_errors_are_not_echoed(monkeypatch, perceptron_env):
     # An illegal header value's error message quotes the header (the Authorization header included).
-    from _http_mock import install
-
     def _illegal(request):
         raise httpx.LocalProtocolError("Illegal header value b'Bearer sk-secret\\n'")
 
@@ -500,8 +473,6 @@ def test_local_protocol_errors_are_not_echoed(monkeypatch, perceptron_env):
 @pytest.mark.parametrize("resource_id", [".", ".."])
 def test_dot_segment_ids_raise_before_any_request(monkeypatch, perceptron_env, resource_id):
     # httpx removes dot segments, so `/files/.` would reach `GET /files` (the list) instead.
-    from _http_mock import install, json_response
-
     recorder = install(monkeypatch, lambda request: json_response({"object": "list", "data": []}))
     client = client_mod.Client()
     calls = {
@@ -522,8 +493,6 @@ def test_dot_segment_ids_raise_before_any_request(monkeypatch, perceptron_env, r
 
 
 def test_request_json_rejects_non_json(monkeypatch, perceptron_env):
-    from _http_mock import install, text_response
-
     install(monkeypatch, lambda request: text_response("<html>"))
     with pytest.raises(ServerError) as excinfo:
         _transport.request_json(client_mod.Client(), "GET", "/models")
@@ -531,8 +500,6 @@ def test_request_json_rejects_non_json(monkeypatch, perceptron_env):
 
 
 def test_stream_request_yields_an_open_response_and_closes_it(monkeypatch, perceptron_env):
-    from _http_mock import Body, install
-
     body = Body(b"file-bytes")
     install(monkeypatch, lambda request: httpx.Response(200, stream=body))
 
@@ -548,8 +515,6 @@ MID_BODY_FAILURES = [
 
 
 def test_iter_response_bytes_reads_the_body(monkeypatch, perceptron_env):
-    from _http_mock import Body, install
-
     install(monkeypatch, lambda request: httpx.Response(200, stream=Body(b"file-bytes")))
 
     with _transport.stream_request(client_mod.Client(), "GET", "/files/file-x/content") as resp:
@@ -558,8 +523,6 @@ def test_iter_response_bytes_reads_the_body(monkeypatch, perceptron_env):
 
 @pytest.mark.parametrize(("exc", "expected_cls"), MID_BODY_FAILURES)
 def test_iter_response_bytes_converts_failures_mid_body(monkeypatch, perceptron_env, exc, expected_cls):
-    from _http_mock import FailingBody, install
-
     body = FailingBody(b"first", exc)
     install(monkeypatch, lambda request: httpx.Response(200, stream=body))
     received = []
@@ -580,16 +543,15 @@ def test_iter_response_bytes_converts_failures_mid_body(monkeypatch, perceptron_
 
 @pytest.mark.parametrize(("exc", "expected_cls"), MID_BODY_FAILURES)
 def test_aiter_response_bytes_converts_failures_mid_body(monkeypatch, perceptron_env, exc, expected_cls):
-    import asyncio
-
-    from _http_mock import FailingBody, install
-
     body = FailingBody(b"first", exc)
     install(monkeypatch, lambda request: httpx.Response(200, stream=body))
     received = []
 
     async def _download():
-        async with _transport.astream_request(client_mod.AsyncClient(), "GET", "/files/file-x/content") as resp:
+        async with (
+            client_mod.AsyncClient() as client,
+            _transport.astream_request(client, "GET", "/files/file-x/content") as resp,
+        ):
             async for piece in _transport.aiter_response_bytes(resp):
                 received.append(piece)
 
@@ -603,10 +565,6 @@ def test_aiter_response_bytes_converts_failures_mid_body(monkeypatch, perceptron
 
 
 def test_async_helpers(monkeypatch, perceptron_env):
-    import asyncio
-
-    from _http_mock import Body, install, json_response
-
     body = Body(b"async-bytes")
 
     def _handler(request):
@@ -617,10 +575,10 @@ def test_async_helpers(monkeypatch, perceptron_env):
     recorder = install(monkeypatch, _handler)
 
     async def _run():
-        client = client_mod.AsyncClient()
-        payload, _ = await _transport.arequest_json(client, "POST", "/chat/completions/multilook", json={"a": 1})
-        async with _transport.astream_request(client, "GET", "/files/file-x/content") as resp:
-            data = b"".join([chunk async for chunk in resp.aiter_bytes()])
+        async with client_mod.AsyncClient() as client:
+            payload, _ = await _transport.arequest_json(client, "POST", "/chat/completions/multilook", json={"a": 1})
+            async with _transport.astream_request(client, "GET", "/files/file-x/content") as resp:
+                data = b"".join([chunk async for chunk in resp.aiter_bytes()])
         return payload, data
 
     payload, data = asyncio.run(_run())

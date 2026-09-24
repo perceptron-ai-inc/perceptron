@@ -5,7 +5,6 @@ import asyncio
 import json
 import warnings
 
-import httpx
 import pytest
 from _http_mock import completion, install, json_response
 from _image_fixtures import PNG_BYTES
@@ -719,7 +718,7 @@ def test_async_parity(http):
 
 def test_async_validation_and_errors(monkeypatch):
     error = {"error": {"message": "Model 'isaac-0.1' does not support multilook", "type": "invalid_request_error"}}
-    http = install(monkeypatch, lambda request: httpx.Response(400, json=error))
+    http = install(monkeypatch, lambda request: json_response(error, 400))
 
     async def _invalid():
         await AsyncClient().chat.completions.multilook(context=[], prompts=["q"], n=2)

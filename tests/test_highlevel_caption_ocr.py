@@ -1,33 +1,58 @@
+import json
+
+import pytest
+from _http_mock import completion, install, json_response
 from _image_fixtures import PNG_BYTES
 
 from perceptron import caption, image, json_schema_format, ocr
-from perceptron import client as client_mod
 from perceptron import config as cfg
 
-
-def _echo_task(self, task, **kwargs):  # pylint: disable=unused-argument
-    return {"text": "", "points": None, "parsed": None, "raw": task}
+FAL_URL = "https://fal.run/perceptron/isaac-01/openai/v1/chat/completions"
 
 
-def test_caption_highlevel_compile_only(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _echo_task)
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    for key in ("FAL_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture
+def http(monkeypatch):
+    """The API behind `httpx.MockTransport`, answering with an empty completion."""
+    return install(monkeypatch, lambda request: json_response(completion("")))
+
+
+def _texts(http) -> list[str]:
+    """Every text the last request sent: string contents and text parts, in order."""
+    texts = []
+    for message in http.last_body["messages"]:
+        content = message["content"]
+        if isinstance(content, str):
+            texts.append(content)
+        else:
+            texts.extend(part["text"] for part in content if part["type"] == "text")
+    return texts
+
+
+def test_caption_highlevel_compile_only(http):
     with cfg(api_key="test-key", provider="fal"):
         res = caption(image(PNG_BYTES), style="concise")
-    assert res.raw and isinstance(res.raw, dict)
-    assert res.raw.get("expects") == "box"
-    content = res.raw.get("content", [])
-    assert any(entry.get("content") == "<hint>BOX</hint>" for entry in content)
+    assert str(http.last.url) == FAL_URL
+    # style="concise" expects boxes: the BOX hint is sent once, in the user turn with the image (fal).
+    [message] = http.last_body["messages"]
+    assert message["role"] == "user"
+    assert {"type": "text", "text": "<hint>BOX</hint>"} in message["content"]
+    assert _texts(http).count("<hint>BOX</hint>") == 1
+    assert res.raw == completion("")
     assert res.errors == []
 
 
-def test_caption_highlevel_text_expectation(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _echo_task)
+def test_caption_highlevel_text_expectation(http):
     with cfg(api_key="test-key", provider="fal"):
         res = caption(image(PNG_BYTES), expects="text")
-    assert res.raw and isinstance(res.raw, dict)
-    assert res.raw.get("expects") is None
-    content = res.raw.get("content", [])
-    assert all("<hint>" not in (entry.get("content") or "") for entry in content)
+    assert str(http.last.url) == FAL_URL
+    assert all("<hint>" not in entry for entry in _texts(http))
+    assert res.raw == completion("")
     assert res.errors == []
 
 
@@ -40,52 +65,37 @@ def test_caption_style_validation():
         raise AssertionError("expected caption() to reject invalid style")
 
 
-def test_ocr_boxes_compile_only(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _echo_task)
+def test_ocr_boxes_compile_only(http):
     with cfg(api_key="test-key", provider="fal"):
         res = ocr(image(PNG_BYTES))
-    assert res.raw and isinstance(res.raw, dict)
-    assert res.raw.get("expects") is None
+    assert str(http.last.url) == FAL_URL
+    assert all("<hint>" not in entry for entry in _texts(http))
+    assert res.raw == completion("")
     assert res.errors == []
 
 
-def test_ocr_plain_text_compile_only(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _echo_task)
+def test_ocr_plain_text_compile_only(http):
     with cfg(api_key="test-key", provider="fal"):
         res = ocr(image(PNG_BYTES))
-    assert res.raw and isinstance(res.raw, dict)
-    assert res.raw.get("expects") is None
+    assert str(http.last.url) == FAL_URL
+    assert all("<hint>" not in entry for entry in _texts(http))
+    assert res.raw == completion("")
     assert res.errors == []
 
 
 def test_caption_response_format_propagates(monkeypatch):
     """Test that response_format passed to caption() reaches the HTTP payload."""
-    captured = {}
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"choices": [{"message": {"content": '{"description": "test"}'}}]}
-
-    class _MockClient:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def post(self, url, headers=None, json=None):
-            captured["payload"] = json
-            return _Resp()
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _MockClient())
+    answer = {"choices": [{"message": {"content": '{"description": "test"}'}}]}
+    http = install(monkeypatch, lambda request: json_response(answer))
 
     schema = {"type": "object", "properties": {"description": {"type": "string"}}}
     with cfg(api_key="test-key", provider="fal", base_url="https://mock.api"):
-        caption(image(PNG_BYTES), style="concise", response_format=json_schema_format(schema))
+        res = caption(image(PNG_BYTES), style="concise", response_format=json_schema_format(schema))
 
-    assert "payload" in captured
-    payload = captured["payload"]
+    assert len(http.requests) == 1
+    assert str(http.last.url) == "https://mock.api/perceptron/isaac-01/openai/v1/chat/completions"
+    payload = http.last_body
     assert "response_format" in payload
     assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["schema"] == schema
+    assert json.loads(res.text) == {"description": "test"}

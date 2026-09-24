@@ -2,6 +2,8 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from _http_mock import chunk, completion, install, json_response, sse_response
+from _image_fixtures import PNG_BYTES
 from typer.testing import CliRunner
 
 from perceptron import PerceiveResult
@@ -765,8 +767,6 @@ AUDIO_LIMIT = {
 @pytest.fixture
 def api(monkeypatch):
     """Route requests through `httpx.MockTransport`; `api.answer`/`api.status` shape the next responses."""
-    from _http_mock import chunk, completion, install, json_response, sse_response
-
     for key in ("FAL_KEY", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("PERCEPTRON_PROVIDER", "perceptron")
@@ -819,8 +819,6 @@ def test_question_clip_text_lists_clips_and_tracks_with_status(api):
 
 
 def test_detect_directory_writes_boxes_tracks_and_parsed_json(api, tmp_path):
-    from _image_fixtures import PNG_BYTES
-
     (tmp_path / "one.png").write_bytes(PNG_BYTES)
     result = runner.invoke(app, ["detect", str(tmp_path), "--classes", "person,car"])
     assert result.exit_code == 0, result.stdout
@@ -976,14 +974,10 @@ def test_stream_error_event_reports_code_details_and_exits_nonzero(api):
 
 
 def test_stream_truncated_mid_answer_keeps_partial_text(api):
-    from _http_mock import chunk
-
     api.stream_events = [chunk({"role": "assistant", "content": "Partial ans"})]
     api.answer = None
 
     def _truncated(request):
-        from _http_mock import sse_response
-
         return sse_response(api.stream_events, done=False)
 
     api.http.handler = _truncated
@@ -1117,8 +1111,6 @@ def test_annotation_mentions_are_printed_literally_not_as_rich_markup(api, menti
 
 @pytest.mark.parametrize("output_format", ["text", "json"])
 def test_stream_error_text_is_literal_and_names_the_request_id(api, output_format):
-    from _http_mock import chunk, sse_response
-
     error = {"error": {"message": "boom [/x]", "type": "server_error", "code": "internal"}}
     api.http.handler = lambda request: sse_response(
         [chunk({"role": "assistant", "content": "part"}), error], headers={"x-trace-id": "trace-sse"}
@@ -1144,8 +1136,6 @@ def test_stream_http_error_text_mode_prints_code_and_request_id(api):
 
 
 def test_directory_mode_prints_paths_and_issues_literally(api, tmp_path, monkeypatch):
-    from _image_fixtures import PNG_BYTES
-
     batch = tmp_path / "batch [bold]"  # would print as "batch" if read as markup
     batch.mkdir()
     (batch / "one.png").write_bytes(PNG_BYTES)

@@ -1,39 +1,30 @@
-import json
+"""`perceive(stream=True)` over `httpx.MockTransport` (see `_http_mock`): text, reasoning and point deltas, usage, and
+an HTTP error as the stream's only event."""
 
 import pytest
+from _http_mock import install, json_response, sse_response
+from _image_fixtures import PNG_BYTES
+from PIL import Image as PILImage
 
-from perceptron import client as client_mod
 from perceptron import image, perceive, text
 
-try:
-    from PIL import Image as PILImage  # type: ignore
-except Exception:  # pragma: no cover
-    PILImage = None
-
-
-class _MockResp:
-    def __init__(self, lines, status=200):
-        self._lines = lines
-        self.status_code = status
-        self.headers = {}
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-    def iter_lines(self, decode_unicode=True):
-        yield from self._lines
-
-
-def _sse(obj):
-    return f"data: {json.dumps(obj)}"
+FAL_URL = "https://fal.run/perceptron/isaac-01/openai/v1/chat/completions"
+PERCEPTRON_URL = "https://api.perceptron.inc/v1/chat/completions"
 
 
 @pytest.fixture(autouse=True)
 def _set_fal_key(monkeypatch):
+    for key in ("PERCEPTRON_API_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("FAL_KEY", "test-fal-key")
+
+
+def _sent_stream(http, url):
+    """The body of the only request, a streaming POST to ``url``."""
+    assert [(request.method, str(request.url)) for request in http.requests] == [("POST", url)]
+    body = http.last_body
+    assert body["stream"] is True
+    return body
 
 
 def test_stream_text_and_points(monkeypatch):
@@ -42,42 +33,24 @@ def test_stream_text_and_points(monkeypatch):
     def fn(img):
         return image(img) + text("Find point")
 
-    # Mock HTTP transport to stream SSE lines
     chunks = [
-        _sse({"choices": [{"delta": {"content": "Hello "}}]}),
-        _sse({"choices": [{"delta": {"content": "<point> (1,2) </point>!"}}]}),
-        _sse({"usage": {"prompt_tokens": 12, "completion_tokens": 3}}),
-        "data: [DONE]",
+        {"choices": [{"delta": {"content": "Hello "}}]},
+        {"choices": [{"delta": {"content": "<point> (1,2) </point>!"}}]},
+        {"usage": {"prompt_tokens": 12, "completion_tokens": 3}},
     ]
+    http = install(monkeypatch, lambda request: sse_response(chunks))
 
-    class _Client:
-        def __enter__(self):
-            return self
+    events = list(fn(PILImage.new("RGB", (8, 8))))
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, *args, **kwargs):  # pragma: no cover - ensure generate path unused
-            raise AssertionError("post should not be called in streaming test")
-
-        def stream(self, method, url, headers=None, json=None):
-            assert method == "POST"
-            return _MockResp(chunks, status=200)
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-
-    # Provide an 8x8 image via PIL if available; else bytes
-    img = PILImage.new("RGB", (8, 8)) if PILImage is not None else b"\x89PNG\r\n\x1a\n" + b"0" * 10
-
-    stream_it = fn(img)
-    events = list(stream_it)
-    # Should contain at least two text.delta and one final
-    types = [e.get("type") for e in events]
-    assert types.count("text.delta") >= 2
-    assert types[-1] == "final"
-    # Ensure points.delta emitted once after tag closes
-    assert any(e.get("type") == "points.delta" for e in events)
-    assert events[-1]["result"]["usage"]["prompt_tokens"] == 12
+    # FAL_KEY is the only key, so the stream goes to fal.
+    _sent_stream(http, FAL_URL)
+    types = [e["type"] for e in events]
+    # Two text deltas, then the point once its tag closes, then the final result
+    assert types == ["text.delta", "text.delta", "points.delta", "final"]
+    assert [(point.x, point.y) for point in events[2]["points"]] == [(1, 2)]
+    final = events[-1]["result"]
+    assert final["text"] == "Hello <point> (1,2) </point>!"
+    assert final["usage"]["prompt_tokens"] == 12
 
 
 def test_stream_reasoning_delta(monkeypatch):
@@ -86,32 +59,15 @@ def test_stream_reasoning_delta(monkeypatch):
         return image(img) + text("Think about this")
 
     chunks = [
-        _sse({"choices": [{"delta": {"reasoning_content": "Let me think"}}]}),
-        _sse({"choices": [{"delta": {"reasoning_content": " step by step"}}]}),
-        _sse({"choices": [{"delta": {"content": "The answer"}}]}),
-        _sse({"choices": [{"delta": {"content": " is 42"}}]}),
-        "data: [DONE]",
+        {"choices": [{"delta": {"reasoning_content": "Let me think"}}]},
+        {"choices": [{"delta": {"reasoning_content": " step by step"}}]},
+        {"choices": [{"delta": {"content": "The answer"}}]},
+        {"choices": [{"delta": {"content": " is 42"}}]},
     ]
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-        def stream(self, method, url, headers=None, json=None):
-            return _MockResp(chunks, status=200)
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    http = install(monkeypatch, lambda request: sse_response(chunks))
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    img = PILImage.new("RGB", (8, 8)) if PILImage is not None else b"\x89PNG\r\n\x1a\n" + b"0" * 10
-
-    events = list(fn(img))
+    events = list(fn(PILImage.new("RGB", (8, 8))))
     types = [e["type"] for e in events]
 
     assert types.count("reasoning.delta") == 2
@@ -121,6 +77,9 @@ def test_stream_reasoning_delta(monkeypatch):
     final = events[-1]["result"]
     assert final["reasoning"] == "Let me think step by step"
     assert final["text"] == "The answer is 42"
+    body = _sent_stream(http, PERCEPTRON_URL)
+    assert body["model"] == "isaac-0.2-1b"
+    assert http.last.headers["authorization"] == "Bearer test-key"
 
 
 def test_stream_http_error(monkeypatch):
@@ -128,20 +87,15 @@ def test_stream_http_error(monkeypatch):
     def fn(img):
         return image(img) + text("Hello")
 
-    class _Client:
-        def __enter__(self):
-            return self
+    error = {"error": {"message": "upstream failed", "type": "server_error", "param": None, "code": None}}
+    http = install(monkeypatch, lambda request: json_response(error, 500, headers={"x-trace-id": "t500"}))
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+    events = list(fn(PNG_BYTES))
 
-        def post(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
-        def stream(self, method, url, headers=None, json=None):
-            return _MockResp(["data: [DONE]"], status=500)
-
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-
-    events = list(fn(b"\x89PNG\r\n\x1a\nxxxxxxxxxx"))
-    assert events and events[0]["type"] == "error"
+    # The HTTP error is the only event; the body was read, so its message and the trace id reach it.
+    assert [e["type"] for e in events] == ["error"]
+    event = events[0]
+    assert (event["status"], event["message"], event["code"]) == (500, "upstream failed", "server_error")
+    assert event["request_id"] == "t500"
+    assert event["partial"] is None
+    _sent_stream(http, FAL_URL)
