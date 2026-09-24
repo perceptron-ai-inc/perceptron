@@ -476,26 +476,28 @@ def test_async_generate_metadata_and_body(monkeypatch):
 
 
 def test_async_stream_tool_calls_and_terminal_errors(monkeypatch):
-    http, _ = _sse(monkeypatch, INTERLEAVED)
-    client = AsyncClient(provider="perceptron")
+    def _events():  # a client per scenario: a client keeps the HTTP client (and so the mock) it first used
+        return _collect(AsyncClient(provider="perceptron").stream(TASK))
 
-    events = _collect(client.stream(TASK))
+    http, _ = _sse(monkeypatch, INTERLEAVED)
+
+    events = _events()
 
     assert http.last_body["stream_options"] == {"include_usage": True}
     assert sum(e["type"] == "tool_call.delta" for e in events) == 5
     assert events[-1]["result"]["tool_calls"][1].arguments == '{"city": "NYC"}'
 
     _sse(monkeypatch, [chunk({"content": "x"}), {"error": {"message": "boom", "type": "server_error"}}], done=False)
-    events = _collect(client.stream(TASK))
+    events = _events()
     assert [e["type"] for e in events] == ["text.delta", "error"]
     assert events[-1]["partial"]["text"] == "x"
 
     _sse(monkeypatch, [chunk({"content": "x"})], done=False)
-    assert _collect(client.stream(TASK))[-1]["code"] == STREAM_TRUNCATED
+    assert _events()[-1]["code"] == STREAM_TRUNCATED
 
     body = json.dumps({"error": {"message": "slow down", "type": "rate_limit_error"}}).encode()
     install(monkeypatch, lambda request: httpx.Response(429, stream=Body(body), headers={"Retry-After": "3"}))
-    events = _collect(client.stream(TASK))
+    events = _events()
     assert events == [
         {
             "type": "error",

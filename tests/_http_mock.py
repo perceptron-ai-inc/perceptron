@@ -1,20 +1,19 @@
-"""Route the client's session seams through `httpx.MockTransport`.
+"""Route the SDK's HTTP clients through `httpx.MockTransport`.
 
-Patches `perceptron.client._http_client` (sync) and `perceptron.client.httpx` (async: a namespace whose `AsyncClient`
-uses the mock transport and whose exception classes are the real httpx ones). Response bodies are unread byte streams,
-like a real socket, so error bodies must be read before mapping.
+`install` patches the factories that `Client` / `AsyncClient` use to create their pooled HTTP client
+(`perceptron.client._http_client` / `_async_http_client`), so every client made afterwards sends through the mock and
+the recorder sees the HTTP clients it created. `Recorder.http_client()` / `.async_http_client()` build clients to pass
+as `Client(http_client=...)` / `AsyncClient(http_client=...)`. Response bodies are unread byte streams, like a real
+socket, so error bodies must be read before mapping.
 """
 
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 
 import httpx
 
 from perceptron import client as client_mod
-
-_REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
 class Body(httpx.SyncByteStream, httpx.AsyncByteStream):
@@ -54,9 +53,13 @@ class FailingBody(Body):
 
 
 class Recorder:
+    """Answers requests with ``handler`` and records them, and the HTTP clients the SDK created (``clients``)."""
+
     def __init__(self, handler) -> None:
         self.handler = handler
         self.requests: list[httpx.Request] = []
+        self.clients: list[httpx.Client | httpx.AsyncClient] = []
+        self.transport = httpx.MockTransport(self)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -70,17 +73,35 @@ class Recorder:
     def last_body(self) -> dict:
         return json.loads(self.requests[-1].content)
 
+    @property
+    def timeouts(self) -> list[float | None]:
+        """The read timeout each request was sent with (httpx's per-request ``timeout``)."""
+        return [request.extensions["timeout"]["read"] for request in self.requests]
+
+    def http_client(self, **kwargs) -> httpx.Client:
+        """An ``httpx.Client`` over the mock transport, e.g. for ``Client(http_client=...)``."""
+        return httpx.Client(transport=self.transport, **kwargs)
+
+    def async_http_client(self, **kwargs) -> httpx.AsyncClient:
+        """An ``httpx.AsyncClient`` over the mock transport, e.g. for ``AsyncClient(http_client=...)``."""
+        return httpx.AsyncClient(transport=self.transport, **kwargs)
+
+    def _created(self, client):
+        self.clients.append(client)
+        return client
+
 
 def install(monkeypatch, handler) -> Recorder:
+    """Make every ``Client``/``AsyncClient`` created afterwards send through ``handler`` (see the module docstring)."""
     recorder = Recorder(handler)
-    transport = httpx.MockTransport(recorder)
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: httpx.Client(transport=transport, timeout=timeout))
-    async_httpx = SimpleNamespace(
-        AsyncClient=lambda timeout: _REAL_ASYNC_CLIENT(transport=transport, timeout=timeout),
-        TimeoutException=httpx.TimeoutException,
-        HTTPError=httpx.HTTPError,
+    monkeypatch.setattr(
+        client_mod, "_http_client", lambda timeout: recorder._created(recorder.http_client(timeout=timeout))
     )
-    monkeypatch.setattr(client_mod, "httpx", async_httpx)
+    monkeypatch.setattr(
+        client_mod,
+        "_async_http_client",
+        lambda timeout: recorder._created(recorder.async_http_client(timeout=timeout)),
+    )
     return recorder
 
 

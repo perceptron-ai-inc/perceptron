@@ -695,14 +695,14 @@ def test_files_and_models_are_lazy_cached_delegators(monkeypatch):
     assert type(async_client.models).__name__ == "AsyncModels"
 
 
-def test_session_factories_use_the_patchable_module_globals(monkeypatch):
-    marker = object()
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: (marker, timeout))
-    monkeypatch.setattr(client_mod, "httpx", SimpleNamespace(AsyncClient=lambda timeout: ("async", timeout)))
+def test_http_client_factories_are_patchable_module_globals(monkeypatch):
+    http = install(monkeypatch, lambda request: json_response(completion()))
 
-    client = Client()
-    assert client._sync_session(12.0) == (marker, 12.0)
-    assert client._async_session(3.0) == ("async", 3.0)
+    client, async_client = Client(timeout=12.0), AsyncClient(timeout=3.0)
+    assert http.clients == []  # created on first use, with the configured timeout, then reused
+    assert client._session() is client._session() is http.clients[0]
+    assert async_client._session() is async_client._session() is http.clients[1]
+    assert [pool.timeout.read for pool in http.clients] == [12.0, 3.0]
 
 
 # ---------------------------------------------------------------------------

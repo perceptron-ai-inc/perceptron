@@ -96,6 +96,21 @@ A value set with `configure()` or `config()` wins over its environment variable,
 
 Without an API key for the selected provider, requests raise `AuthError` with code `credentials_missing` before anything is sent; use `inspect_task` (see [Composing tasks](#composing-tasks-with-the-dsl)) to look at a compiled prompt offline. `perceptron config` prints the `export` lines for your shell (it does not save anything).
 
+**Clients and connections.** A `Client` sends all its requests (`generate`/`stream`, the message API, Files, Models, and Multilook) through one HTTP/2 connection pool, opened on first use. Reuse one client, and close it when you are done with `client.close()` or a `with` block (`AsyncClient`: `await client.aclose()` or `async with`). The helpers and `perceive` open a client for each call and close it afterwards. To set up HTTP yourself (proxies, connection limits, a custom transport), pass your own `httpx.Client` (`httpx.AsyncClient` for `AsyncClient`) as `http_client=`: the SDK uses it as is and never closes it, and each request still uses the SDK's `timeout`.
+
+```python
+import httpx
+
+from perceptron import Client
+
+with Client() as client:  # one connection pool for both requests, closed at the end of the block
+    print(client.chat.completions.create(messages=[{"role": "user", "content": "Hello!"}]).text)
+    print([model.id for model in client.models.list()])
+
+own = httpx.Client(limits=httpx.Limits(max_connections=20))
+client = Client(http_client=own)  # closing `client` leaves `own` open; close it yourself
+```
+
 ## Quick start
 
 ```python
@@ -269,7 +284,7 @@ with client.chat.completions.create(
 print("\n", completion.finish_reason, completion.usage)
 ```
 
-A stream that fails mid-way raises the mapped error (with `.partial`); one that ends without `[DONE]` raises `IncompleteStreamError`. The connection opens when `create()` returns, so use `with`/`async with` (or `close()`) when you may stop early; a stream dropped unfinished is closed when it is garbage collected (an async one on its event loop, unless that loop has been closed). `AsyncClient` mirrors everything:
+A stream that fails mid-way raises the mapped error (with `.partial`); one that ends without `[DONE]` raises `IncompleteStreamError`. The connection opens when `create()` returns, so use `with`/`async with` (or `close()`) when you may stop early; closing a stream hands its connection back to the client's pool. A stream dropped unfinished is closed when it is garbage collected (an async one on its event loop, unless that loop has been closed). `AsyncClient` mirrors everything:
 
 ```python
 import asyncio
@@ -278,14 +293,16 @@ from perceptron import AsyncClient
 
 
 async def main():
-    client = AsyncClient()
-    completion = await client.chat.completions.create(messages=[{"role": "user", "content": "Hello!"}])
-    print(completion.text)
+    async with AsyncClient() as client:
+        completion = await client.chat.completions.create(messages=[{"role": "user", "content": "Hello!"}])
+        print(completion.text)
 
-    stream = await client.chat.completions.create(messages=[{"role": "user", "content": "Hello again!"}], stream=True)
-    async with stream:
-        final = await stream.get_final_completion()
-    print(final.text)
+        stream = await client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello again!"}], stream=True
+        )
+        async with stream:
+            final = await stream.get_final_completion()
+        print(final.text)
 
 
 asyncio.run(main())

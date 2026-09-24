@@ -410,60 +410,37 @@ def test_context_manager_and_close_release_the_connection(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Dropped streams release their connection
+# Dropped streams release their connection (the client's pool stays open)
 # ---------------------------------------------------------------------------
 
 
-class _CountingSession:
-    """Wraps a session and counts how often it is closed."""
+class _CountingBody(Body):
+    """A response body that counts how often it is closed."""
 
-    def __init__(self, inner) -> None:
-        self.inner = inner
+    def __init__(self, data: bytes) -> None:
+        super().__init__(data)
         self.closes = 0
 
-    def __enter__(self):
-        self.inner.__enter__()
-        return self
-
-    def __exit__(self, *exc):
+    def close(self) -> None:
+        super().close()
         self.closes += 1
-        return self.inner.__exit__(*exc)
 
-    async def __aenter__(self):
-        await self.inner.__aenter__()
-        return self
-
-    async def __aexit__(self, *exc):
+    async def aclose(self) -> None:
+        await super().aclose()
         self.closes += 1
-        return await self.inner.__aexit__(*exc)
-
-    def stream(self, *args, **kwargs):
-        return self.inner.stream(*args, **kwargs)
 
 
 def _serve_counted(monkeypatch, events=TEXT_EVENTS, *, done=True):
-    """Serve ``events``; returns the response body and the sessions the client opens (counting their closes)."""
-    _, body = _serve(monkeypatch, events, done=done)
-    sessions: list[_CountingSession] = []
-    sync_factory, async_factory = client_mod._http_client, client_mod.httpx.AsyncClient
-
-    def _sync(timeout):
-        sessions.append(_CountingSession(sync_factory(timeout)))
-        return sessions[-1]
-
-    def _async(timeout):
-        sessions.append(_CountingSession(async_factory(timeout)))
-        return sessions[-1]
-
-    monkeypatch.setattr(client_mod, "_http_client", _sync)
-    monkeypatch.setattr(client_mod.httpx, "AsyncClient", _async)
-    return body, sessions
+    """Serve ``events``; returns the response body (counting its closes) and the recorder (with the pooled clients)."""
+    body = _CountingBody(sse_body(events, done=done))
+    http = install(monkeypatch, lambda request: sse_response(None, body=body))
+    return body, http
 
 
-def _released(body, sessions) -> bool:
-    """The response body and the one session are closed, the session exactly once."""
-    (session,) = sessions
-    return body.closed and session.inner.is_closed and session.closes == 1
+def _released(body, http) -> bool:
+    """The response is closed exactly once, and the one pooled HTTP client stays open for the client's next request."""
+    (pool,) = http.clients
+    return body.closes == 1 and not pool.is_closed
 
 
 async def _loop_turns():
@@ -472,18 +449,18 @@ async def _loop_turns():
 
 
 def test_a_dropped_unconsumed_stream_releases_its_connection(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
     stream = _stream()
     assert not body.closed
 
     del stream
     gc.collect()
 
-    assert _released(body, sessions)
+    assert _released(body, http)
 
 
 def test_a_stream_dropped_after_breaking_out_of_a_loop_releases_its_connection(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
     stream = _stream()
     for _ in stream:
         break
@@ -492,7 +469,7 @@ def test_a_stream_dropped_after_breaking_out_of_a_loop_releases_its_connection(m
     del stream
     gc.collect()
 
-    assert _released(body, sessions)
+    assert _released(body, http)
 
 
 def _break_inside_with(stream):
@@ -507,34 +484,34 @@ def _break_inside_with(stream):
     ids=["exhausted", "get_final_completion", "close", "break-inside-with"],
 )
 def test_normal_paths_close_exactly_once(monkeypatch, finish):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
     stream = _stream()
 
     finish(stream)
 
-    assert _released(body, sessions)
+    assert _released(body, http)
     stream.close()
     del stream
     gc.collect()
-    assert sessions[0].closes == 1
+    assert body.closes == 1
 
 
 def test_a_failed_stream_closes_exactly_once(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch, [chunk({"content": "x"})], done=False)
+    body, http = _serve_counted(monkeypatch, [chunk({"content": "x"})], done=False)
     stream = _stream()
 
     with pytest.raises(IncompleteStreamError):
         stream.get_final_completion()
 
-    assert _released(body, sessions)
+    assert _released(body, http)
     del stream
     gc.collect()
-    assert sessions[0].closes == 1
+    assert body.closes == 1
 
 
 @pytest.mark.parametrize("iterated", [False, True], ids=["unconsumed", "break-without-async-with"])
 def test_an_async_stream_dropped_while_its_loop_runs_is_closed_there(monkeypatch, iterated):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
 
     async def _run():
         stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
@@ -545,34 +522,34 @@ def test_an_async_stream_dropped_while_its_loop_runs_is_closed_there(monkeypatch
         del stream
         gc.collect()
         await _loop_turns()
-        return _released(body, sessions)
+        return _released(body, http)
 
     assert asyncio.run(_run())
-    assert sessions[0].closes == 1
+    assert body.closes == 1
 
 
 def test_async_early_break_inside_async_with_releases_at_once(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
 
     async def _run():
         async with await AsyncClient().chat.completions.create(messages=[USER], stream=True) as stream:
             async for _ in stream:
                 break
-        return _released(body, sessions)
+        return _released(body, http)
 
     assert asyncio.run(_run())
 
 
 @pytest.mark.parametrize("iterated", [False, True])
 def test_async_close_releases_at_once_and_exactly_once(monkeypatch, iterated):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
 
     async def _run():
         stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
         if iterated:
             await stream.__anext__()
         await stream.close()
-        released = _released(body, sessions)
+        released = _released(body, http)
         await stream.close()
         del stream
         gc.collect()
@@ -580,36 +557,37 @@ def test_async_close_releases_at_once_and_exactly_once(monkeypatch, iterated):
         return released
 
     assert asyncio.run(_run())
-    assert sessions[0].closes == 1
+    assert body.closes == 1
 
 
 def test_async_normal_paths_close_exactly_once(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
 
     async def _run():
         stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
         await stream.get_final_completion()
-        released = _released(body, sessions)
+        released = _released(body, http)
         del stream
         gc.collect()
         await _loop_turns()
         return released
 
     assert asyncio.run(_run())
-    assert sessions[0].closes == 1
+    assert body.closes == 1
 
 
 def test_a_failed_scheduled_close_is_not_reported_as_unretrieved(monkeypatch):
-    _, sessions = _serve_counted(monkeypatch)
-    reported = []
+    body, _ = _serve_counted(monkeypatch)
+    reported, attempts = [], []
 
-    async def _failing_aexit(*exc):
+    async def _failing_aclose():
+        attempts.append(1)
         raise httpx.ConnectError("gone")
 
     async def _run():
         asyncio.get_running_loop().set_exception_handler(lambda loop, context: reported.append(context))
         stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
-        monkeypatch.setattr(sessions[0].inner, "__aexit__", _failing_aexit, raising=False)
+        monkeypatch.setattr(body, "aclose", _failing_aclose)
         del stream
         gc.collect()
         await _loop_turns()
@@ -617,12 +595,12 @@ def test_a_failed_scheduled_close_is_not_reported_as_unretrieved(monkeypatch):
 
     asyncio.run(_run())
 
-    assert sessions[0].closes == 1
+    assert attempts == [1]
     assert reported == []
 
 
 def test_an_async_stream_dropped_between_runs_of_its_loop_is_closed_on_the_next_run(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
     loop = asyncio.new_event_loop()
     try:
         stream = loop.run_until_complete(AsyncClient().chat.completions.create(messages=[USER], stream=True))
@@ -635,41 +613,43 @@ def test_an_async_stream_dropped_between_runs_of_its_loop_is_closed_on_the_next_
 
         loop.run_until_complete(_loop_turns())
 
-        assert _released(body, sessions)
+        assert _released(body, http)
     finally:
         loop.close()
 
 
 def test_an_async_stream_collected_after_its_loop_closed_warns(monkeypatch):
-    _, sessions = _serve_counted(monkeypatch)
+    body, http = _serve_counted(monkeypatch)
 
     async def _open():
         return await AsyncClient().chat.completions.create(messages=[USER], stream=True)
 
     stream = asyncio.run(_open())
+    closes = body.closes  # asyncio.run's shutdown of async generators may close it (httpx's stream() is one)
     with pytest.warns(ResourceWarning, match="garbage collected unclosed with no open event loop"):
         del stream
         gc.collect()
 
-    assert sessions[0].closes == 0  # an async session closes only on its (now stopped) loop
+    assert body.closes == closes  # the finalizer closes nothing: an async response closes only on its (stopped) loop
+    assert not http.clients[0].is_closed  # and a stream never closes the client's pool
 
 
 LEGACY_TASK = {"content": [{"type": "text", "role": "user", "content": "hi"}]}
 
 
-def test_a_legacy_stream_dropped_mid_iteration_releases_its_session(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch)
+def test_a_legacy_stream_dropped_mid_iteration_releases_its_connection(monkeypatch):
+    body, http = _serve_counted(monkeypatch)
     events = Client().stream(LEGACY_TASK)
     next(events)
     assert not body.closed
 
     del events  # the generator is closed as soon as nothing references it
 
-    assert _released(body, sessions)
+    assert _released(body, http)
 
 
-def test_an_async_legacy_stream_dropped_mid_iteration_releases_its_session(monkeypatch):
-    body, sessions = _serve_counted(monkeypatch)
+def test_an_async_legacy_stream_dropped_mid_iteration_releases_its_connection(monkeypatch):
+    body, http = _serve_counted(monkeypatch)
 
     async def _run():
         events = AsyncClient().stream(LEGACY_TASK)
@@ -677,7 +657,7 @@ def test_an_async_legacy_stream_dropped_mid_iteration_releases_its_session(monke
         assert not body.closed
         del events  # asyncio closes a dropped async generator on its loop
         await _loop_turns()
-        return _released(body, sessions)
+        return _released(body, http)
 
     assert asyncio.run(_run())
 

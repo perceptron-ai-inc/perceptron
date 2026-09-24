@@ -3,8 +3,9 @@
 - :func:`http_error_from_response` maps a non-2xx response to a typed :class:`~perceptron.errors.SDKError`.
 - :func:`iter_sse_data` / :func:`aiter_sse_data` yield SSE ``data:`` payloads, with ``[DONE]`` surfaced as :data:`DONE`.
 - :func:`request` / :func:`request_json` / :func:`open_stream` / :func:`stream_request` (and ``a``-prefixed async twins)
-  send one request through the client's session factories (``client._sync_session`` / ``client._async_session``) with
-  auth, error mapping, and transport exceptions converted to ``TimeoutError`` / ``TransportError``.
+  send one request through the client's pooled HTTP client (``client._session()``) with auth, the request's timeout,
+  error mapping, and transport exceptions converted to ``TimeoutError`` / ``TransportError``. A streamed response is
+  closed on its own; the pool stays open.
 - :func:`iter_response_lines` / :func:`iter_response_bytes` (and async twins) read an open response body with the same
   conversion for failures mid-body.
 
@@ -406,7 +407,7 @@ def aiter_response_bytes(resp: Any, chunk_size: int | None = None) -> AsyncItera
 
 
 # ---------------------------------------------------------------------------
-# Requests through the client's session factories
+# Requests through the client's pooled HTTP client
 # ---------------------------------------------------------------------------
 
 
@@ -461,7 +462,9 @@ def resource_path(collection: str, resource_id: Any, param: str, suffix: str = "
 
 def _prepare(
     client: Any, path: str, *, has_json: bool, timeout: float | None, provider_cfg: dict[str, Any] | None
-) -> tuple[str, dict[str, str], float]:
+) -> tuple[str, dict[str, str], float | None]:
+    """The URL, headers and timeout of one request: ``timeout`` when given (a per-call timeout, or multilook's floor),
+    else the configured one. It is passed on the request, so it also applies to an ``http_client`` you supplied."""
     cfg = provider_cfg if provider_cfg is not None else surface_provider_cfg(client)
     base_url = cfg.get("base_url")
     if not base_url:
@@ -537,15 +540,15 @@ def request(  # noqa: PLR0913 - keyword-only request options
     """Send one request and return the (read) response; non-2xx raise the mapped error.
 
     ``path`` is appended to the provider's base URL (``provider_cfg`` defaults to :func:`surface_provider_cfg`). Calls
-    the session's verb method, e.g. ``session.post(url, headers=..., json=...)``.
+    the pooled client's verb method, e.g. ``session.post(url, headers=..., timeout=..., json=...)``.
     """
     url, headers, effective_timeout = _prepare(
         client, path, has_json=json is not None, timeout=timeout, provider_cfg=provider_cfg
     )
     kwargs = _send_kwargs(json=json, params=params, files=files, data=data, is_async=False)
+    session = client._session()
     try:
-        with client._sync_session(effective_timeout) as session:
-            resp = getattr(session, method.lower())(url, headers=headers, **kwargs)
+        resp = getattr(session, method.lower())(url, headers=headers, timeout=effective_timeout, **kwargs)
     except httpx.TimeoutException as exc:
         raise TimeoutError("request timed out") from exc
     except httpx.HTTPError as exc:
@@ -572,17 +575,20 @@ def open_stream(  # noqa: PLR0913 - keyword-only request options
 ) -> tuple[Any, ExitStack]:
     """Open a streaming request and check its status (reading the body of an error first).
 
-    Returns ``(response, closer)``; the caller owns ``closer`` (an ``ExitStack`` holding the session and response).
+    Returns ``(response, closer)``; the caller owns ``closer``, an ``ExitStack`` holding only the response: closing it
+    hands the connection back to the client's pool, which stays open.
     """
     url, headers, effective_timeout = _prepare(
         client, path, has_json=json is not None, timeout=timeout, provider_cfg=provider_cfg
     )
     kwargs = _send_kwargs(json=json, params=params, files=None, data=None, is_async=False)
+    session = client._session()
     closer = ExitStack()
     try:
         try:
-            session = closer.enter_context(client._sync_session(effective_timeout))
-            resp = closer.enter_context(session.stream(method, url, headers=headers, **kwargs))
+            resp = closer.enter_context(
+                session.stream(method, url, headers=headers, timeout=effective_timeout, **kwargs)
+            )
         except httpx.TimeoutException as exc:
             raise TimeoutError("request timed out") from exc
         except httpx.HTTPError as exc:
@@ -626,9 +632,9 @@ async def arequest(  # noqa: PLR0913 - keyword-only request options
     )
     kwargs = _send_kwargs(json=json, params=params, files=files, data=data, is_async=True)
     errors = _async_httpx()
+    session = client._session()
     try:
-        async with client._async_session(effective_timeout) as session:
-            resp = await getattr(session, method.lower())(url, headers=headers, **kwargs)
+        resp = await getattr(session, method.lower())(url, headers=headers, timeout=effective_timeout, **kwargs)
     except errors.TimeoutException as exc:
         raise TimeoutError("request timed out") from exc
     except errors.HTTPError as exc:
@@ -653,17 +659,19 @@ async def aopen_stream(  # noqa: PLR0913 - keyword-only request options
     timeout: float | None = None,
     provider_cfg: dict[str, Any] | None = None,
 ) -> tuple[Any, AsyncExitStack]:
-    """Async :func:`open_stream`; the closer is an ``AsyncExitStack``."""
+    """Async :func:`open_stream`; the closer is an ``AsyncExitStack`` holding only the response."""
     url, headers, effective_timeout = _prepare(
         client, path, has_json=json is not None, timeout=timeout, provider_cfg=provider_cfg
     )
     kwargs = _send_kwargs(json=json, params=params, files=None, data=None, is_async=True)
     errors = _async_httpx()
+    session = client._session()
     closer = AsyncExitStack()
     try:
         try:
-            session = await closer.enter_async_context(client._async_session(effective_timeout))
-            resp = await closer.enter_async_context(session.stream(method, url, headers=headers, **kwargs))
+            resp = await closer.enter_async_context(
+                session.stream(method, url, headers=headers, timeout=effective_timeout, **kwargs)
+            )
         except errors.TimeoutException as exc:
             raise TimeoutError("request timed out") from exc
         except errors.HTTPError as exc:

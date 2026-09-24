@@ -765,8 +765,21 @@ def _with_issues(event: Any, issues: list[dict]) -> Any:
     return {**event, "result": {**result, "errors": [*issues, *(result.get("errors") or [])]}}
 
 
-def _stream_with_issues(events: Any, issues: list[dict]) -> Iterator[Any]:
-    """The stream's events, with the compile ``issues`` added to the ``final`` result (see :func:`_with_issues`)."""
+def _close_client(client: Any) -> None:
+    close = getattr(client, "close", None)  # compat: test stand-ins for `Client` have no close()
+    if close is not None:
+        close()
+
+
+async def _aclose_client(client: Any) -> None:
+    aclose = getattr(client, "aclose", None)  # compat: test stand-ins for `AsyncClient` have no aclose()
+    if aclose is not None:
+        await aclose()
+
+
+def _stream_with_issues(events: Any, issues: list[dict], client: Client) -> Iterator[Any]:
+    """The stream's events, with the compile ``issues`` added to the ``final`` result (see :func:`_with_issues`).
+    Closes the stream, then ``client`` (the one it came from), when it ends or is closed."""
     try:
         for event in events:
             yield _with_issues(event, issues)
@@ -774,6 +787,7 @@ def _stream_with_issues(events: Any, issues: list[dict]) -> Iterator[Any]:
         close = getattr(events, "close", None)
         if close is not None:
             close()
+        _close_client(client)
 
 
 def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:
@@ -1027,6 +1041,7 @@ def _execute_sync_task(
 
     task = _prepare_task_with_hints(task, expects, client_kwargs)
 
+    # A client for this call only, closed when it returns (or, for a stream, when the stream ends or is closed).
     client = Client()
     if stream:
         return _stream_with_issues(
@@ -1036,6 +1051,7 @@ def _execute_sync_task(
                 **client_kwargs,
             ),
             issues,
+            client,
         )
 
     try:
@@ -1046,6 +1062,8 @@ def _execute_sync_task(
         if not callable(gen) or _takes_self(gen):
             raise
         resp = gen(task, **client_kwargs)
+    finally:
+        _close_client(client)
     return _perceive_result_from_response(resp, issues)
 
 
@@ -1078,10 +1096,12 @@ def perceive(
     """Decorator (or direct helper) for building Tasks from DSL nodes.
 
     When called without nodes it returns a decorator; when passed nodes directly
-    it immediately compiles and executes them with the default Client. Without an
-    API key for the provider (provider ``fal`` never uses ``PERCEPTRON_API_KEY``)
-    it raises ``AuthError`` (code ``credentials_missing``) before anything is
-    sent; use ``inspect_task`` to compile without executing.
+    it immediately compiles and executes them. Each call runs on a new
+    :class:`~perceptron.Client`, closed when the call returns (with
+    ``stream=True``, when the stream ends or is closed). Without an API key for
+    the provider (provider ``fal`` never uses ``PERCEPTRON_API_KEY``) it raises
+    ``AuthError`` (code ``credentials_missing``) before anything is sent; use
+    ``inspect_task`` to compile without executing.
 
     Args:
         response_format: Optional constraint for output format. Use
@@ -1188,7 +1208,8 @@ def async_perceive(
     stream_options: dict[str, Any] | None = None,
     **kwargs: Any,
 ):
-    """Async counterpart to ``perceive`` using :class:`AsyncClient` (same parameters).
+    """Async counterpart to ``perceive`` (same parameters): each call runs on a new :class:`AsyncClient`, closed when
+    the call returns (with ``stream=True``, when the stream ends or is closed).
 
     Args:
         response_format: Optional constraint for output format. Use
@@ -1236,7 +1257,7 @@ def async_perceive(
                         options=options,
                     )
                     task_with_hint = _prepare_task_with_hints(task, expects, client_kwargs)
-                    client = AsyncClient()
+                    client = AsyncClient()  # for this stream only, closed when it ends or is closed
                     events = client.stream(
                         task_with_hint,
                         parse_points=parse_points,
@@ -1249,6 +1270,7 @@ def async_perceive(
                         aclose = getattr(events, "aclose", None)
                         if aclose is not None:
                             await aclose()
+                        await _aclose_client(client)
 
                 return _generator()
 
@@ -1270,8 +1292,11 @@ def async_perceive(
             )
             task = _prepare_task_with_hints(task, expects, client_kwargs)
 
-            client = AsyncClient()
-            resp = await client.generate(task, **client_kwargs)
+            client = AsyncClient()  # for this call only
+            try:
+                resp = await client.generate(task, **client_kwargs)
+            finally:
+                await _aclose_client(client)
             return _perceive_result_from_response(resp, issues)
 
         _call.__perceptron_inspector__ = _inspect_async  # type: ignore[attr-defined]

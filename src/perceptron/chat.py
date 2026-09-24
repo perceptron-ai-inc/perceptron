@@ -695,13 +695,14 @@ class ChatCompletionStream(_StreamBase):
 
     ``.completion`` holds the :class:`ChatCompletion` once the stream is exhausted; ``get_final_completion()`` consumes
     the rest and returns it. Error events, malformed chunks and a missing ``[DONE]`` raise mapped errors carrying
-    ``.partial``. The stream owns its connection and closes it when exhausted, on error, on ``close()``, on exit, or
-    when it is garbage collected unfinished (never iterated, or left mid-way).
+    ``.partial``. The stream owns its response (not the client's connection pool) and closes it, handing the connection
+    back to the pool, when exhausted, on error, on ``close()``, on exit, or when it is garbage collected unfinished
+    (never iterated, or left mid-way).
     """
 
     def __init__(self, response: Any, closer: Any, *, request_id: str | None = None, asset_count: int | None = None):
         super().__init__(response, closer, request_id=request_id, asset_count=asset_count)
-        # Holds the closer, not the stream, so a dropped stream can still be collected (and then closed).
+        # Holds the closer (the response only), not the stream, so a dropped stream can still be collected and closed.
         self._finalizer = weakref.finalize(self, closer.close)
         self._iterator = self._iterate()
 
@@ -720,7 +721,7 @@ class ChatCompletionStream(_StreamBase):
             self._release()
 
     def _release(self) -> None:
-        self._finalizer()  # closes the connection the first time; later calls, and garbage collection, do nothing
+        self._finalizer()  # closes the response the first time; later calls, and garbage collection, do nothing
 
     def __iter__(self) -> ChatCompletionStream:
         return self
@@ -735,7 +736,7 @@ class ChatCompletionStream(_StreamBase):
         self.close()
 
     def close(self) -> None:
-        """Stop reading and release the connection."""
+        """Stop reading and release the connection (the client stays open)."""
         self._iterator.close()
         self._release()
 
@@ -761,7 +762,7 @@ class AsyncChatCompletionStream(_StreamBase):
             loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()  # the loop the connection belongs to
         except RuntimeError:
             loop = None
-        # Holds the closer and the loop, not the stream, so a dropped stream can still be collected.
+        # Holds the closer (the response only) and the loop, not the stream, so a dropped stream can still be collected.
         self._finalizer = weakref.finalize(self, _close_dropped_async_stream, loop, closer)
         self._iterator = self._aiterate()
 
@@ -796,7 +797,7 @@ class AsyncChatCompletionStream(_StreamBase):
         await self.close()
 
     async def close(self) -> None:
-        """Stop reading and release the connection."""
+        """Stop reading and release the connection (the client stays open)."""
         await self._iterator.aclose()
         await self._release()
 
@@ -814,10 +815,11 @@ _PENDING_CLOSES: set[asyncio.Task] = set()
 def _close_dropped_async_stream(loop: asyncio.AbstractEventLoop | None, closer: Any) -> None:
     """Finalizer of an :class:`AsyncChatCompletionStream` collected unclosed; it must not reference the stream.
 
-    It cannot await, so it schedules the close on the stream's loop, which runs it at once or on its next run (as
-    asyncio does for dropped async generators, whether or not the loop is running). Once that loop is closed nothing
-    can be closed synchronously (httpx closes async clients and responses only on their loop; asyncio closes the
-    sockets when their transports are collected), so it warns, like asyncio does for unclosed transports.
+    It cannot await, so it schedules closing the response (never the client's pool) on the stream's loop, which runs
+    it at once or on its next run (as asyncio does for dropped async generators, whether or not the loop is running).
+    Once that loop is closed nothing can be closed synchronously (httpx closes async responses only on their loop;
+    asyncio closes the sockets when their transports are collected), so it warns, like asyncio does for unclosed
+    transports.
     """
     if loop is not None and not loop.is_closed():
         with suppress(RuntimeError):  # the loop closed meanwhile

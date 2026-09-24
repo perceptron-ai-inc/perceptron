@@ -4,7 +4,6 @@ timeout floor, per-prompt asset counts, the provider rule, and async parity."""
 import asyncio
 import json
 import warnings
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,7 +11,6 @@ from _http_mock import completion, install, json_response
 from _image_fixtures import PNG_BYTES
 
 from perceptron import AsyncClient, Client, image, settings, text
-from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.chat import ChatCompletionMessage, FunctionCall, ToolCall, Usage
 from perceptron.dsl.nodes import box, point, polygon
@@ -127,31 +125,6 @@ def _multilook(**kwargs):
     kwargs.setdefault("context", CONTEXT)
     kwargs.setdefault("prompts", ["Did a person enter the frame?"])
     return Client().chat.completions.multilook(**kwargs)
-
-
-def _record_timeouts(monkeypatch) -> list:
-    """Wrap both session factories (after `install`) to record the timeout each session gets."""
-    seen: list = []
-    sync_factory = client_mod._http_client
-    async_httpx = client_mod.httpx
-
-    def _sync(timeout):
-        seen.append(timeout)
-        return sync_factory(timeout)
-
-    def _async(timeout):
-        seen.append(timeout)
-        return async_httpx.AsyncClient(timeout=timeout)
-
-    monkeypatch.setattr(client_mod, "_http_client", _sync)
-    monkeypatch.setattr(
-        client_mod,
-        "httpx",
-        SimpleNamespace(
-            AsyncClient=_async, TimeoutException=async_httpx.TimeoutException, HTTPError=async_httpx.HTTPError
-        ),
-    )
-    return seen
 
 
 # ---------------------------------------------------------------------------
@@ -493,9 +466,7 @@ def test_a_response_without_results_is_a_server_error(monkeypatch, payload):
 # ---------------------------------------------------------------------------
 
 
-def test_timeout_defaults_to_at_least_305_seconds(http, monkeypatch):
-    seen = _record_timeouts(monkeypatch)
-
+def test_timeout_defaults_to_at_least_305_seconds(http):
     _multilook()
     with cfg(timeout=400.0):
         _multilook()
@@ -503,7 +474,8 @@ def test_timeout_defaults_to_at_least_305_seconds(http, monkeypatch):
     Client(timeout=500.0).chat.completions.multilook(context=[], prompts=["q"])
     Client().chat.completions.create(messages=[{"role": "user", "content": "hi"}])  # chat keeps the plain default
 
-    assert seen == [305.0, 400.0, 10.0, 500.0, settings().timeout]
+    # Each request carries its timeout (httpx's per-request timeout) through the client's pooled HTTP client.
+    assert http.timeouts == [305.0, 400.0, 10.0, 500.0, settings().timeout]
 
 
 def test_each_completion_counts_the_context_and_its_prompts_assets(http):
@@ -727,9 +699,7 @@ def test_base_url_configured_for_perceptron_is_honored(http):
 # ---------------------------------------------------------------------------
 
 
-def test_async_parity(http, monkeypatch):
-    seen = _record_timeouts(monkeypatch)
-
+def test_async_parity(http):
     async def _run():
         return await AsyncClient().chat.completions.multilook(
             context=CONTEXT, prompts=["a", [image(PNG_BYTES), "b"]], n=2, temperature=0.3, reasoning_effort="high"
@@ -744,7 +714,7 @@ def test_async_parity(http, monkeypatch):
     assert response.request_id == "trace-ml"
     assert [len(r.completions) for r in response.results] == [2, 2]
     assert [r.completions[0].asset_count for r in response.results] == [1, 2]
-    assert seen == [305.0]
+    assert http.timeouts == [305.0]
 
 
 def test_async_validation_and_errors(monkeypatch):

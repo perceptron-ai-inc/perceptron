@@ -16,13 +16,19 @@ Additional transports can be registered by extending `_PROVIDER_CONFIG`.
 - final: the result, with the `generate()` keys (`raw` is None); the last event of a finished stream
 - error: a terminal error (HTTP error, error event, cut or malformed stream, or malformed markup with `strict=True`)
   with its `details` and what arrived before it (`partial`); no `final` follows
+
+Connections: each `Client` sends every request (all surfaces) through one pooled `httpx.Client` (HTTP/2), created on
+first use, and each `AsyncClient` through one `httpx.AsyncClient`; close them with `close()` / `await aclose()` or a
+`with` / `async with` block. Pass `http_client=` to use your own httpx client instead; the SDK never closes it.
 """
 
 from __future__ import annotations
 
+import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass, fields
 from functools import cached_property
+from types import ModuleType
 from typing import Any, TypedDict
 
 import httpx
@@ -562,26 +568,83 @@ def _apply_reasoning_and_hints(
 _map_http_error = http_error_from_response
 
 
-def _http_client(timeout: float):
+# The real httpx client classes (tests may replace this module's `httpx` with a stub namespace).
+_HTTPX_CLIENT = httpx.Client
+_HTTPX_ASYNC_CLIENT = httpx.AsyncClient
+
+
+def _http_client(timeout: float | None) -> httpx.Client:
+    """The pooled HTTP client a :class:`Client` creates on first use; looked up at call time so tests can patch it."""
     return httpx.Client(timeout=timeout, http2=True)
 
 
+def _async_http_client(timeout: float | None) -> httpx.AsyncClient:
+    """The pooled HTTP client an :class:`AsyncClient` creates on first use; looked up at call time so tests can patch
+    it."""
+    if not isinstance(httpx, ModuleType):  # compat: a test stub namespace in place of httpx (it takes no `http2`)
+        return httpx.AsyncClient(timeout=timeout)
+    return httpx.AsyncClient(timeout=timeout, http2=True)
+
+
+class _StubSession:
+    """Compat for hand-rolled test stand-ins for an httpx client, until the tests all use ``httpx.MockTransport``.
+
+    The stand-ins take no per-request ``timeout`` and have no ``close``/``aclose``; everything else passes through.
+    """
+
+    def __init__(self, stub: Any) -> None:
+        self._stub = stub
+
+    def __getattr__(self, name: str) -> Any:
+        method = getattr(self._stub, name)
+
+        def call(*args: Any, timeout: Any = None, **kwargs: Any) -> Any:
+            return method(*args, **kwargs)
+
+        return call
+
+    def close(self) -> None:
+        pass
+
+    async def aclose(self) -> None:
+        pass
+
+
 class _ClientCore:
-    def __init__(self, **overrides: Any) -> None:
+    _HTTP_CLIENT_TYPE: type = _HTTPX_CLIENT  # what `http_client=` must be
+
+    def __init__(self, *, http_client: Any = None, **overrides: Any) -> None:
         known = {f.name for f in fields(Settings)}
         for k in overrides:
             if k not in known:
                 raise TypeError(f"{type(self).__name__}() got an unexpected keyword argument {k!r}")
+        if http_client is not None and not isinstance(http_client, self._HTTP_CLIENT_TYPE):
+            raise TypeError(
+                f"http_client must be an httpx.{self._HTTP_CLIENT_TYPE.__name__}; got {type(http_client).__name__}"
+            )
         # The keyword arguments count as configured settings, so the provider rule sees a key passed here.
         self._settings = _settings_with(overrides)
+        self._http: Any = http_client  # the pooled HTTP client; created on first use unless one was passed
+        self._owns_http = http_client is None  # only an HTTP client created here is closed by close()/aclose()
+        self._closed = False
+        self._lock = threading.Lock()
 
-    def _sync_session(self, timeout: float):
-        """A new sync HTTP session; `_http_client` is looked up at call time so tests can patch it."""
-        return _http_client(timeout)
+    def _session(self) -> Any:
+        """The HTTP client every request goes through: ``http_client``, else one created on first use (by the
+        subclass's ``_new_session``) and reused until the client is closed."""
+        with self._lock:
+            if self._closed:
+                raise RuntimeError(f"This {type(self).__name__} is closed; create a new one to send requests.")
+            if self._http is None:
+                self._http = self._new_session(self._settings.timeout)
+            return self._http
 
-    def _async_session(self, timeout: float):
-        """A new async HTTP session; this module's `httpx` is looked up at call time so tests can patch it."""
-        return httpx.AsyncClient(timeout=timeout)
+    def _detach_session(self) -> Any:
+        """Mark the client closed; returns the HTTP client to close (None when there is none or it was passed in)."""
+        with self._lock:
+            self._closed = True
+            session, self._http = self._http, None
+        return session if self._owns_http else None
 
     def _prepare_invocation(
         self,
@@ -785,7 +848,30 @@ class Client(_ClientCore):
     like ``client.chat.completions.create``; ``extra_body`` is merged into the body last, unvalidated. Malformed markup
     in the answer is an ``errors`` entry; ``strict=True`` raises ``ParseError`` instead (streams end with an ``error``
     event). Unknown keyword arguments raise ``TypeError``; the retired ``focus`` and ``visual_reasoning`` say so.
+
+    Every request goes through one pooled HTTP client (``httpx.Client`` with HTTP/2), created on first use and reused
+    by ``generate``/``stream``, ``chat``, ``files``, ``models`` and multilook. Close it with :meth:`close` or a ``with
+    Client() as client:`` block; a closed client cannot send requests. ``http_client=`` supplies your own
+    ``httpx.Client`` (proxies, custom transports, limits): the client uses it as is and never closes it, and each
+    request still carries the SDK's timeout (``timeout``, or a per-call one).
     """
+
+    def _new_session(self, timeout: float | None) -> Any:
+        session = _http_client(timeout)
+        return session if isinstance(session, _HTTPX_CLIENT) else _StubSession(session)  # compat: test stand-ins
+
+    def close(self) -> None:
+        """Close the HTTP client this client created (an ``http_client`` you passed stays open); streams still
+        reading from it then end with an error. Safe to call more than once."""
+        session = self._detach_session()
+        if session is not None:
+            session.close()
+
+    def __enter__(self) -> Client:
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
 
     @cached_property
     def chat(self) -> Chat:
@@ -944,7 +1030,30 @@ class Client(_ClientCore):
 
 
 class AsyncClient(_ClientCore):
-    """Asynchronous variant using httpx.AsyncClient (same parameters as :class:`Client`)."""
+    """Asynchronous variant of :class:`Client` (same parameters) over one pooled ``httpx.AsyncClient`` (HTTP/2).
+
+    Close it with ``await client.aclose()`` or an ``async with AsyncClient() as client:`` block; use it on one event
+    loop. ``http_client=`` takes your own ``httpx.AsyncClient``, which the SDK never closes.
+    """
+
+    _HTTP_CLIENT_TYPE = _HTTPX_ASYNC_CLIENT
+
+    def _new_session(self, timeout: float | None) -> Any:
+        session = _async_http_client(timeout)
+        return session if isinstance(session, _HTTPX_ASYNC_CLIENT) else _StubSession(session)  # compat: test stand-ins
+
+    async def aclose(self) -> None:
+        """Close the HTTP client this client created (an ``http_client`` you passed stays open); streams still
+        reading from it then end with an error. Safe to call more than once."""
+        session = self._detach_session()
+        if session is not None:
+            await session.aclose()
+
+    async def __aenter__(self) -> AsyncClient:
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        await self.aclose()
 
     @cached_property
     def chat(self) -> AsyncChat:
