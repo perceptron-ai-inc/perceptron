@@ -355,15 +355,29 @@ def test_streamed_final_result_carries_the_compile_issues(monkeypatch):
         assert stream_events[-1]["result"]["errors"] == result.errors
 
 
-def test_a_key_without_a_provider_says_how_to_select_one(monkeypatch):
+def test_a_key_set_in_code_without_a_provider_uses_the_perceptron_api(monkeypatch):
     monkeypatch.delenv("PERCEPTRON_API_KEY")
     http = install(monkeypatch, lambda request: json_response(completion()))
 
-    with config(api_key="k", model="perceptron-mk1.5"), pytest.raises(AuthError) as excinfo:
+    with config(api_key="k"):
+        perceive(text("hi"))
+
+    assert str(http.last.url) == "https://api.perceptron.inc/v1/chat/completions"
+    assert http.last.headers["authorization"] == "Bearer k"
+    assert http.last_body["model"] == "perceptron-mk1.5"
+
+
+def test_no_key_raises_credentials_missing_before_any_request(monkeypatch):
+    monkeypatch.delenv("PERCEPTRON_API_KEY")
+    http = install(monkeypatch, lambda request: json_response(completion()))
+
+    with pytest.raises(AuthError) as excinfo:
         perceive(text("hi"))
 
     assert excinfo.value.code == "credentials_missing"
-    assert 'configure(provider="perceptron")' in str(excinfo.value)
+    assert "No API key for provider 'perceptron'. Set PERCEPTRON_API_KEY or configure(api_key=...)." in str(
+        excinfo.value
+    )
     assert http.requests == []
 
 

@@ -13,17 +13,20 @@ class Settings:
     Providers: ``"perceptron"`` (the Perceptron API, ``https://api.perceptron.inc/v1``; default model
     ``perceptron-mk1.5``) and ``"fal"`` (``isaac-0.1`` only). The registry is ``perceptron._providers._PROVIDER_CONFIG``.
 
-    When no provider is configured (``configure``/``config``/``PERCEPTRON_PROVIDER``) and ``FAL_KEY`` or
-    ``PERCEPTRON_API_KEY`` is set, ``settings()`` reports provider ``"fal"``: the helpers, ``perceive`` and
-    ``Client.generate``/``stream`` then call fal. Select the Perceptron API with ``configure(provider="perceptron")``
-    or ``PERCEPTRON_PROVIDER=perceptron``. The message API (``client.chat.completions``), ``client.files``,
-    ``client.models`` and multilook ignore that auto-detect: they use the provider you chose, else ``"perceptron"``.
-    A configured ``base_url`` (``PERCEPTRON_BASE_URL``) replaces the provider's base URL on every surface.
+    One rule picks the provider for every surface (the helpers, ``perceive``, ``Client``, the message API, files,
+    models, multilook and the CLI): the provider you chose (``Client(provider=...)``, ``configure``/``config``,
+    ``PERCEPTRON_PROVIDER``, a per-call ``provider=`` or ``--provider``); otherwise ``"fal"`` only when ``FAL_KEY`` is
+    set and ``PERCEPTRON_API_KEY`` is not; otherwise ``"perceptron"`` (see :func:`_default_provider`).
+
+    ``api_key`` is the key you set in code, else ``PERCEPTRON_API_KEY``. Provider ``"fal"`` authenticates with a key
+    set in code or ``FAL_KEY``, never with one read from ``PERCEPTRON_API_KEY``. Files, models and multilook exist only
+    on provider ``"perceptron"``. A configured ``base_url`` (``PERCEPTRON_BASE_URL``) replaces the provider's base URL
+    on every surface.
     """
 
     base_url: str | None = None  # every surface uses it when set; for provider "perceptron" include the /v1 prefix
     api_key: str | None = None
-    provider: str | None = None  # "perceptron" or "fal"; None = auto-detect (see above)
+    provider: str | None = None  # "perceptron" or "fal"; None = the default rule (see above)
     model: str | None = None  # None = the provider's default model
 
     timeout: float = 60.0  # seconds per request (multilook waits at least 305 s)
@@ -48,6 +51,11 @@ class Settings:
     resize_max_side: int | None = None
     auto_coerce_paths: bool = False
 
+    # Not a dataclass field: the environment variable `settings()` read `api_key` from, or None when it was set in
+    # code. A provider only receives such a key when it reads that variable too, so PERCEPTRON_API_KEY never reaches
+    # fal (see `_providers.provider_api_key`).
+    _api_key_env = None
+
 
 _global_settings = Settings()
 _stack: list[tuple[Settings, set[str]]] = []
@@ -55,26 +63,25 @@ _defaults = Settings()  # Track default values
 _explicit_fields: set[str] = set()  # Track which fields have been explicitly configured
 
 
+def _default_provider() -> str:
+    """The provider when none was chosen: ``"fal"`` only when ``FAL_KEY`` is set and ``PERCEPTRON_API_KEY`` is not."""
+    if os.getenv("FAL_KEY") and not os.getenv("PERCEPTRON_API_KEY"):
+        return "fal"
+    return "perceptron"
+
+
 def _from_env(s: Settings) -> Settings:
     # Only read from environment for fields that haven't been explicitly configured
     base_url = s.base_url if "base_url" in _explicit_fields else os.getenv("PERCEPTRON_BASE_URL", s.base_url)
-    api_key = s.api_key if "api_key" in _explicit_fields else os.getenv("PERCEPTRON_API_KEY", s.api_key)
+    env_api_key = None if "api_key" in _explicit_fields else os.getenv("PERCEPTRON_API_KEY")
+    api_key = s.api_key if env_api_key is None else env_api_key
     provider = s.provider if "provider" in _explicit_fields else os.getenv("PERCEPTRON_PROVIDER", s.provider)
     model = s.model if "model" in _explicit_fields else os.getenv("PERCEPTRON_MODEL", s.model)
 
-    # Legacy auto-detect, kept for compatibility: with no provider configured, any key selects fal (whose env keys
-    # include PERCEPTRON_API_KEY). Only the legacy surfaces read it; see `_providers.surface_provider_cfg`.
-    if (
-        provider is None
-        and "provider" not in _explicit_fields
-        and (os.getenv("FAL_KEY") or os.getenv("PERCEPTRON_API_KEY"))
-    ):
-        provider = "fal"
-
-    return Settings(
+    merged = Settings(
         base_url=base_url,
         api_key=api_key,
-        provider=provider,
+        provider=provider or _default_provider(),
         model=model,
         timeout=s.timeout,
         retries=s.retries,
@@ -91,13 +98,16 @@ def _from_env(s: Settings) -> Settings:
         resize_max_side=s.resize_max_side,
         auto_coerce_paths=s.auto_coerce_paths,
     )
+    if env_api_key is not None:
+        merged._api_key_env = "PERCEPTRON_API_KEY"
+    return merged
 
 
 def configure(**kwargs: Any) -> None:
     """Configure global SDK defaults. A configured field wins over its environment variable.
 
     Example:
-        configure(provider="perceptron", api_key="sk_live_...", model="perceptron-mk1.5", timeout=60)
+        configure(api_key="sk_live_...", model="perceptron-mk1.5", timeout=60)
     """
     global _global_settings, _explicit_fields
     for k, v in kwargs.items():

@@ -226,10 +226,9 @@ class FakePerceptronAPI:
 
 @pytest.fixture
 def fake_api(monkeypatch):
-    for key in ("FAL_KEY", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+    for key in ("FAL_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
         monkeypatch.delenv(key, raising=False)
-    # What the README's Configuration section exports.
-    monkeypatch.setenv("PERCEPTRON_PROVIDER", "perceptron")
+    # What the README's Configuration section exports: the key alone selects the Perceptron API.
     monkeypatch.setenv("PERCEPTRON_API_KEY", "sk_live_test")
     api = FakePerceptronAPI()
     install(monkeypatch, api)
@@ -310,31 +309,34 @@ def test_cli_example_runs(fake_api, tmp_path, monkeypatch, line_no, line):
 # The README's provider claims, checked directly.
 
 
-def test_api_key_only_env_sends_helpers_to_fal_and_new_surfaces_to_perceptron(monkeypatch):
+def test_fal_key_only_env_selects_fal_and_perceptron_api_key_wins(monkeypatch):
     from perceptron import Client, image, question
     from perceptron.errors import BadRequestError
 
-    for key in ("FAL_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+    for key in ("PERCEPTRON_API_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk_live_test")
-    seen: list[str] = []
+    monkeypatch.setenv("FAL_KEY", "fal-key")
+    seen: list[tuple[str, str]] = []
 
     def handler(request):
-        seen.append(f"{request.url.host}{request.url.path}")
+        seen.append((f"{request.url.host}{request.url.path}", request.headers["authorization"]))
         return json_response(completion("ok"))
 
     install(monkeypatch, handler)
     assert settings().provider == "fal"
     question(image(PNG_BYTES), "What is shown?")
+    Client().chat.completions.create(messages=[{"role": "user", "content": "Hi"}])
     with pytest.raises(BadRequestError, match='configure\\(provider="perceptron"\\)'):
         question(image(PNG_BYTES), "What is shown?", model="perceptron-mk1.5")
-    Client().chat.completions.create(messages=[{"role": "user", "content": "Hi"}])
-    with config(provider="perceptron"):
-        question(image(PNG_BYTES), "What is shown?")
+    with pytest.raises(BadRequestError) as excinfo:
+        Client().models.list()
+    assert excinfo.value.code == "unsupported_provider_feature"
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk_live_test")  # both keys: the Perceptron API
+    question(image(PNG_BYTES), "What is shown?")
     assert seen == [
-        "fal.run/perceptron/isaac-01/openai/v1/chat/completions",
-        "api.perceptron.inc/v1/chat/completions",
-        "api.perceptron.inc/v1/chat/completions",
+        ("fal.run/perceptron/isaac-01/openai/v1/chat/completions", "Key fal-key"),
+        ("fal.run/perceptron/isaac-01/openai/v1/chat/completions", "Key fal-key"),
+        ("api.perceptron.inc/v1/chat/completions", "Bearer sk_live_test"),
     ]
 
 

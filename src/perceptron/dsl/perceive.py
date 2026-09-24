@@ -19,7 +19,6 @@ from __future__ import annotations
 import base64
 import inspect
 import numbers
-import os
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -38,6 +37,7 @@ except Exception:  # pragma: no cover
     np = None  # type: ignore
 
 from .._lowering import MEDIA_PART_TYPES, entry_to_part
+from .._providers import _provider_key, _resolve_provider, missing_api_key_message, provider_api_key
 from ..chat import _COMPLETE_FINISH_REASONS, ChatCompletionMessage, ToolCall
 from ..client import (
     _PROVIDER_CONFIG,
@@ -53,6 +53,7 @@ from ..errors import (
     ANCHOR_MISSING,
     ANCHOR_UNKNOWN,
     BOUNDS_OUT_OF_RANGE,
+    CREDENTIALS_MISSING,
     INVALID_MEDIA_PATH,
     INVALID_PARAMETER,
     INVALID_POLYGON,
@@ -720,8 +721,7 @@ def _prepare_client_kwargs(
     options: dict[str, Any],
 ):
     env = settings()
-    resolved_provider = provider_override or env.provider
-    provider_name = _provider_key(resolved_provider)
+    provider_name = _provider_key(provider_override or env.provider)
     reasoning_enabled = reasoning if reasoning is not None else _expects_reasoning(expects)
     client_kwargs: dict[str, Any] = {
         "expects": expects,
@@ -732,30 +732,23 @@ def _prepare_client_kwargs(
     if model_override is not None:
         client_kwargs["model"] = model_override
     client_kwargs.update(options)
-    return env, resolved_provider, provider_name, client_kwargs
-
-
-def _provider_key(provider: str | None) -> str:
-    """The registry key of a provider name (case-insensitive, like the client's); no provider means ``fal``."""
-    provider = provider or "fal"
-    return provider.lower() if isinstance(provider, str) else provider
+    return env, provider_name, client_kwargs
 
 
 def _require_credentials(
     *,
     stream: bool,
-    resolved_provider: str | None,
     provider_name: str,
     env,
     issues: list[dict],
     task: dict,
 ) -> None:
-    """Raise ``AuthError`` (code ``credentials_missing``) when no provider is configured or it has no credentials."""
-    if resolved_provider is not None and _has_credentials(provider_name, env):
+    """Raise ``AuthError`` (code ``credentials_missing``) when the provider has no API key (fal never uses
+    ``PERCEPTRON_API_KEY``); an unknown provider raises ``BadRequestError``, as the client would."""
+    provider_cfg = _resolve_provider(provider_name)
+    if provider_api_key(env, provider_cfg):
         return
-    # A configured key with no provider: say how to pick one rather than ask for the key.
-    no_provider = resolved_provider is None and env.api_key
-    issue = _provider_issue() if no_provider else _credentials_issue(provider_name)
+    issue = {"code": CREDENTIALS_MISSING, "message": missing_api_key_message(provider_cfg)}
     raise AuthError(
         issue["message"],
         code=issue["code"],
@@ -846,7 +839,7 @@ def _prepare_execution_context(
     reasoning: bool | None,
     options: dict[str, Any],
 ):
-    env, resolved_provider, provider_name, client_kwargs = _prepare_client_kwargs(
+    env, provider_name, client_kwargs = _prepare_client_kwargs(
         provider_override=provider_override,
         model_override=model_override,
         expects=expects,
@@ -890,7 +883,6 @@ def _prepare_execution_context(
 
     _require_credentials(
         stream=stream,
-        resolved_provider=resolved_provider,
         provider_name=provider_name,
         env=env,
         issues=issues,
@@ -1086,10 +1078,10 @@ def perceive(
     """Decorator (or direct helper) for building Tasks from DSL nodes.
 
     When called without nodes it returns a decorator; when passed nodes directly
-    it immediately compiles and executes them with the default Client. With no
-    provider configured, or no credentials for it, it raises ``AuthError`` (code
-    ``credentials_missing``) before anything is sent; use ``inspect_task`` to
-    compile without executing.
+    it immediately compiles and executes them with the default Client. Without an
+    API key for the provider (provider ``fal`` never uses ``PERCEPTRON_API_KEY``)
+    it raises ``AuthError`` (code ``credentials_missing``) before anything is
+    sent; use ``inspect_task`` to compile without executing.
 
     Args:
         response_format: Optional constraint for output format. Use
@@ -1300,27 +1292,3 @@ def inspect_task(callable_obj: Callable[..., Any], *args: Any, **kwargs: Any):
 
 
 __all__ = ["PerceiveResult", "async_perceive", "inspect_task", "perceive"]
-
-
-def _credentials_issue(provider_name: str) -> dict[str, str]:
-    if provider_name == "fal":
-        message = "No credentials found for provider 'fal'. Set and validate api_key (e.g., PERCEPTRON_API_KEY or FAL_KEY) before running."
-    else:
-        message = f"No credentials found for provider '{provider_name}'. Set and validate api_key before running."
-    return {"code": "credentials_missing", "message": message}
-
-
-def _provider_issue() -> dict[str, str]:
-    message = (
-        "No provider is configured (an API key is set). Select the Perceptron API with "
-        'configure(provider="perceptron") or PERCEPTRON_PROVIDER=perceptron.'
-    )
-    return {"code": "credentials_missing", "message": message}
-
-
-def _has_credentials(provider_name: str, env) -> bool:
-    if env.api_key:
-        return True
-
-    provider_cfg = _PROVIDER_CONFIG.get(_provider_key(provider_name)) or {}
-    return any(os.getenv(env_key) for env_key in provider_cfg.get("env_keys", []))

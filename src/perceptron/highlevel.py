@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ._providers import _provider_key
 from .annotations import annotate_image, canonicalize_text_collections, serialize_annotations
 from .client import _PROVIDER_CONFIG, ResponseFormat, _select_model, _unexpected_keyword
 from .config import settings
@@ -74,14 +75,12 @@ def _prompt_profile_from_kwargs(gen_kwargs: Mapping[str, Any]) -> tuple[HighLeve
     """Resolve the active prompt profile (and model) for a high-level helper call."""
 
     env = settings()
-    provider_override = gen_kwargs.get("provider")
-    provider_name = provider_override or env.provider or "fal"
-    provider_key = provider_name.lower() if isinstance(provider_name, str) else provider_name
-    provider_cfg = _PROVIDER_CONFIG.get(provider_key or "") or {}
+    provider_key = _provider_key(gen_kwargs.get("provider") or env.provider)
+    provider_cfg = _PROVIDER_CONFIG.get(provider_key) or {}
     requested_model = gen_kwargs.get("model")
     if requested_model is None:
         requested_model = env.model
-    resolved_model = _select_model(provider_cfg, requested_model, provider_name=provider_key or "fal")
+    resolved_model = _select_model(provider_cfg, requested_model, provider_name=provider_key)
     if resolved_model is None:
         resolved_model = provider_cfg.get("default_model")
     profile = resolve_prompt_profile(resolved_model)

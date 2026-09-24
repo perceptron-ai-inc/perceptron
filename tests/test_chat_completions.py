@@ -76,7 +76,7 @@ def _create(**kwargs):
 
 
 def test_api_key_only_env_hits_the_perceptron_api(http):
-    assert settings().provider == "fal"  # the legacy auto-detect is unchanged
+    assert settings().provider == "perceptron"
 
     _create()
 
@@ -91,11 +91,12 @@ def test_minimal_body_sends_only_what_was_set(http):
     assert http.last_body == {"model": "perceptron-mk1.5", "messages": [USER]}
 
 
-def test_explicit_fal_provider_is_honored(http):
+def test_explicit_fal_provider_is_honored(http, monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "fal-key")
     Client(provider="fal").chat.completions.create(messages=[USER])
 
     assert str(http.last.url) == "https://fal.run/perceptron/isaac-01/openai/v1/chat/completions"
-    assert http.last.headers["authorization"] == "Key sk-test"
+    assert http.last.headers["authorization"] == "Key fal-key"  # never the PERCEPTRON_API_KEY
     assert http.last_body["model"] == "isaac-0.1"
 
 

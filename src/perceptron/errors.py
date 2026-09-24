@@ -137,6 +137,7 @@ REASONING_DISABLED_FOR_THINKING_MODEL = "reasoning_disabled_for_thinking_model"
 INVALID_REASONING_EFFORT = "invalid_reasoning_effort"
 
 # Raised client-side, before any request (the gateway's code where it has one).
+CREDENTIALS_MISSING = "credentials_missing"  # AuthError: no API key for the selected provider
 MODEL_RENAMED = "model_renamed"
 UNSUPPORTED_PROVIDER_FEATURE = "unsupported_provider_feature"
 UNSUPPORTED_PARAMETER = "unsupported_parameter"

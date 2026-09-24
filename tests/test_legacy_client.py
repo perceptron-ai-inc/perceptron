@@ -159,7 +159,7 @@ def test_stream_caller_stream_options_win_and_fal_gets_none(monkeypatch):
     assert http.last_body["stream_options"] == {"include_usage": False}
 
     http, _ = _sse(monkeypatch, [chunk({}, finish_reason="stop")])
-    list(Client(provider="fal").stream(TASK))
+    list(Client(provider="fal", api_key="fal-key").stream(TASK))
     assert "stream_options" not in http.last_body
 
 

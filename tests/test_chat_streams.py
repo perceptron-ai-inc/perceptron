@@ -96,7 +96,9 @@ def test_caller_stream_options_win(monkeypatch):
 
 def test_no_default_stream_options_on_fal(monkeypatch):
     recorder, _ = _serve(monkeypatch, [chunk({}, finish_reason="stop")])
-    Client(provider="fal").chat.completions.create(messages=[USER], stream=True).get_final_completion()
+    Client(provider="fal", api_key="fal-key").chat.completions.create(
+        messages=[USER], stream=True
+    ).get_final_completion()
     assert "stream_options" not in recorder.last_body
 
 

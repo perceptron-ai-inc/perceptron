@@ -462,7 +462,7 @@ def test_parsing_is_lenient():
 
 def test_api_key_only_env_uses_the_perceptron_api(monkeypatch):
     http = install(monkeypatch, lambda request: json_response(FILE))
-    assert settings().provider == "fal"  # the legacy auto-detect is unchanged
+    assert settings().provider == "perceptron"
 
     Client().files.upload(PNG_BYTES)
 
@@ -470,7 +470,7 @@ def test_api_key_only_env_uses_the_perceptron_api(monkeypatch):
     assert http.last.headers["authorization"] == "Bearer sk-test"
 
 
-def test_explicit_non_perceptron_provider_is_rejected(monkeypatch):
+def test_fal_chosen_or_auto_selected_is_rejected(monkeypatch):
     http = install(monkeypatch, lambda request: json_response(FILE))
 
     def _clients():
@@ -479,6 +479,10 @@ def test_explicit_non_perceptron_provider_is_rejected(monkeypatch):
             yield Client()
         monkeypatch.setenv("PERCEPTRON_PROVIDER", "fal")
         yield Client()
+        monkeypatch.delenv("PERCEPTRON_PROVIDER")
+        monkeypatch.delenv("PERCEPTRON_API_KEY")
+        monkeypatch.setenv("FAL_KEY", "fal-key")
+        yield Client()  # only FAL_KEY is set: fal is auto-selected
 
     for client in _clients():
         with pytest.raises(BadRequestError) as excinfo:

@@ -1,6 +1,5 @@
 """A configured base URL (`Client(base_url=...)`, `configure`/`config`, `PERCEPTRON_BASE_URL`) is used by the message
-API, files, models and multilook, like `Client.generate`: the request and the API key go where the caller pointed them,
-also when only `PERCEPTRON_API_KEY` is set (the legacy fal auto-detect)."""
+API, files, models and multilook, like `Client.generate`: the request and the API key go where the caller pointed them."""
 
 import asyncio
 import json
@@ -118,7 +117,7 @@ def test_sync_surfaces_use_the_configured_base_url(monkeypatch, source, call, pa
     http = install(monkeypatch, _handler)
 
     with _configured(monkeypatch, source) as overrides:
-        assert settings().provider == "fal"  # only PERCEPTRON_API_KEY is set: the legacy auto-detect is in effect
+        assert settings().provider == "perceptron"  # only PERCEPTRON_API_KEY is set
         call(Client(**overrides))
 
     assert str(http.last.url).split("?")[0] == BASE + path
@@ -156,12 +155,13 @@ def test_async_without_a_base_url_the_perceptron_api_is_used(monkeypatch, call, 
 
 
 def test_explicit_fal_uses_the_base_url_with_fals_path_and_auth(monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "fal-key")
     http = install(monkeypatch, _handler)
 
     Client(provider="fal", base_url=BASE).chat.completions.create(messages=[USER])
 
     assert str(http.last.url) == BASE + "/perceptron/isaac-01/openai/v1/chat/completions"
-    assert http.last.headers["authorization"] == "Key sk-test"
+    assert http.last.headers["authorization"] == "Key fal-key"  # FAL_KEY; PERCEPTRON_API_KEY never goes to fal
     assert json.loads(http.last.content)["model"] == "isaac-0.1"
 
 
@@ -169,7 +169,7 @@ def test_one_client_talks_to_one_host(monkeypatch):
     http = install(monkeypatch, _handler)
     client = Client(base_url=BASE)
 
-    client.generate({"content": [{"type": "text", "role": "user", "content": "Hi"}]})  # legacy: fal, auto-detected
+    client.generate({"content": [{"type": "text", "role": "user", "content": "Hi"}]})
     client.chat.completions.create(messages=[USER])
     client.files.retrieve(FILE_ID)
 
@@ -196,8 +196,7 @@ def test_uploaded_frames_use_the_configured_base_url(monkeypatch, source):
         created = json.loads(http.last.content)["messages"][0]["content"][0]
         client.chat.completions.multilook(context=[{"role": "user", "content": [_frames()]}], prompts=["q"])
         multilook = json.loads(http.last.content)["context"][0]["content"][0]
-        with cfg(provider="perceptron"):
-            Client(**overrides).generate({"content": [_frames_entry()]})
+        Client(**overrides).generate({"content": [_frames_entry()]})
         generated = json.loads(http.last.content)["messages"][0]["content"][0]
 
     for part in (created, multilook, generated):

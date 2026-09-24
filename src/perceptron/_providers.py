@@ -1,21 +1,19 @@
-"""Provider and model registry, and how each surface picks its provider and model.
+"""Provider and model registry, and how each surface picks its provider, model and API key.
 
-The legacy surfaces (``perceive``, the helpers, ``Client.generate/stream``) use ``settings().provider``, which keeps the
-fal auto-detect of ``config._from_env``. The message API, files, models and multilook use :func:`surface_provider_cfg`:
-the provider the caller chose explicitly, otherwise ``perceptron``. A configured ``base_url`` applies to every surface.
+Every surface resolves the provider with one rule (``config._from_env``, :func:`_provider_key`): the provider the caller
+chose (``Client(provider=...)``, ``configure``/``config``, ``PERCEPTRON_PROVIDER``, a per-call ``provider=``, the CLI's
+``--provider``), otherwise ``fal`` only when ``FAL_KEY`` is set and ``PERCEPTRON_API_KEY`` is not, otherwise
+``perceptron``. :func:`provider_api_key` never gives fal a key read from ``PERCEPTRON_API_KEY``. Files, models and
+multilook exist only on ``perceptron`` (:func:`surface_provider_cfg`). A configured ``base_url`` applies to every surface.
 """
 
 from __future__ import annotations
 
-import importlib
 import os
 from typing import Any
 
+from .config import _default_provider
 from .errors import INVALID_REASONING_EFFORT, MODEL_RENAMED, UNSUPPORTED_PROVIDER_FEATURE, BadRequestError
-
-# The config module itself: `perceptron.config` is shadowed by the `config()` function on the package, and its
-# `_explicit_fields` / `_global_settings` are rebound by `config()`, so read them through the module at call time.
-_config = importlib.import_module(".config", __package__)
 
 PERCEPTRON_PROVIDER = "perceptron"
 
@@ -42,7 +40,7 @@ _PROVIDER_CONFIG = {
         "path": "/perceptron/isaac-01/openai/v1/chat/completions",
         "auth_header": "Authorization",
         "auth_prefix": "Key ",
-        "env_keys": ["FAL_KEY", "PERCEPTRON_API_KEY"],
+        "env_keys": ["FAL_KEY"],
         "default_model": "isaac-0.1",
         "supported_models": ["isaac-0.1"],
         "models": {
@@ -102,8 +100,11 @@ def _select_model(
         message = f"Model '{model}' is not supported for provider='{provider_label}'. Allowed: {', '.join(supported)}"
         if model in _PROVIDER_CONFIG[PERCEPTRON_PROVIDER]["supported_models"]:
             message += (
-                f". '{model}' is served by the Perceptron API: select provider 'perceptron' with {_SELECT_PERCEPTRON}."
+                f". '{model}' is served by the Perceptron API: select provider 'perceptron' with {_SELECT_PERCEPTRON}"
             )
+            if provider_label == "fal":
+                message += " (fal is used when you choose it, or when FAL_KEY is set and PERCEPTRON_API_KEY is not)"
+            message += "."
         raise BadRequestError(message)
     return model
 
@@ -122,44 +123,68 @@ def _pop_and_resolve_model(provider_cfg: dict[str, Any], gen_kwargs: dict[str, A
     )
 
 
+def _provider_key(provider: str | None) -> str:
+    """The registry key of ``provider`` (case-insensitive).
+
+    No provider means the default rule, ``config._default_provider``: ``fal`` only when ``FAL_KEY`` is set and
+    ``PERCEPTRON_API_KEY`` is not, otherwise ``perceptron``.
+    """
+    provider = provider or _default_provider()
+    return provider.lower() if isinstance(provider, str) else provider
+
+
 def _resolve_provider(provider: str | None) -> dict:
-    provider = provider or "fal"
-    provider_lc = provider.lower() if isinstance(provider, str) else provider
+    provider_lc = _provider_key(provider)
     if provider_lc not in _PROVIDER_CONFIG:
         raise BadRequestError(f"Unsupported provider: {provider}")
     return {"name": provider_lc, **_PROVIDER_CONFIG[provider_lc]}
 
 
-def explicit_provider(override: str | None = None) -> str | None:
-    """The provider the caller chose, ignoring the legacy fal auto-detect.
+def provider_api_key(settings: Any, provider_cfg: dict[str, Any]) -> str | None:
+    """The API key to send to the provider: ``settings.api_key``, else the provider's ``env_keys``.
 
-    Order: a ``Client(provider=...)`` override, ``configure(provider=...)`` / ``config(provider=...)``, then the
-    ``PERCEPTRON_PROVIDER`` environment variable. None when nothing chose one.
+    A key ``settings()`` read from an environment variable only counts when the provider reads that variable too, so a
+    ``PERCEPTRON_API_KEY`` is never sent to fal (whose only env key is ``FAL_KEY``); a key set in code
+    (``configure(api_key=...)``, ``Client(api_key=...)``) goes to whichever provider is in use.
     """
-    if override:
-        return override
-    if "provider" in _config._explicit_fields:
-        return _config._global_settings.provider or None
-    return os.getenv("PERCEPTRON_PROVIDER") or None
+    env_keys = provider_cfg.get("env_keys", [])
+    source = getattr(settings, "_api_key_env", None)
+    token = settings.api_key if source is None or source in env_keys else None
+    for env in env_keys:
+        token = token or os.getenv(env)
+    return token
+
+
+def missing_api_key_message(provider_cfg: dict[str, Any]) -> str:
+    """Why no key was found for the provider, and how to set one."""
+    name = provider_cfg.get("name")
+    env_keys = provider_cfg.get("env_keys", [])
+    sources = [*env_keys, "configure(api_key=...)"]
+    message = f"No API key for provider '{name}'. Set {' or '.join(sources)}."
+    if "PERCEPTRON_API_KEY" not in env_keys and os.getenv("PERCEPTRON_API_KEY"):
+        message += (
+            f" PERCEPTRON_API_KEY is only sent to the Perceptron API, never to provider '{name}'; to use it, "
+            f"select provider 'perceptron' with {_SELECT_PERCEPTRON}."
+        )
+    return message
 
 
 def surface_provider_cfg(client: Any, *, feature: str | None = None) -> dict[str, Any]:
     """Provider config for the message API, files, models and multilook.
 
-    Uses the explicit provider chosen when the client was built (like its settings), otherwise ``perceptron``. A
-    configured ``settings.base_url`` (``Client(base_url=...)``, ``configure``/``config``, ``PERCEPTRON_BASE_URL``)
-    replaces the provider's base URL, as it does for ``Client.generate``: requests and the API key go where the caller
-    pointed them. With ``feature`` set (e.g. ``"Files"``), a non-``perceptron`` provider raises
+    Uses the provider the client resolved when it was built (``client._settings.provider``, see
+    :func:`_provider_key`), so one client never switches provider or sends its key to another host. A configured
+    ``settings.base_url`` (``Client(base_url=...)``, ``configure``/``config``, ``PERCEPTRON_BASE_URL``) replaces the
+    provider's base URL, as it does for ``Client.generate``: requests and the API key go where the caller pointed them.
+    With ``feature`` set (e.g. ``"Files"``), a provider other than ``perceptron`` (chosen or auto-selected) raises
     ``unsupported_provider_feature``.
     """
     settings = client._settings
-    # Clients record their explicit provider when built, alongside `_settings`; other objects resolve it now.
-    explicit = client._provider_override if hasattr(client, "_provider_override") else explicit_provider()
-    cfg = _resolve_provider(explicit or PERCEPTRON_PROVIDER)
+    cfg = _resolve_provider(settings.provider)
     if feature is not None and cfg["name"] != PERCEPTRON_PROVIDER:
         raise BadRequestError(
-            f"{feature} is only available on provider 'perceptron' (the configured provider is '{cfg['name']}'). "
-            f"Select it with {_SELECT_PERCEPTRON}.",
+            f"{feature} is only available on provider 'perceptron'; this client uses provider '{cfg['name']}'. "
+            f"Select the Perceptron API with {_SELECT_PERCEPTRON}.",
             code=UNSUPPORTED_PROVIDER_FEATURE,
         )
     if settings.base_url:

@@ -1,4 +1,4 @@
-"""Files API: ``client.files`` (provider ``perceptron`` only).
+"""Files API: ``client.files`` (provider ``perceptron`` only; on ``fal`` it raises ``unsupported_provider_feature``).
 
 Upload an image, video or audio file once and reference it by id in later requests (an ``image_file_id`` /
 ``video_file_id`` / ``audio_file_id`` content part). Files belong to the organization, never expire, and count toward

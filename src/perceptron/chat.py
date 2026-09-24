@@ -1437,9 +1437,9 @@ class ChatCompletions:
         ``extra_body`` is merged into the body last, unvalidated. Streams to provider ``perceptron`` request usage
         (``stream_options={"include_usage": True}``) unless you pass ``stream_options``.
 
-        Uses the provider you chose explicitly (``Client(provider=...)``, ``configure(provider=...)``,
-        ``PERCEPTRON_PROVIDER``), otherwise ``perceptron``. Invalid values raise ``BadRequestError`` before any
-        request; unknown or unsupported OpenAI parameters raise ``TypeError``.
+        Uses the client's provider (``Client(provider=...)``, ``configure(provider=...)``, ``PERCEPTRON_PROVIDER``;
+        otherwise ``perceptron``, or ``fal`` when only ``FAL_KEY`` is set). Invalid values raise ``BadRequestError``
+        before any request; unknown or unsupported OpenAI parameters raise ``TypeError``.
 
         Returns a :class:`ChatCompletion`, or with ``stream=True`` a :class:`ChatCompletionStream` (the request is
         sent before it returns, so HTTP errors raise here).

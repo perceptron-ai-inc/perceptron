@@ -225,7 +225,7 @@ def test_reasoning_stripped_for_isaac_model(monkeypatch):
             raise AssertionError
 
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
+    monkeypatch.setenv("FAL_KEY", "test-key")
 
     @perceive(reasoning=True, model="isaac-0.1")
     def make_request():

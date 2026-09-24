@@ -177,8 +177,10 @@ def test_file_ids_reach_the_request(monkeypatch):
 
 @pytest.mark.parametrize("kind", ["image", "video", "audio"])
 def test_file_ids_on_another_provider_raise_before_any_request(monkeypatch, kind):
-    # Uploaded files live on the Perceptron API; the fal auto-detect (only PERCEPTRON_API_KEY set) must not send them
-    # to fal, just as file-id frames are refused.
+    # Uploaded files live on the Perceptron API; provider fal, chosen or auto-selected (only FAL_KEY set), must not
+    # receive them, just as file-id frames are refused.
+    monkeypatch.delenv("PERCEPTRON_API_KEY")
+    monkeypatch.setenv("FAL_KEY", "fal-key")
     http = install(monkeypatch, lambda request: json_response(completion()))
     node = FACTORIES[kind](file_id=FILE_ID)
     calls = [

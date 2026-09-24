@@ -1,7 +1,5 @@
 """Model registry and provider resolution (`perceptron._providers`)."""
 
-from types import SimpleNamespace
-
 import pytest
 
 from perceptron import _providers, perceive, settings, text
@@ -76,6 +74,7 @@ def test_fal_rejects_perceptron_models_with_an_actionable_message():
     assert "not supported for provider='fal'" in message
     assert 'configure(provider="perceptron")' in message
     assert "PERCEPTRON_PROVIDER=perceptron" in message
+    assert "when FAL_KEY is set and PERCEPTRON_API_KEY is not" in message  # why fal is in use
 
 
 def test_fal_rejects_other_ids_without_the_perceptron_hint():
@@ -85,9 +84,44 @@ def test_fal_rejects_other_ids_without_the_perceptron_hint():
     assert "PERCEPTRON_PROVIDER" not in str(excinfo.value)
 
 
-def test_legacy_fal_auto_detect_is_unchanged(monkeypatch):
+@pytest.mark.parametrize(
+    ("env", "provider"),
+    [
+        ({}, "perceptron"),
+        ({"PERCEPTRON_API_KEY": "sk-test"}, "perceptron"),
+        ({"FAL_KEY": "fal-key"}, "fal"),
+        ({"PERCEPTRON_API_KEY": "sk-test", "FAL_KEY": "fal-key"}, "perceptron"),
+        ({"PERCEPTRON_API_KEY": "sk-test", "PERCEPTRON_PROVIDER": "fal"}, "fal"),
+        ({"FAL_KEY": "fal-key", "PERCEPTRON_PROVIDER": "perceptron"}, "perceptron"),
+    ],
+    ids=["no-keys", "api-key-only", "fal-key-only", "both-keys", "env-provider-fal", "env-provider-perceptron"],
+)
+def test_default_provider_rule(monkeypatch, env, provider):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert settings().provider == provider
+    assert client_mod.Client()._settings.provider == provider
+    assert _providers.surface_provider_cfg(client_mod.Client())["name"] == provider
+
+
+def test_no_provider_resolves_by_the_rule(monkeypatch):
+    assert _providers._resolve_provider(None)["name"] == "perceptron"
+    monkeypatch.setenv("FAL_KEY", "fal-key")
+    assert _providers._resolve_provider(None)["name"] == "fal"
     monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
-    assert settings().provider == "fal"
+    assert _providers._resolve_provider(None)["name"] == "perceptron"
+
+
+def test_configured_provider_wins_over_the_rule(monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "fal-key")
+    with cfg(provider="perceptron"):
+        assert settings().provider == "perceptron"
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
+    with cfg(provider="fal"):
+        assert settings().provider == "fal"
+    monkeypatch.setenv("PERCEPTRON_PROVIDER", "perceptron")
+    with cfg(provider="fal"):
+        assert settings().provider == "fal"  # configure() wins over PERCEPTRON_PROVIDER
 
 
 def test_legacy_perceptron_default_model_is_mk15(monkeypatch):
@@ -120,37 +154,24 @@ def test_legacy_perceptron_default_model_is_mk15(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Explicit provider for the new surfaces
+# One provider per client, on every surface
 # ---------------------------------------------------------------------------
 
 
-def test_surface_provider_defaults_to_perceptron_despite_fal_auto_detect(monkeypatch):
-    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
-    monkeypatch.setenv("FAL_KEY", "fal-key")
-    client = client_mod.Client()
-
-    assert client._settings.provider == "fal"  # the legacy surfaces keep the auto-detect
-    assert _providers.explicit_provider() is None
-    resolved = _providers.surface_provider_cfg(client)
-    assert resolved["name"] == "perceptron"
-    assert resolved["base_url"] == "https://api.perceptron.inc/v1"
-
-
-def test_client_override_is_explicit():
+def test_client_override_wins():
     client = client_mod.Client(provider="fal")
-    assert client._provider_override == "fal"
+    assert client._settings.provider == "fal"
     assert _providers.surface_provider_cfg(client)["name"] == "fal"
 
 
-def test_configure_is_explicit():
+def test_configure_is_used_by_every_surface():
     with cfg(provider="fal"):
         client = client_mod.Client()
-        assert _providers.explicit_provider() == "fal"
         assert _providers.surface_provider_cfg(client)["name"] == "fal"
-    assert _providers.explicit_provider() is None
+    assert _providers.surface_provider_cfg(client_mod.Client())["name"] == "perceptron"
 
 
-def test_client_keeps_the_explicit_provider_it_was_built_with(monkeypatch):
+def test_client_keeps_the_provider_it_was_built_with(monkeypatch):
     with cfg(provider="fal"):
         built_inside = client_mod.Client()
     built_outside = client_mod.Client()
@@ -159,39 +180,38 @@ def test_client_keeps_the_explicit_provider_it_was_built_with(monkeypatch):
     with cfg(provider="fal"):
         assert _providers.surface_provider_cfg(built_outside)["name"] == "perceptron"
     monkeypatch.setenv("PERCEPTRON_PROVIDER", "fal")
+    monkeypatch.setenv("FAL_KEY", "fal-key")
     assert _providers.surface_provider_cfg(built_outside)["name"] == "perceptron"
     with cfg(provider="perceptron"):
         assert _providers.surface_provider_cfg(built_inside)["name"] == "fal"
 
 
-def test_objects_without_a_recorded_provider_resolve_it_at_call_time(monkeypatch):
-    client = SimpleNamespace(_settings=settings())
-    assert _providers.surface_provider_cfg(client)["name"] == "perceptron"
-    monkeypatch.setenv("PERCEPTRON_PROVIDER", "fal")
-    assert _providers.surface_provider_cfg(client)["name"] == "fal"
-
-
-def test_env_provider_is_explicit(monkeypatch):
+def test_env_provider_is_used(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_PROVIDER", "fal")
     assert _providers.surface_provider_cfg(client_mod.Client())["name"] == "fal"
 
 
-def test_feature_on_non_perceptron_provider_is_rejected():
+def test_feature_on_non_perceptron_provider_is_rejected(monkeypatch):
     with pytest.raises(BadRequestError) as excinfo:
         _providers.surface_provider_cfg(client_mod.Client(provider="fal"), feature="Files")
 
     assert excinfo.value.code == UNSUPPORTED_PROVIDER_FEATURE
     assert 'configure(provider="perceptron")' in str(excinfo.value)
+    assert "PERCEPTRON_PROVIDER=perceptron" in str(excinfo.value)
     assert _providers.surface_provider_cfg(client_mod.Client(), feature="Files")["name"] == "perceptron"
+
+    monkeypatch.setenv("FAL_KEY", "fal-key")  # fal auto-selected
+    with pytest.raises(BadRequestError) as excinfo:
+        _providers.surface_provider_cfg(client_mod.Client(), feature="Files")
+    assert excinfo.value.code == UNSUPPORTED_PROVIDER_FEATURE
 
 
 def test_a_configured_base_url_always_applies(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
     assert _providers.surface_provider_cfg(client_mod.Client())["base_url"] == "https://api.perceptron.inc/v1"
 
-    # Even with the legacy fal auto-detect in effect: the request and its key go where the caller pointed them.
+    # The request and its key go where the caller pointed them.
     monkeypatch.setenv("PERCEPTRON_BASE_URL", "https://proxy.example/v1")
-    assert client_mod.Client()._settings.provider == "fal"
     resolved = _providers.surface_provider_cfg(client_mod.Client())
     assert (resolved["name"], resolved["base_url"]) == ("perceptron", "https://proxy.example/v1")
 

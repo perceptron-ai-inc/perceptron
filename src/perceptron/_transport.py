@@ -18,7 +18,6 @@ import codecs
 import importlib
 import json as _json
 import math
-import os
 import re
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Iterator
 from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager, suppress
@@ -28,8 +27,9 @@ from urllib.parse import quote
 
 import httpx
 
-from ._providers import surface_provider_cfg
+from ._providers import missing_api_key_message, provider_api_key, surface_provider_cfg
 from .errors import (
+    CREDENTIALS_MISSING,
     INSUFFICIENT_QUOTA,
     INVALID_PARAMETER,
     INVALID_RESPONSE,
@@ -419,7 +419,8 @@ _API_KEY_CHARS = re.compile(r"[\x21-\x7e]+")  # visible ASCII
 
 
 def auth_headers(settings: Any, provider_cfg: dict[str, Any]) -> dict[str, str]:
-    """The provider's auth header, from ``settings.api_key`` or the provider's env keys (``AuthError`` when missing).
+    """The provider's auth header, with the key from :func:`~perceptron._providers.provider_api_key` (``AuthError``
+    when there is none; fal never gets a ``PERCEPTRON_API_KEY``).
 
     Surrounding whitespace (a key read from a file often ends with a newline) is stripped; a key with other whitespace,
     control or non-ASCII characters raises ``AuthError`` without echoing the key.
@@ -427,13 +428,11 @@ def auth_headers(settings: Any, provider_cfg: dict[str, Any]) -> dict[str, str]:
     headers: dict[str, str] = {}
     auth_header = provider_cfg.get("auth_header")
     if auth_header:
-        token = settings.api_key
-        for env in provider_cfg.get("env_keys", []):
-            token = token or os.getenv(env)
+        token = provider_api_key(settings, provider_cfg)
         if isinstance(token, str):
             token = token.strip()
         if not token:
-            raise AuthError(f"API key required for provider='{provider_cfg.get('name')}'")
+            raise AuthError(missing_api_key_message(provider_cfg), code=CREDENTIALS_MISSING)
         if not isinstance(token, str) or not _API_KEY_CHARS.fullmatch(token):
             raise AuthError("API key contains whitespace, control or non-ASCII characters", code="invalid_api_key")
         headers[auth_header] = f"{provider_cfg.get('auth_prefix', '')}{token}"

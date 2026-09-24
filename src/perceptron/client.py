@@ -1,8 +1,9 @@
 """HTTP client for executing compiled Tasks against supported providers.
 
 Providers
-- perceptron: the Perceptron API
-- fal: Fal-hosted endpoint (OpenAI-compatible)
+- perceptron: the Perceptron API (the default)
+- fal: Fal-hosted endpoint (OpenAI-compatible); selected when you choose it, or when `FAL_KEY` is set and
+  `PERCEPTRON_API_KEY` is not (see `perceptron.config.Settings`)
 
 Additional transports can be registered by extending `_PROVIDER_CONFIG`.
 
@@ -38,7 +39,6 @@ from ._providers import (  # noqa: F401
     _pop_and_resolve_model,
     _resolve_provider,
     _select_model,
-    explicit_provider,
 )
 from ._transport import _extract_error_metadata, _first_nonempty, http_error_from_response  # noqa: F401
 from .chat import (
@@ -573,11 +573,10 @@ class _ClientCore:
         for k in overrides:
             if k not in known:
                 raise TypeError(f"{type(self).__name__}() got an unexpected keyword argument {k!r}")
-        # The explicit provider for the message API, files, models and multilook (see `_providers.surface_provider_cfg`),
-        # recorded now like `_settings` so one client never switches provider or sends its key to another host.
-        self._provider_override = explicit_provider(overrides.get("provider"))
         for k, v in overrides.items():
             setattr(self._settings, k, v)
+        if "api_key" in overrides:
+            self._settings._api_key_env = None  # a key passed in code goes to whichever provider is in use
 
     def _sync_session(self, timeout: float):
         """A new sync HTTP session; `_http_client` is looked up at call time so tests can patch it."""
@@ -774,6 +773,11 @@ class _ClientCore:
 
 class Client(_ClientCore):
     """Runs compiled tasks (``generate``/``stream``) and hosts the message API (``chat``), ``files`` and ``models``.
+
+    Keyword arguments override the settings for this client (``Client(provider="fal", api_key=...)``). The provider is
+    resolved when the client is built, with the rule of :class:`~perceptron.config.Settings` (``perceptron`` unless you
+    choose one, or only ``FAL_KEY`` is set), and every surface uses it; ``files``, ``models`` and multilook need
+    provider ``perceptron``. ``generate``/``stream`` also take a per-call ``provider=``.
 
     ``generate``/``stream`` send only the parameters you set (or configured defaults). ``reasoning=True`` adds the
     ``<hint>THINK</hint>`` encoding and ``expects`` the ``<hint>BOX</hint>``-style one (a system message on provider

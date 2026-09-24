@@ -151,7 +151,7 @@ def test_list_is_lenient_about_the_payload(monkeypatch):
 
 def test_api_key_only_env_uses_the_perceptron_api_and_fal_is_rejected(monkeypatch):
     http = install(monkeypatch, _handler)
-    assert settings().provider == "fal"
+    assert settings().provider == "perceptron"
 
     Client().models.list()
     assert str(http.last.url) == "https://api.perceptron.inc/v1/models"

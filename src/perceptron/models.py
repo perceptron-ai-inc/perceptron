@@ -1,4 +1,4 @@
-"""Models API: ``client.models`` (provider ``perceptron`` only).
+"""Models API: ``client.models`` (provider ``perceptron`` only; on ``fal`` it raises ``unsupported_provider_feature``).
 
 The SDK never calls it on its own: the endpoint allows 30 requests per minute per organization, so fetch what you need
 once and keep it. ``extended=True`` adds capabilities, modalities, limits and pricing (:class:`ModelInfo`)::

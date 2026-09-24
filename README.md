@@ -61,7 +61,6 @@ Optional extras: `pip install "perceptron[torch]"` (tensor utilities, requires P
 ## Configuration
 
 ```bash
-export PERCEPTRON_PROVIDER=perceptron
 export PERCEPTRON_API_KEY=sk_live_...
 ```
 
@@ -70,7 +69,7 @@ or in code:
 ```python
 from perceptron import config, configure
 
-configure(provider="perceptron", api_key="sk_live_...")
+configure(api_key="sk_live_...")
 
 with config(max_tokens=512, timeout=120):
     ...  # temporary overrides inside the block
@@ -78,29 +77,29 @@ with config(max_tokens=512, timeout=120):
 
 **Providers.** `perceptron` is the Perceptron API (`https://api.perceptron.inc/v1`); its default model is `perceptron-mk1.5`. `fal` serves `isaac-0.1` only.
 
-> **Set the provider.** When no provider is configured and `PERCEPTRON_API_KEY` or `FAL_KEY` is set, the helpers (`caption`, `question`, `detect`, `ocr`, ...), `perceive`, `Client.generate`/`stream`, and the CLI select provider **`fal`** (kept for compatibility). Asking them for `perceptron-mk1.5`, or passing them an uploaded file's id (files exist only on the Perceptron API), then raises `BadRequestError`. Choose the Perceptron API with `configure(provider="perceptron")` or `PERCEPTRON_PROVIDER=perceptron`.
+> **Which provider is used.** One rule applies to every surface (the helpers, `perceive`, `Client.generate`/`stream`, the message API, Files, Models, Multilook, and the CLI): the provider you choose wins (`Client(provider=...)`, `configure(provider=...)`, `PERCEPTRON_PROVIDER`, a per-call `provider=`, or the CLI's `--provider`). Otherwise it is `fal` only when `FAL_KEY` is set and `PERCEPTRON_API_KEY` is not, and the Perceptron API in every other case.
 >
-> The message API (`client.chat.completions`), `client.files`, `client.models`, and Multilook do not auto-detect: they use the provider you chose, else the Perceptron API. A `base_url` you set (`Client(base_url=...)`, `configure(base_url=...)`, or `PERCEPTRON_BASE_URL`) applies to every surface.
+> Provider `fal` authenticates with `FAL_KEY` or a key you pass in code (`configure(api_key=...)`, `Client(api_key=...)`); a `PERCEPTRON_API_KEY` is never sent to fal. Files, Models, and Multilook exist only on the Perceptron API: on provider `fal` they raise `BadRequestError` with code `unsupported_provider_feature`. A `base_url` you set (`Client(base_url=...)`, `configure(base_url=...)`, or `PERCEPTRON_BASE_URL`) applies to every surface.
+>
+> **Upgrading from 0.3.x:** with no provider set, 0.3.x used fal and sent it `PERCEPTRON_API_KEY` (or the key from `configure(api_key=...)`). The Perceptron API is now used unless only `FAL_KEY` is set. To keep using fal, choose it (`PERCEPTRON_PROVIDER=fal` or `configure(provider="fal")`) and put its key in `FAL_KEY` or `configure(api_key=...)`.
 
 | Setting | Environment variable | Notes |
 | --- | --- | --- |
 | `provider` | `PERCEPTRON_PROVIDER` | `perceptron` or `fal` (see above) |
-| `api_key` | `PERCEPTRON_API_KEY` (`FAL_KEY` for fal) | |
+| `api_key` | `PERCEPTRON_API_KEY` (provider `fal`: `FAL_KEY`) | a key set in code is used by whichever provider is selected |
 | `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1`, `isaac-0.3-fast`, `isaac-0.2-2b-preview`, `isaac-0.2-1b`, `isaac-0.1` |
 | `base_url` | `PERCEPTRON_BASE_URL` | replaces the provider's URL on every surface; include `/v1` for provider `perceptron` |
 | `timeout` | | seconds per request, default 60 (Multilook waits at least 305) |
 | `retries` | | accepted, but the SDK does not retry requests |
 
-A value set with `configure()` or `config()` wins over its environment variable; a per-call `model=`/`provider=` wins over both. `perceptron-mk1.5-preview` was renamed to `perceptron-mk1.5` (the old id raises `BadRequestError` with code `model_renamed`).
+A value set with `configure()` or `config()` wins over its environment variable, and `Client(...)` keyword arguments win over both for that client. A per-call `model=` wins over all of them, and so does a per-call `provider=` on the helpers, `perceive`, and `Client.generate`/`stream`. `perceptron-mk1.5-preview` was renamed to `perceptron-mk1.5` (the old id raises `BadRequestError` with code `model_renamed`).
 
-Without credentials, requests raise `AuthError` before anything is sent (from the helpers and `perceive`, with code `credentials_missing`); use `inspect_task` (see [Composing tasks](#composing-tasks-with-the-dsl)) to look at a compiled prompt offline. `perceptron config` prints the `export` lines for your shell (it does not save anything).
+Without an API key for the selected provider, requests raise `AuthError` with code `credentials_missing` before anything is sent; use `inspect_task` (see [Composing tasks](#composing-tasks-with-the-dsl)) to look at a compiled prompt offline. `perceptron config` prints the `export` lines for your shell (it does not save anything).
 
 ## Quick start
 
 ```python
-from perceptron import caption, configure, detect, image
-
-configure(provider="perceptron")  # or: export PERCEPTRON_PROVIDER=perceptron
+from perceptron import caption, detect, image
 
 result = detect(image("warehouse.jpg"), classes=["forklift", "person", "pallet"])
 for box in result.boxes or []:
@@ -143,9 +142,7 @@ The keyword arguments include `model`, `provider`, `reasoning`, `reasoning_effor
 `audio()` takes WAV, MP3, or FLAC (paths and bytes are encoded into the request; HTTP(S) URLs are passed through). A video's soundtrack is ignored unless you pass `enable_audio_in_video=True`.
 
 ```python
-from perceptron import audio, configure, question, video
-
-configure(provider="perceptron", model="perceptron-mk1.5")  # needed when only an API key is set (see Configuration)
+from perceptron import audio, question, video
 
 transcript = question(audio("call.wav"), "Transcribe the audio verbatim.")
 print(transcript.text)
@@ -208,7 +205,7 @@ for event in detect(image("frame.png"), classes=["person"], stream=True):
 ```python
 from perceptron import Client, image
 
-client = Client()  # the Perceptron API unless you chose another provider
+client = Client()  # the Perceptron API (see Configuration)
 completion = client.chat.completions.create(
     model="perceptron-mk1.5",
     messages=[{"role": "user", "content": [image("warehouse.jpg"), "Count the pallets."]}],
@@ -320,7 +317,7 @@ print(result.text)
 
 ## Files, Models, and Multilook (Mk1.5)
 
-These use the Perceptron API (an explicit non-`perceptron` provider raises `BadRequestError`).
+These exist only on the Perceptron API: on provider `fal` (chosen, or selected because only `FAL_KEY` is set) they raise `BadRequestError` with code `unsupported_provider_feature`.
 
 ```python
 from perceptron import Client, image
@@ -450,7 +447,7 @@ Errors derive from `SDKError` (`.code`, `.details`, `.request_id`, `.status_code
 ## CLI
 
 ```bash
-perceptron config --provider perceptron --api-key sk_live_...   # prints export lines; nothing is saved
+perceptron config --api-key sk_live_...   # prints export lines; nothing is saved
 
 # Caption a single image or a directory (directories write captions.json)
 perceptron caption image.jpg
@@ -535,8 +532,9 @@ Prompt nodes: `text`, `system`, `agent`, `image`, `video`, `audio`, `video_frame
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| Requests go to `fal.run`, or `Model 'perceptron-mk1.5' is not supported for provider='fal'` | No provider configured, so the legacy fal auto-detect applies | `configure(provider="perceptron")` or `export PERCEPTRON_PROVIDER=perceptron`. |
-| `AuthError` (code `credentials_missing`, or `API key required for provider=...`) | No API key, or no provider | Export `PERCEPTRON_API_KEY` and `PERCEPTRON_PROVIDER`, or call `configure(provider=..., api_key=...)`. |
+| Requests go to `fal.run`, or `Model 'perceptron-mk1.5' is not supported for provider='fal'` | Provider `fal` is selected: you chose it, or `FAL_KEY` is set and `PERCEPTRON_API_KEY` is not | Export `PERCEPTRON_API_KEY`, or choose the Perceptron API with `configure(provider="perceptron")` or `export PERCEPTRON_PROVIDER=perceptron`. |
+| `AuthError` with code `credentials_missing` (`No API key for provider ...`) | No API key for the selected provider (`fal` never uses `PERCEPTRON_API_KEY`) | Export `PERCEPTRON_API_KEY` (Perceptron API) or `FAL_KEY` (fal), or call `configure(api_key=...)`. |
+| `BadRequestError` with code `unsupported_provider_feature` | Files, Models, Multilook, or an uploaded file's id on provider `fal` | `configure(provider="perceptron")` or `export PERCEPTRON_PROVIDER=perceptron`. |
 | `BadRequestError` with code `model_renamed` | `perceptron-mk1.5-preview` was renamed | Use `perceptron-mk1.5`. |
 | `TypeError` (`Unknown node type: <class 'str'>` or `... expected Image, Video, VideoFrames, or Audio, got str`) | A helper got a bare path or URL | Wrap it: `image("x.jpg")`, `video(...)`, `audio(...)`. |
 | `result.points` is `None` after `detect` | Boxes are in the `boxes` bucket | Read `result.boxes`. |

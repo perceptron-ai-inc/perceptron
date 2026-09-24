@@ -329,10 +329,18 @@ def test_question_command_box_json(monkeypatch):
 
 
 def test_config_command():
+    result = runner.invoke(app, ["config", "--provider", "perceptron", "--api-key", "abc"])
+    assert result.exit_code == 0
+    assert "PERCEPTRON_PROVIDER=perceptron" in result.stdout
+    assert "PERCEPTRON_API_KEY=abc" in result.stdout
+
+
+def test_config_command_exports_a_fal_key_as_fal_key():
     result = runner.invoke(app, ["config", "--provider", "fal", "--api-key", "abc"])
     assert result.exit_code == 0
     assert "PERCEPTRON_PROVIDER=fal" in result.stdout
-    assert "PERCEPTRON_API_KEY=abc" in result.stdout
+    assert "FAL_KEY=abc" in result.stdout
+    assert "PERCEPTRON_API_KEY" not in result.stdout  # fal never reads it
 
 
 # ---------------------------------------------------------------------------
@@ -1070,20 +1078,23 @@ def test_describe_point_covers_tracks_assets_and_times():
     assert _describe_point(bbox(1, 2, 3, 4, mention="x"))[1] == "(1,2) → (3,4)"
 
 
-def test_config_command_is_honest_about_fal_auto_detect():
+def test_config_command_states_the_provider_rule():
     result = runner.invoke(app, ["config", "--api-key", "abc", "--model", "perceptron-mk1.5"])
     assert result.exit_code == 0
     assert "PERCEPTRON_API_KEY=abc" in result.stdout
     assert "PERCEPTRON_MODEL=perceptron-mk1.5" in result.stdout
+    assert "PERCEPTRON_PROVIDER" not in result.stdout.split("Nothing is saved")[0]  # nothing to export: the default
     assert "Nothing is saved" in result.stdout
-    assert "fal" in result.stdout
-    assert "PERCEPTRON_PROVIDER=perceptron" in result.stdout
+    notes = " ".join(result.stdout.split())
+    assert "use the Perceptron API" in notes
+    assert "'fal' is selected only when FAL_KEY is set and PERCEPTRON_API_KEY is not" in notes
 
 
 def test_config_command_placeholders_select_the_perceptron_api():
     result = runner.invoke(app, ["config"])
     assert result.exit_code == 0
-    assert "export PERCEPTRON_PROVIDER=perceptron" in result.stdout
+    assert "export PERCEPTRON_API_KEY=<your-key>" in result.stdout
+    assert "PERCEPTRON_PROVIDER=" not in result.stdout  # the Perceptron API is the default
 
 
 def test_answer_text_is_printed_literally_not_as_rich_markup(api):
@@ -1188,23 +1199,48 @@ def test_ocr_rejects_a_video_data_url_with_its_code(api):
     assert api.http.requests == []
 
 
+PERCEPTRON_API = ("https://api.perceptron.inc/v1/chat/completions", "Bearer sk-test", "perceptron-mk1.5")
+FAL = ("https://fal.run/perceptron/isaac-01/openai/v1/chat/completions", "Key fal-key", "isaac-0.1")
+BOTH_KEYS = {"PERCEPTRON_API_KEY": "sk-test", "FAL_KEY": "fal-key"}
+
+
+def _set_env(monkeypatch, env):
+    for key in ("PERCEPTRON_PROVIDER", "PERCEPTRON_API_KEY"):
+        monkeypatch.delenv(key)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
 @pytest.mark.parametrize(
-    ("flags", "expected"),
+    ("env", "flags", "expected"),
     [
-        ([], ("https://fal.run/perceptron/isaac-01/openai/v1/chat/completions", "Key sk-test", "isaac-0.1")),
-        (
-            ["--provider", "perceptron", "--model", "perceptron-mk1.5"],
-            ("https://api.perceptron.inc/v1/chat/completions", "Bearer sk-test", "perceptron-mk1.5"),
-        ),
+        ({"PERCEPTRON_API_KEY": "sk-test"}, [], PERCEPTRON_API),
+        (BOTH_KEYS, [], PERCEPTRON_API),
+        ({"FAL_KEY": "fal-key"}, [], FAL),
+        (BOTH_KEYS, ["--provider", "fal"], FAL),
+        ({**BOTH_KEYS, "PERCEPTRON_PROVIDER": "fal"}, ["--provider", "perceptron"], PERCEPTRON_API),
     ],
-    ids=["auto-detected-fal", "provider-flag"],
+    ids=["api-key-only", "both-keys", "fal-key-only", "provider-flag-fal", "provider-flag-beats-env"],
 )
-def test_provider_flag_overrides_the_fal_auto_detect(api, monkeypatch, flags, expected):
-    monkeypatch.delenv("PERCEPTRON_PROVIDER")  # only PERCEPTRON_API_KEY is set
+def test_provider_follows_the_rule_and_the_flag_wins(api, monkeypatch, env, flags, expected):
+    _set_env(monkeypatch, env)
     result = runner.invoke(app, ["question", "https://example.com/img.png", "Hi", *flags])
     assert result.exit_code == 0, result.stdout
     request = api.http.last
     assert (str(request.url), request.headers["authorization"], api.http.last_body["model"]) == expected
+
+
+@pytest.mark.parametrize(
+    ("env", "provider"),
+    [({"PERCEPTRON_API_KEY": "sk-test"}, "fal"), ({"FAL_KEY": "fal-key"}, "perceptron")],
+    ids=["fal-without-fal-key", "perceptron-without-perceptron-key"],
+)
+def test_a_key_is_never_sent_to_the_other_provider(api, monkeypatch, env, provider):
+    _set_env(monkeypatch, env)
+    result = runner.invoke(app, ["question", "https://example.com/img.png", "Hi", "--provider", provider])
+    assert result.exit_code == 1
+    assert "credentials_missing" in result.stdout
+    assert api.http.requests == []
 
 
 def test_directory_mode_reads_only_the_image_formats_the_api_accepts(monkeypatch, tmp_path):

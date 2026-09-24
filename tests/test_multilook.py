@@ -691,14 +691,14 @@ def test_completion_annotations_resolve_in_their_prompts_asset_space(monkeypatch
 
 
 def test_api_key_only_env_uses_the_perceptron_api(http):
-    assert settings().provider == "fal"  # the legacy auto-detect is unchanged
+    assert settings().provider == "perceptron"
 
     _multilook()
 
     assert str(http.last.url) == URL
 
 
-def test_explicit_non_perceptron_provider_is_rejected(http, monkeypatch):
+def test_fal_chosen_or_auto_selected_is_rejected(http, monkeypatch):
     with pytest.raises(BadRequestError) as excinfo:
         Client(provider="fal").chat.completions.multilook(context=[], prompts=["q"])
     assert excinfo.value.code == UNSUPPORTED_PROVIDER_FEATURE
@@ -707,6 +707,12 @@ def test_explicit_non_perceptron_provider_is_rejected(http, monkeypatch):
     monkeypatch.setenv("PERCEPTRON_PROVIDER", "fal")
     with pytest.raises(BadRequestError):
         _multilook()
+    monkeypatch.delenv("PERCEPTRON_PROVIDER")
+    monkeypatch.delenv("PERCEPTRON_API_KEY")
+    monkeypatch.setenv("FAL_KEY", "fal-key")  # fal auto-selected
+    with pytest.raises(BadRequestError) as excinfo:
+        _multilook()
+    assert excinfo.value.code == UNSUPPORTED_PROVIDER_FEATURE
     assert not http.requests
 
 

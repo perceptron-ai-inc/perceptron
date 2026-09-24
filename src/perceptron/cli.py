@@ -78,7 +78,10 @@ def _provider_option():
     return typer.Option(
         None,
         "--provider",
-        help="Provider: perceptron or fal (default: PERCEPTRON_PROVIDER; with only a key set, fal is auto-selected).",
+        help=(
+            "Provider: perceptron or fal (default: PERCEPTRON_PROVIDER, else perceptron; fal only when FAL_KEY is set "
+            "and PERCEPTRON_API_KEY is not)."
+        ),
     )
 
 
@@ -872,7 +875,7 @@ def _render_result(
 @app.command()
 def config(
     provider: str | None = typer.Option(None, help="Provider to export: perceptron (the Perceptron API) or fal."),
-    api_key: str | None = typer.Option(None, help="API key to export."),
+    api_key: str | None = typer.Option(None, help="API key to export (as FAL_KEY with --provider fal)."),
     base_url: str | None = typer.Option(None, help="Optional custom base URL (include /v1 for provider perceptron)."),
     model: str | None = typer.Option(None, help="Default model to export, e.g. perceptron-mk1.5."),
 ):
@@ -882,7 +885,9 @@ def config(
     if provider:
         exports.append(f"export PERCEPTRON_PROVIDER={provider}")
     if api_key:
-        exports.append(f"export PERCEPTRON_API_KEY={api_key}")
+        # fal reads only FAL_KEY; PERCEPTRON_API_KEY is never sent to it.
+        key_env = "FAL_KEY" if (provider or "").lower() == "fal" else "PERCEPTRON_API_KEY"
+        exports.append(f"export {key_env}={api_key}")
     if base_url:
         exports.append(f"export PERCEPTRON_BASE_URL={base_url}")
     if model:
@@ -890,7 +895,6 @@ def config(
 
     if not exports:
         exports = [
-            "export PERCEPTRON_PROVIDER=perceptron",
             "export PERCEPTRON_API_KEY=<your-key>",
             "export PERCEPTRON_BASE_URL=<optional-base-url>",
         ]
@@ -899,9 +903,8 @@ def config(
     notes = ["Nothing is saved: run these lines in your shell or add them to your shell profile."]
     if provider is None:
         notes.append(
-            "Without PERCEPTRON_PROVIDER, the helpers, perceive() and this CLI use provider 'fal' whenever FAL_KEY or "
-            "PERCEPTRON_API_KEY is set. Export PERCEPTRON_PROVIDER=perceptron to use the Perceptron API "
-            "(client.chat.completions, files, models and multilook use it unless you choose another provider)."
+            "Without PERCEPTRON_PROVIDER, the SDK and this CLI use the Perceptron API. Provider 'fal' is selected only "
+            "when FAL_KEY is set and PERCEPTRON_API_KEY is not (fal never receives PERCEPTRON_API_KEY)."
         )
     for note in notes:
         console.print(Text(note, style="dim"))

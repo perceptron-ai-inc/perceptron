@@ -1,9 +1,8 @@
 """Audio & reasoning parity (DESIGN §13.4): audio inputs, ``enable_audio_in_video``, ``reasoning_effort`` and mixed-media
 order reach the wire the same way through every surface.
 
-Mocked HTTP, provider ``perceptron``, default model ``perceptron-mk1.5``. Legacy surfaces (``perceive``, the helpers,
-``Client.generate/stream``) select the provider explicitly (a ``PERCEPTRON_API_KEY``-only env auto-detects fal there);
-the message API and multilook default to ``perceptron`` on their own (§12.1).
+Mocked HTTP, default model ``perceptron-mk1.5``. Only ``PERCEPTRON_API_KEY`` is set, so every surface (legacy and message
+API alike) uses provider ``perceptron`` without being told to (§14.1).
 """
 
 from __future__ import annotations
@@ -193,11 +192,11 @@ def _task(nodes) -> dict:
 
 # Legacy event streams (a list of events), so a pre-request error can be checked as the single `error` event.
 def _perceive_events(nodes, **opts):
-    return list(perceive(*nodes, provider="perceptron", stream=True, **opts))
+    return list(perceive(*nodes, stream=True, **opts))
 
 
 def _async_perceive_events(nodes, **opts):
-    @async_perceive(provider="perceptron", stream=True, **opts)
+    @async_perceive(stream=True, **opts)
     async def run():
         return block(*nodes)
 
@@ -205,11 +204,11 @@ def _async_perceive_events(nodes, **opts):
 
 
 def _client_stream_events(nodes, **opts):
-    return list(Client(provider="perceptron").stream(_task(nodes), **opts))
+    return list(Client().stream(_task(nodes), **opts))
 
 
 def _async_client_stream_events(nodes, **opts):
-    return _acollect(AsyncClient(provider="perceptron").stream(_task(nodes), **opts))
+    return _acollect(AsyncClient().stream(_task(nodes), **opts))
 
 
 LEGACY_STREAMS = {
@@ -221,11 +220,11 @@ LEGACY_STREAMS = {
 
 
 def _perceive(nodes, **opts):
-    return _outcome(perceive(*nodes, provider="perceptron", **opts))
+    return _outcome(perceive(*nodes, **opts))
 
 
 def _async_perceive(nodes, **opts):
-    @async_perceive(provider="perceptron", **opts)
+    @async_perceive(**opts)
     async def run():
         return block(*nodes)
 
@@ -233,11 +232,11 @@ def _async_perceive(nodes, **opts):
 
 
 def _client_generate(nodes, **opts):
-    return Client(provider="perceptron").generate(_task(nodes), **opts)
+    return Client().generate(_task(nodes), **opts)
 
 
 def _async_client_generate(nodes, **opts):
-    return asyncio.run(AsyncClient(provider="perceptron").generate(_task(nodes), **opts))
+    return asyncio.run(AsyncClient().generate(_task(nodes), **opts))
 
 
 def _messages(nodes) -> list[dict]:
@@ -307,19 +306,19 @@ MULTILOOK_SURFACES = {"multilook": _multilook, "async_multilook": _async_multilo
 
 # Surfaces that take one media node (the helpers add their own prompt).
 def _question(media, **opts):
-    return _outcome(question(media, PROMPT, provider="perceptron", **opts))
+    return _outcome(question(media, PROMPT, **opts))
 
 
 def _question_events(media, **opts):
-    return list(question(media, PROMPT, provider="perceptron", stream=True, **opts))
+    return list(question(media, PROMPT, stream=True, **opts))
 
 
 def _caption(media, **opts):
-    return _outcome(caption(media, provider="perceptron", **opts))
+    return _outcome(caption(media, **opts))
 
 
 def _caption_events(media, **opts):
-    return list(caption(media, provider="perceptron", stream=True, **opts))
+    return list(caption(media, stream=True, **opts))
 
 
 HELPERS = {
@@ -411,7 +410,7 @@ def test_audio_format_comes_from_the_bytes_not_the_file_name(http, tmp_path, dat
     path = tmp_path / "recording.bin"  # the container is sniffed, whatever the extension says
     path.write_bytes(data)
 
-    perceive(audio(path), text(PROMPT), provider="perceptron")
+    perceive(audio(path), text(PROMPT))
 
     assert _media_parts(http.last_body) == [_input_audio(data, fmt)]
 
@@ -430,7 +429,7 @@ def test_other_mpeg_audio_is_not_taken_for_mp3(http, tmp_path, data):
     path.write_bytes(data)
     for source in (path, data):
         with pytest.raises(BadRequestError) as excinfo:
-            perceive(audio(source), text(PROMPT), provider="perceptron")
+            perceive(audio(source), text(PROMPT))
         assert excinfo.value.code == "invalid_audio"
     assert http.requests == []
 
@@ -510,10 +509,10 @@ def test_raw_audio_parts_in_messages_are_sent_verbatim_and_counted(http, surface
 
 
 RUN_TASK = {
-    "client_generate": lambda task: Client(provider="perceptron").generate(task),
-    "client_stream": lambda task: _final(Client(provider="perceptron").stream(task)),
-    "async_client_generate": lambda task: asyncio.run(AsyncClient(provider="perceptron").generate(task)),
-    "async_client_stream": lambda task: _final(_acollect(AsyncClient(provider="perceptron").stream(task))),
+    "client_generate": lambda task: Client().generate(task),
+    "client_stream": lambda task: _final(Client().stream(task)),
+    "async_client_generate": lambda task: asyncio.run(AsyncClient().generate(task)),
+    "async_client_stream": lambda task: _final(_acollect(AsyncClient().stream(task))),
 }
 
 
@@ -543,7 +542,7 @@ def test_hand_written_audio_task_entries(http, surface):
 
 
 def test_audio_parts_stay_in_the_user_message_after_the_hint(http):
-    perceive(audio(WAV), text(PROMPT), provider="perceptron", reasoning=True)
+    perceive(audio(WAV), text(PROMPT), reasoning=True)
 
     messages = http.last_body["messages"]
     assert messages == [
@@ -626,7 +625,6 @@ def test_enable_audio_in_video_with_an_audio_track_and_reasoning_effort(http):
         video(VIDEO_URL),
         audio(AUDIO_URL),
         text(PROMPT),
-        provider="perceptron",
         enable_audio_in_video=False,
         reasoning_effort="low",
     )
@@ -747,6 +745,7 @@ def test_provider_names_are_case_insensitive_for_hints(http, monkeypatch):
 def test_reasoning_effort_is_sent_on_fal_too(monkeypatch):
     """The tier is provider-independent: normalized and sent top-level on fal as well, with no THINK hint derived from
     it; an ``expects`` hint keeps fal's user-text encoding (O2)."""
+    monkeypatch.setenv("FAL_KEY", "fal-key")
     recorder = install(monkeypatch, lambda request: json_response(completion("Hello")))
 
     Client(provider="fal").generate(_task([text(PROMPT)]), model="isaac-0.1", expects="box", reasoning_effort="Medium")
