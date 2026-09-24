@@ -152,11 +152,17 @@ def _caption_sequence(
     return SequenceNode(nodes)
 
 
+def default_caption_expects(media_obj: MediaNode) -> str:
+    """Grounded boxes for images; plain text for video and audio."""
+
+    return "box" if isinstance(media_obj, ImageNode) else "text"
+
+
 def caption(
     media_obj: MediaNode,
     *,
     style: str = "concise",
-    expects: str = "box",
+    expects: str | None = None,
     stream: bool = False,
     response_format: ResponseFormat | None = None,
     **gen_kwargs: Any,
@@ -167,11 +173,15 @@ def caption(
     :func:`perceptron.video`, or :func:`perceptron.audio`.
 
     Args:
+        expects: Output structure. Defaults to ``"box"`` for images and
+            ``"text"`` for video and audio.
         response_format: Optional constraint for output format. Use
             :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
             to enable constrained decoding.
     """
 
+    if expects is None:
+        expects = default_caption_expects(media_obj)
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     caption_template = profile.caption
     structured_expectation, allow_multiple = resolve_structured_expectation(expects, context="caption expects value")

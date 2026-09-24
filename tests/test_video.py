@@ -125,6 +125,24 @@ def test_caption_accepts_video():
     assert len(parts) == 1
 
 
+def test_caption_video_defaults_to_text():
+    with cfg(api_key="test", provider="fal"):
+        res = caption(video("https://x.com/v.mp4"))
+    assert res.raw["expects"] is None
+
+
+def test_caption_image_defaults_to_box():
+    with cfg(api_key="test", provider="fal"):
+        res = caption(image(PNG_BYTES))
+    assert res.raw["expects"] == "box"
+
+
+def test_caption_video_explicit_box_is_honored():
+    with cfg(api_key="test", provider="fal"):
+        res = caption(video("https://x.com/v.mp4"), expects="box")
+    assert res.raw["expects"] == "box"
+
+
 def test_question_accepts_video():
     with cfg(api_key="test", provider="fal"):
         res = question(video("https://x.com/v.mp4"), "what happens?")

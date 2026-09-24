@@ -50,6 +50,7 @@ def _normalize_reasoning_effort(value: Any) -> str | None:
         )
     return normalized
 
+
 # Maps each structured `expects` value to (PerceiveResult bucket name, extractor).
 _BUCKET_BY_EXPECTS = {
     "point": ("points", lambda c: extract_points(c, expected="point")),

@@ -242,6 +242,40 @@ def test_caption_command_forwards_reasoning_effort(monkeypatch):
     assert captured["kwargs"]["reasoning_effort"] == "high"
 
 
+@pytest.mark.parametrize(
+    ("media", "expected"),
+    [
+        ("https://example.com/img.png", "box"),
+        ("https://example.com/clip.mp4", "text"),
+        ("https://example.com/call.wav", "text"),
+    ],
+)
+def test_caption_command_default_expects_follows_media(monkeypatch, media, expected):
+    captured: dict[str, dict] = {}
+
+    def _fake_caption(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _StubResult("hello")
+
+    monkeypatch.setattr("perceptron.cli.caption_image", _fake_caption)
+    result = runner.invoke(app, ["caption", media])
+    assert result.exit_code == 0, result.stdout
+    assert captured["kwargs"]["expects"] == expected
+
+
+def test_caption_command_explicit_expects_overrides_media_default(monkeypatch):
+    captured: dict[str, dict] = {}
+
+    def _fake_caption(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _StubResult("hello")
+
+    monkeypatch.setattr("perceptron.cli.caption_image", _fake_caption)
+    result = runner.invoke(app, ["caption", "https://example.com/clip.mp4", "--expects", "box"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["kwargs"]["expects"] == "box"
+
+
 def test_question_command_forwards_audio_in_video_with_reasoning_effort(monkeypatch):
     captured: dict[str, dict] = {}
 

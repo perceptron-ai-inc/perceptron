@@ -24,6 +24,7 @@ from . import image as image_node
 from . import ocr as ocr_image
 from . import question as question_image
 from . import video as video_node
+from .highlevel import default_caption_expects
 from .pointing.types import BoundingBox, Clip, Collection, Polygon, SinglePoint
 
 console = Console()
@@ -727,24 +728,25 @@ def caption(
         case_sensitive=False,
         help="Output format (text or json).",
     ),
-    expects: ExpectationType = typer.Option(
-        ExpectationType.BOX,
+    expects: ExpectationType | None = typer.Option(
+        None,
         "--expects",
         case_sensitive=False,
-        help="Expected output structure (text, point, box, polygon, clip, or think).",
+        help="Expected output structure (text, point, box, polygon, clip, or think). Defaults to box for images, text for video and audio.",
     ),
 ):
     """Generate captions using the high-level helper."""
 
     path = Path(media)
     if path.is_dir():
+        directory_expects = expects.value if expects is not None else ExpectationType.BOX.value
         _process_directory(
             path,
             command_name="caption",
             stream=stream,
             show_raw=show_raw,
-            runner=lambda data: caption_image(image_node(data), style=style, expects=expects.value),
-            payload_factory=lambda result: _caption_payload(result, expects=expects.value),
+            runner=lambda data: caption_image(image_node(data), style=style, expects=directory_expects),
+            payload_factory=lambda result: _caption_payload(result, expects=directory_expects),
         )
         return
 
@@ -754,7 +756,8 @@ def caption(
         raise typer.BadParameter(str(exc)) from exc
 
     node = _make_media_node(media, media_data)
-    expects_value = expects.value
+    expects_value = expects.value if expects is not None else default_caption_expects(node)
+    show_points_table = expects_value == ExpectationType.BOX.value
     gen_kwargs = _generation_kwargs(audio_in_video=audio_in_video, reasoning_effort=reasoning_effort)
 
     if stream:
@@ -763,7 +766,7 @@ def caption(
             title="Caption",
             output_format=output_format,
             show_raw=show_raw,
-            show_points_table=expects is ExpectationType.BOX,
+            show_points_table=show_points_table,
             expects=expects_value,
         )
         return
@@ -774,7 +777,7 @@ def caption(
         title="Caption",
         output_format=output_format,
         show_raw=show_raw,
-        show_points_table=expects is ExpectationType.BOX,
+        show_points_table=show_points_table,
         expects=expects_value,
     )
 
