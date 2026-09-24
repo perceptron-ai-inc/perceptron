@@ -15,11 +15,13 @@ from perceptron import AsyncClient, Client, image, settings, text
 from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.chat import ChatCompletionMessage, FunctionCall, ToolCall, Usage
-from perceptron.dsl.nodes import box, point
+from perceptron.dsl.nodes import box, point, polygon
 from perceptron.errors import (
     ANCHOR_MISSING,
     ANCHOR_UNKNOWN,
+    BOUNDS_OUT_OF_RANGE,
     INVALID_PARAMETER,
+    INVALID_POLYGON,
     INVALID_REASONING_EFFORT,
     INVALID_RESPONSE,
     INVALID_TEMPERATURE,
@@ -562,6 +564,8 @@ def test_single_asset_prompts_count_the_context_media(http):
         (lambda: [image(PNG_BYTES), point(1, 2)], ANCHOR_MISSING),  # the context's image makes two assets
         (lambda: ["Here?", point(1, 2, image=image("https://example.com/elsewhere.png"))], ANCHOR_UNKNOWN),
         (lambda: ["Here?", point(1, 2, asset_idx=1)], ANCHOR_UNKNOWN),
+        (lambda: ["Here?", point(5000, 2)], BOUNDS_OUT_OF_RANGE),
+        (lambda: ["Here?", polygon([(1, 1), (2, 2)])], INVALID_POLYGON),
     ],
 )
 def test_prompt_tag_issues_raise_naming_the_prompt_item(http, prompt, code):
@@ -572,6 +576,51 @@ def test_prompt_tag_issues_raise_naming_the_prompt_item(http, prompt, code):
 
     assert (excinfo.value.code, excinfo.value.param) == (code, "prompts[1].content[1]")
     assert not http.requests
+
+
+def _replayed(cup):
+    """A context replayed with the same image node in two turns, and a prompt tag anchored to it too."""
+    context = [
+        {"role": "user", "content": [cup, "The cup is here:", point(1, 2, image=cup)]},
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": [cup, "Remember it."]},
+    ]
+    return {"context": context, "prompts": [["Same cup?", point(5, 6, image=cup)]]}
+
+
+_AMBIGUOUS = "image=/asset= references a media node used 2 times in this prompt; anchored to asset_idx {}"
+# Each tag names the latest use of the node before it: the context's first image, then its second.
+_REUSED_NODE_WARNINGS = [
+    (UserWarning, f"context[0].content[2]: {_AMBIGUOUS.format(0)}", __file__),
+    (UserWarning, f"prompts[0].content[1]: {_AMBIGUOUS.format(1)}", __file__),
+]
+
+
+def _reused_node_warnings(caught) -> list:
+    return [(w.category, str(w.message), w.filename) for w in caught if "used 2 times" in str(w.message)]
+
+
+def test_a_reused_media_node_warns_and_the_request_is_sent(http):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _multilook(**_replayed(image("https://example.com/cup.png")))
+
+    assert _reused_node_warnings(caught) == _REUSED_NODE_WARNINGS
+    body = http.last_body
+    assert _context_texts(body) == ["The cup is here:", '<point asset_idx="0"> (1,2) </point>']
+    assert body["prompts"][0]["content"][1] == {"type": "text", "text": '<point asset_idx="1"> (5,6) </point>'}
+
+
+def test_async_a_reused_media_node_warns_and_the_request_is_sent(http):
+    async def _run():
+        await AsyncClient().chat.completions.multilook(**_replayed(image("https://example.com/cup.png")))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        asyncio.run(_run())
+
+    assert _reused_node_warnings(caught) == _REUSED_NODE_WARNINGS
+    assert http.last_body["prompts"][0]["content"][1]["text"] == '<point asset_idx="1"> (5,6) </point>'
 
 
 def _context_texts(body: dict) -> list[str]:

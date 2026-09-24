@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import warnings
 
 import pytest
 from _http_mock import chunk, completion, install, json_response, sse_response
 from _image_fixtures import PNG_BYTES
 
-from perceptron import Client, async_perceive, config, detect, inspect_task, perceive
+from perceptron import AsyncClient, Client, async_perceive, config, detect, inspect_task, perceive
 from perceptron import client as client_mod
 from perceptron.annotations import annotate_image
 from perceptron.dsl.nodes import (
@@ -497,9 +498,9 @@ def _stray_anchor():
     return [_img(), point(1, 2, image=image("https://x/elsewhere.png"))]
 
 
-def _reused_node():
+def _reused_node_off_the_grid():
     x = _img()
-    return [x, x, point(1, 2, image=x)]
+    return [x, x, point(5000, 1, image=x)]  # anchor_ambiguous, which only warns, then bounds_out_of_range
 
 
 @pytest.mark.parametrize(
@@ -509,7 +510,7 @@ def _reused_node():
         (lambda: ["No media here.", point(1, 2)], ANCHOR_MISSING),
         (_stray_anchor, ANCHOR_UNKNOWN),
         (lambda: [_img(), point(1, 2, asset_idx=1)], ANCHOR_UNKNOWN),
-        (_reused_node, ANCHOR_AMBIGUOUS),
+        (_reused_node_off_the_grid, BOUNDS_OUT_OF_RANGE),
         (lambda: [_img(), point(5000, -3)], BOUNDS_OUT_OF_RANGE),
         (lambda: [_img(), box(800, 800, 100, 100)], BOUNDS_OUT_OF_RANGE),
         (lambda: [_img(), polygon([(1, 1), (2, 2)])], INVALID_POLYGON),
@@ -527,6 +528,58 @@ def test_create_raises_for_tag_issues(monkeypatch, content, code):
     assert excinfo.value.param == where
     assert str(excinfo.value).startswith(f"{where}: ")
     assert not http.requests
+
+
+def _replayed_conversation(x):
+    """A conversation replayed with the same image node in two turns, each with a tag anchored to it."""
+    return [
+        {"role": "user", "content": [x, "Find the cup.", box(1, 2, 3, 4, image=x, mention="cup")]},
+        {"role": "assistant", "content": "Found it."},
+        {"role": "user", "content": [x, "Is it still here?", point(5, 6, image=x)]},
+    ]
+
+
+_AMBIGUOUS_MESSAGE = "image=/asset= references a media node used 2 times in this prompt; anchored to asset_idx {}"
+
+
+def _ambiguous_warnings(caught):
+    return [(w.category, str(w.message), w.filename) for w in caught if "used 2 times" in str(w.message)]
+
+
+def test_create_warns_for_a_reused_media_node_and_sends_the_request(monkeypatch):
+    http = install(monkeypatch, lambda request: json_response(completion()))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        Client().chat.completions.create(messages=_replayed_conversation(_img()))
+
+    # Each tag names the latest use of the node before it.
+    assert _ambiguous_warnings(caught) == [
+        (UserWarning, f"messages[0].content[2]: {_AMBIGUOUS_MESSAGE.format(0)}", __file__),
+        (UserWarning, f"messages[2].content[2]: {_AMBIGUOUS_MESSAGE.format(1)}", __file__),
+    ]
+    sent = http.last_body["messages"]
+    assert _texts(sent[0])[1] == '<point_box mention="cup" asset_idx="0"> (1,2) (3,4) </point_box>'
+    assert _texts(sent[2])[1] == '<point asset_idx="1"> (5,6) </point>'
+
+
+def test_async_create_warns_for_a_reused_media_node_and_sends_the_request(monkeypatch):
+    http = install(monkeypatch, lambda request: json_response(completion()))
+
+    async def _run():
+        await AsyncClient().chat.completions.create(messages=_replayed_conversation(_img()))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        asyncio.run(_run())
+
+    assert [(category, filename) for category, _, filename in _ambiguous_warnings(caught)] == [
+        (UserWarning, __file__),
+        (UserWarning, __file__),
+    ]
+    sent = json.loads(http.last.content)["messages"]
+    assert _texts(sent[0])[1] == '<point_box mention="cup" asset_idx="0"> (1,2) (3,4) </point_box>'
+    assert _texts(sent[2])[1] == '<point asset_idx="1"> (5,6) </point>'
 
 
 def test_create_tag_issues_inside_sequences_name_the_item(monkeypatch):

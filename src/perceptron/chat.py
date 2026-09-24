@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import sys
 import warnings
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ from ._lowering import count_assets, entry_to_part
 from ._providers import PERCEPTRON_PROVIDER, _normalize_reasoning_effort, surface_model, surface_provider_cfg
 from .dsl.nodes import DSLNode
 from .errors import (
+    ANCHOR_AMBIGUOUS,
     CONFLICTING_STRUCTURED_OUTPUT_CONTROLS,
     CONFLICTING_TOOLS,
     DUPLICATE_TOOL_NAME,
@@ -1091,6 +1094,18 @@ def _content_ledger(messages: list[Any] | tuple[Any, ...]) -> Any:
 # Compiled entries that are whole messages (``agent(..., tool_calls=...)`` and ``tool_result(...)``).
 _TURN_ENTRY_TYPES = ("assistant_turn", "tool_result")
 
+_PACKAGE_DIR = os.path.dirname(__file__) + os.sep  # this package: frames here are the SDK, not the caller
+
+
+def _warn_caller(message: str, category: type[Warning]) -> None:
+    """Warn at the caller's line: the first frame outside this package, however deep the SDK noticed the problem."""
+    frame = sys._getframe(1)
+    stacklevel = 2
+    while frame is not None and frame.f_code.co_filename.startswith(_PACKAGE_DIR):
+        frame = frame.f_back
+        stacklevel += 1
+    warnings.warn(message, category, stacklevel=stacklevel)
+
 
 def _lower_dsl_node(  # noqa: PLR0913 - the lowering target, the request's assets and the error location
     node: DSLNode,
@@ -1102,15 +1117,19 @@ def _lower_dsl_node(  # noqa: PLR0913 - the lowering target, the request's asset
     where: str = "content",
 ) -> list[dict[str, Any]]:
     """A DSL node from message content as wire parts. Tags anchor in the request's ``asset_idx`` space (``ledger``,
-    in which this node's first asset is ``first_asset``). There is no issue list here, so any issue the DSL reports
-    (the ones ``perceive(strict=True)`` raises) raises ``BadRequestError`` naming ``where``."""
+    in which this node's first asset is ``first_asset``). There is no issue list here: an ``anchor_ambiguous`` tag (its
+    ``image=``/``asset=`` node appears more than once, as when a replayed conversation reuses an image node) still
+    names one asset and is sent with a ``UserWarning``, as ``perceive()`` records it; any other issue the DSL reports
+    would send markup that does not mean what the caller wrote, so it raises ``BadRequestError`` naming ``where``."""
     # dsl.perceive imports the client, which imports this module.
     from .dsl.perceive import _compile  # noqa: PLC0415
 
     task, issues = _compile(node, expects=None, strict=False, ledger=ledger, first_asset=first_asset)
-    if issues:
-        issue = issues[0]
-        raise BadRequestError(f"{where}: {issue['message']}", code=issue["code"], details=issue, param=where)
+    for issue in issues:
+        if issue["code"] != ANCHOR_AMBIGUOUS:
+            raise BadRequestError(f"{where}: {issue['message']}", code=issue["code"], details=issue, param=where)
+    for issue in issues:
+        _warn_caller(f"{where}: {issue['message']}", UserWarning)
     entries = task.get("content") or []
     if any(entry.get("role", "user") != "user" or entry.get("type") in _TURN_ENTRY_TYPES for entry in entries):
         # Lowering them to parts would drop their role into the enclosing message.
@@ -1359,9 +1378,11 @@ class ChatCompletions:
         ``messages`` are sent verbatim: dicts (any OpenAI message, including ``tool`` results and assistant
         ``tool_calls``/``reasoning_content``/``content: None``), or returned messages/completions. Inside a dict's
         ``content`` list, strings and DSL nodes (``text()``, ``image()``, ``video()``, ``audio()``, ``video_frames()``,
-        tags) become parts. A tag's ``asset_idx`` counts the media of every message; a tag the DSL would flag (no
-        ``image=``/``asset=`` in a multi-asset request, an anchor outside the request, a coordinate off the 0-1000
-        grid, ...) raises ``BadRequestError``.
+        tags) become parts. A tag's ``asset_idx`` counts the media of every message. A tag whose ``image=``/``asset=``
+        node appears more than once (e.g. a replayed conversation that reuses an image node) is anchored to the node's
+        latest use before the tag (else its first use after it) with a ``UserWarning``; any other tag the DSL would
+        flag (no ``image=``/``asset=`` in a multi-asset request, an anchor outside the request, a coordinate off the
+        0-1000 grid, ...) raises ``BadRequestError``.
         Only the parameters you set are sent (``configure()`` generation defaults count as set); ``max_tokens`` is an
         alias of ``max_completion_tokens``; ``response_format={"type": "regex", "regex": p}`` is sent as ``regex``.
         ``extra_body`` is merged into the body last, unvalidated. Streams to provider ``perceptron`` request usage
