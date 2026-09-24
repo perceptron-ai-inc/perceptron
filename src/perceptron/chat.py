@@ -751,8 +751,8 @@ class AsyncChatCompletionStream(_StreamBase):
     ``await get_final_completion()``).
 
     Use ``async with`` (or ``await close()``) when you may stop early: closing needs the event loop. A stream garbage
-    collected unfinished is closed on its event loop while that loop runs; after the loop stops it can only be
-    reported (``ResourceWarning``), as asyncio does for unclosed transports.
+    collected unfinished is closed on its event loop (at once, or when that loop next runs) unless that loop is already
+    closed; then it can only be reported (``ResourceWarning``), as asyncio does for unclosed transports.
     """
 
     def __init__(self, response: Any, closer: Any, *, request_id: str | None = None, asset_count: int | None = None):
@@ -814,16 +814,17 @@ _PENDING_CLOSES: set[asyncio.Task] = set()
 def _close_dropped_async_stream(loop: asyncio.AbstractEventLoop | None, closer: Any) -> None:
     """Finalizer of an :class:`AsyncChatCompletionStream` collected unclosed; it must not reference the stream.
 
-    It cannot await: while the stream's loop runs, the close is scheduled there. Otherwise nothing can be closed
-    synchronously (httpx closes async clients and responses only on their loop; asyncio closes the sockets when their
-    transports are collected), so it warns, like asyncio does for unclosed transports.
+    It cannot await, so it schedules the close on the stream's loop, which runs it at once or on its next run (as
+    asyncio does for dropped async generators, whether or not the loop is running). Once that loop is closed nothing
+    can be closed synchronously (httpx closes async clients and responses only on their loop; asyncio closes the
+    sockets when their transports are collected), so it warns, like asyncio does for unclosed transports.
     """
-    if loop is not None and loop.is_running():
+    if loop is not None and not loop.is_closed():
         with suppress(RuntimeError):  # the loop closed meanwhile
             loop.call_soon_threadsafe(_schedule_close, loop, closer)
             return
     warnings.warn(
-        "An AsyncChatCompletionStream was garbage collected unclosed while its event loop was not running, so its "
+        "An AsyncChatCompletionStream was garbage collected unclosed with no open event loop to close it on, so its "
         "connection was not released; use 'async with' or 'await stream.close()'.",
         ResourceWarning,
         stacklevel=1,  # raised during garbage collection: there is no caller to point at

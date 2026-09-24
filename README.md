@@ -272,7 +272,7 @@ with client.chat.completions.create(
 print("\n", completion.finish_reason, completion.usage)
 ```
 
-A stream that fails mid-way raises the mapped error (with `.partial`); one that ends without `[DONE]` raises `IncompleteStreamError`. The connection opens when `create()` returns, so use `with`/`async with` (or `close()`) when you may stop early; a stream dropped unfinished is closed when it is garbage collected (an async one only while its event loop runs). `AsyncClient` mirrors everything:
+A stream that fails mid-way raises the mapped error (with `.partial`); one that ends without `[DONE]` raises `IncompleteStreamError`. The connection opens when `create()` returns, so use `with`/`async with` (or `close()`) when you may stop early; a stream dropped unfinished is closed when it is garbage collected (an async one on its event loop, unless that loop has been closed). `AsyncClient` mirrors everything:
 
 ```python
 import asyncio

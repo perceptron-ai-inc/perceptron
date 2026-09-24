@@ -3,6 +3,7 @@
 import asyncio
 import gc
 import json
+import warnings
 from types import SimpleNamespace
 
 import httpx
@@ -618,14 +619,33 @@ def test_a_failed_scheduled_close_is_not_reported_as_unretrieved(monkeypatch):
     assert reported == []
 
 
-def test_an_async_stream_collected_after_its_loop_stopped_warns(monkeypatch):
+def test_an_async_stream_dropped_between_runs_of_its_loop_is_closed_on_the_next_run(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch)
+    loop = asyncio.new_event_loop()
+    try:
+        stream = loop.run_until_complete(AsyncClient().chat.completions.create(messages=[USER], stream=True))
+        assert not body.closed
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            del stream
+            gc.collect()  # the loop is idle but open: the close waits for its next run
+        assert not [w for w in caught if "AsyncChatCompletionStream" in str(w.message)]
+
+        loop.run_until_complete(_loop_turns())
+
+        assert _released(body, sessions)
+    finally:
+        loop.close()
+
+
+def test_an_async_stream_collected_after_its_loop_closed_warns(monkeypatch):
     _, sessions = _serve_counted(monkeypatch)
 
     async def _open():
         return await AsyncClient().chat.completions.create(messages=[USER], stream=True)
 
     stream = asyncio.run(_open())
-    with pytest.warns(ResourceWarning, match="garbage collected unclosed while its event loop was not running"):
+    with pytest.warns(ResourceWarning, match="garbage collected unclosed with no open event loop"):
         del stream
         gc.collect()
 
