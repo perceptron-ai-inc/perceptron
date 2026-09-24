@@ -104,4 +104,6 @@ def test_perceive_direct_structured_matrix(monkeypatch, expects, allow_multiple)
 
     assert stub.last_kwargs is not None
     assert stub.last_kwargs.get("expects") == expects
-    assert stub.last_kwargs.get("allow_multiple") == allow_multiple
+    # `allow_multiple`/`max_outputs` stay accepted by perceive but never changed the request, so they are not forwarded.
+    assert "allow_multiple" not in stub.last_kwargs
+    assert "max_outputs" not in stub.last_kwargs

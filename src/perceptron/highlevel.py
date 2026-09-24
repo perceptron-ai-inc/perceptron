@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .annotations import annotate_image, canonicalize_text_collections, serialize_annotations
-from .client import _PROVIDER_CONFIG, ResponseFormat, _select_model
+from .client import _PROVIDER_CONFIG, ResponseFormat, _select_model, _unexpected_keyword
 from .config import settings
 from .dsl.nodes import (
     Image as ImageNode,
@@ -41,6 +42,18 @@ from .prompting import (
 )
 
 COCO_BBOX_MIN_VALUES = 4
+
+# The keyword options of `perceive`; helpers forward their extra keyword arguments to it.
+_PERCEIVE_OPTIONS = frozenset(
+    name for name, param in inspect.signature(perceive).parameters.items() if param.kind is param.KEYWORD_ONLY
+)
+
+
+def _check_gen_kwargs(helper: str, gen_kwargs: Mapping[str, Any]) -> None:
+    """Raise the ``TypeError`` for a keyword ``perceive`` does not take, naming the helper the caller used."""
+    for name in gen_kwargs:
+        if name not in _PERCEIVE_OPTIONS:
+            raise _unexpected_keyword(helper, name)
 
 
 @dataclass
@@ -89,7 +102,7 @@ def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | No
         annotations_payload = example.get("annotations")
         if annotations_payload is None:
             annotations_payload = []
-            for key in ("boxes", "polygons", "points", "collections"):
+            for key in ("boxes", "polygons", "points", "collections", "clips", "tracks"):
                 values = example.get(key)
                 if values:
                     annotations_payload.extend(values)
@@ -104,6 +117,8 @@ def _normalize_examples(examples: Sequence[Any], class_order: Sequence[str] | No
             annotated.get("points"),
             annotated.get("collections"),
             order_lookup,
+            clips=annotated.get("clips"),
+            tracks=annotated.get("tracks"),
         )
         if not tags:
             raise BadRequestError("Detection examples must include at least one annotation")
@@ -180,6 +195,7 @@ def caption(
             to enable constrained decoding.
     """
 
+    _check_gen_kwargs("caption", gen_kwargs)
     if expects is None:
         expects = default_caption_expects(media_obj)
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
@@ -244,6 +260,7 @@ def question(
             to enable constrained decoding.
     """
 
+    _check_gen_kwargs("question", gen_kwargs)
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     question_template = profile.question
     structured_expectation, allow_multiple = resolve_structured_expectation(expects, context="expects value")
@@ -284,12 +301,14 @@ def _ocr_sequence(
 def _run_ocr(  # noqa: PLR0913
     image_node_obj: ImageNode,
     *,
+    helper: str,
     prompt: str | None,
     stream: bool,
     mode: str,
     gen_kwargs: dict[str, Any],
     response_format: ResponseFormat | None = None,
 ):
+    _check_gen_kwargs(helper, gen_kwargs)
     profile, resolved_model = _prompt_profile_from_kwargs(gen_kwargs)
     ocr_template = profile.ocr
     effective_prompt = prompt
@@ -336,6 +355,7 @@ def ocr(
 
     return _run_ocr(
         image_obj,
+        helper="ocr",
         prompt=prompt,
         stream=stream,
         mode="plain",
@@ -364,6 +384,7 @@ def ocr_markdown(
 
     return _run_ocr(
         image_obj,
+        helper="ocr_markdown",
         prompt=prompt,
         stream=stream,
         mode="markdown",
@@ -392,6 +413,7 @@ def ocr_html(
 
     return _run_ocr(
         image_obj,
+        helper="ocr_html",
         prompt=prompt,
         stream=stream,
         mode="html",
@@ -458,6 +480,7 @@ def detect(  # noqa: PLR0913
             to enable constrained decoding.
     """
 
+    _check_gen_kwargs("detect", gen_kwargs)
     profile, _ = _prompt_profile_from_kwargs(gen_kwargs)
     detect_template = profile.detect
     base_kwargs: dict[str, Any] = {
@@ -684,6 +707,7 @@ def detect_from_coco(  # noqa: PLR0913
 ) -> list[CocoDetectResult]:
     """Run detection across a COCO-format dataset directory."""
 
+    _check_gen_kwargs("detect_from_coco", detect_kwargs)
     if stream:
         raise BadRequestError("detect_from_coco does not support streaming output.")
 

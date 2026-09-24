@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -725,3 +726,505 @@ def test_question_command_clip_text_renders_clips_table(monkeypatch):
     assert "3.00s" in result.stdout
     assert "5.00s" in result.stdout
     assert "shot" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Real parsed output through the mocked transport (no stubbed results)
+# ---------------------------------------------------------------------------
+
+ANSWER = (
+    'Intro <clip mention="intro" t="1.5 seconds 3 seconds" /> then '
+    '<collection mention="person" asset_idx="0"><point_box> (1,2) (3,4) </point_box></collection> '
+    '<track mention="car"><point_box t="0.5 seconds"> (5,6) (7,8) </point_box>'
+    '<point_box t="1 seconds"> (6,7) (8,9) </point_box></track>'
+)
+USAGE = {
+    "prompt_tokens": 12,
+    "completion_tokens": 5,
+    "total_tokens": 17,
+    "prompt_tokens_details": {"audio_tokens": 3, "cached_tokens": 0},
+}
+AUDIO_LIMIT = {
+    "error": {
+        "message": "Audio input exceeds the token limit.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "audio_token_limit_exceeded",
+    }
+}
+
+
+@pytest.fixture
+def api(monkeypatch):
+    """Route requests through `httpx.MockTransport`; `api.answer`/`api.status` shape the next responses."""
+    from _http_mock import chunk, completion, install, json_response, sse_response
+
+    for key in ("FAL_KEY", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("PERCEPTRON_PROVIDER", "perceptron")
+    monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
+    state = SimpleNamespace(answer=ANSWER, status=200, stream_events=None)
+
+    def handler(request):
+        headers = {"x-trace-id": "trace-1"}
+        if state.status != 200:
+            return json_response(AUDIO_LIMIT, status=state.status, headers=headers)
+        if json.loads(request.content).get("stream"):
+            events = state.stream_events or [
+                chunk({"role": "assistant", "content": state.answer[:40]}),
+                chunk({"content": state.answer[40:]}),
+                chunk({}, finish_reason="stop"),
+                chunk(choices=False, usage=USAGE),
+            ]
+            return sse_response(events, headers=headers)
+        return json_response(completion(state.answer, usage=USAGE), headers=headers)
+
+    state.http = install(monkeypatch, handler)
+    return state
+
+
+def test_question_clip_json_serializes_clips_tracks_and_parsed(api):
+    result = runner.invoke(
+        app, ["question", "https://example.com/clip.mp4", "When?", "--expects", "clip", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["clips"] == [{"type": "clip", "at": 1.5, "until": 3.0, "mention": "intro"}]
+    assert payload["tracks"][0]["type"] == "track"
+    assert [p["t"] for p in payload["tracks"][0]["points"]] == [0.5, 1.0]
+    assert [seg["kind"] for seg in payload["parsed"]] == ["text", "clip", "text"]
+    assert payload["parsed"][1]["value"]["type"] == "clip"
+    assert payload["finish_reason"] == "stop"
+    assert payload["usage"] == USAGE
+    assert payload["request_id"] == "trace-1"
+    assert payload["errors"] == []
+
+
+def test_question_clip_text_lists_clips_and_tracks_with_status(api):
+    result = runner.invoke(app, ["question", "https://example.com/clip.mp4", "When?", "--expects", "clip"])
+    assert result.exit_code == 0, result.stdout
+    assert "Clips" in result.stdout
+    assert "1.50s → 3.00s" in result.stdout
+    assert "2 box waypoints, 0.50s → 1.00s" in result.stdout
+    assert "finish_reason stop" in result.stdout
+    assert "tokens in 12 (audio 3, cached 0)" in result.stdout
+
+
+def test_detect_directory_writes_boxes_tracks_and_parsed_json(api, tmp_path):
+    from _image_fixtures import PNG_BYTES
+
+    (tmp_path / "one.png").write_bytes(PNG_BYTES)
+    result = runner.invoke(app, ["detect", str(tmp_path), "--classes", "person,car"])
+    assert result.exit_code == 0, result.stdout
+    data = json.loads((tmp_path / "detections.json").read_text())["one.png"]
+    # Collection children and track waypoints are in the flat bucket, with the context their markup gives them.
+    assert [(b["mention"], b.get("asset_idx"), b.get("t")) for b in data["boxes"]] == [
+        ("person", 0, None),
+        ("car", None, 0.5),
+        ("car", None, 1.0),
+    ]
+    assert data["tracks"][0]["mention"] == "car"
+    assert [seg["kind"] for seg in data["parsed"] if seg["kind"] != "text"] == ["collection", "track"]
+    assert data["parsed"][1]["value"]["type"] == "collection"
+    assert data["finish_reason"] == "stop"
+    assert data["usage"]["prompt_tokens_details"] == {"audio_tokens": 3, "cached_tokens": 0}
+
+
+def test_detect_text_renders_detections_table_with_tracks_and_assets(api):
+    result = runner.invoke(app, ["detect", "https://example.com/frame.png", "--classes", "person,car"])
+    assert result.exit_code == 0, result.stdout
+    assert "Detections" in result.stdout
+    assert "(1,2) → (3,4) @asset 0" in result.stdout
+    assert "(5,6) → (7,8) t=0.50s" in result.stdout
+    assert "track" in result.stdout
+
+
+def test_detect_accepts_video_and_forwards_options(api):
+    result = runner.invoke(
+        app,
+        [
+            "detect",
+            "https://example.com/clip.mp4",
+            "--audio-in-video",
+            "--reasoning-effort",
+            "LOW",
+            "--model",
+            "perceptron-mk1.5",
+            "--provider",
+            "perceptron",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    request = api.http.last
+    assert str(request.url) == "https://api.perceptron.inc/v1/chat/completions"
+    body = api.http.last_body
+    assert body["model"] == "perceptron-mk1.5"
+    assert body["reasoning_effort"] == "low"
+    assert body["vision_config"] == {"enable_audio_in_video": True}
+    assert body["messages"][-1]["content"][-1] == {
+        "type": "video_url",
+        "video_url": {"url": "https://example.com/clip.mp4"},
+    }
+
+
+def test_detect_rejects_audio(api):
+    result = runner.invoke(app, ["detect", "https://example.com/call.wav"])
+    assert result.exit_code == 2
+    assert api.http.requests == []
+
+
+def test_no_audio_in_video_sends_explicit_false(api):
+    result = runner.invoke(app, ["caption", "https://example.com/clip.mp4", "--no-audio-in-video", "--expects", "text"])
+    assert result.exit_code == 0, result.stdout
+    assert api.http.last_body["vision_config"] == {"enable_audio_in_video": False}
+
+
+def test_audio_in_video_unset_sends_nothing(api):
+    result = runner.invoke(app, ["question", "https://example.com/clip.mp4", "What is said?"])
+    assert result.exit_code == 0, result.stdout
+    assert "vision_config" not in api.http.last_body
+    assert "reasoning_effort" not in api.http.last_body
+
+
+@pytest.mark.parametrize("effort", ["none", "minimal", "low", "medium", "high"])
+def test_reasoning_effort_tiers_reach_the_body(api, effort):
+    result = runner.invoke(app, ["ocr", "https://example.com/doc.png", "--reasoning-effort", effort.upper()])
+    assert result.exit_code == 0, result.stdout
+    assert api.http.last_body["reasoning_effort"] == effort
+
+
+@pytest.mark.parametrize(
+    ("command", "extra"),
+    [
+        ("caption", []),
+        ("ocr", []),
+        ("detect", []),
+        ("question", ["What is shown?"]),
+    ],
+)
+def test_every_command_forwards_model_and_provider(monkeypatch, command, extra):
+    captured: dict[str, dict] = {}
+
+    def _fake(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _StubResult("ok")
+
+    target = {"caption": "caption_image", "ocr": "ocr_image", "detect": "detect_image", "question": "question_image"}
+    monkeypatch.setattr(f"perceptron.cli.{target[command]}", _fake)
+    result = runner.invoke(
+        app,
+        [command, "https://example.com/img.png", *extra, "--model", "perceptron-mk1", "--provider", "perceptron"],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert captured["kwargs"]["model"] == "perceptron-mk1"
+    assert captured["kwargs"]["provider"] == "perceptron"
+
+
+def test_directory_mode_forwards_generation_options(monkeypatch, tmp_path):
+    (tmp_path / "one.png").write_bytes(b"image-one")
+    captured: list[dict] = []
+
+    def _fake_caption(data, **kwargs):
+        captured.append(kwargs)
+        return _StubResult("caption")
+
+    monkeypatch.setattr("perceptron.cli.caption_image", _fake_caption)
+    result = runner.invoke(app, ["caption", str(tmp_path), "--model", "perceptron-mk1.5", "--reasoning-effort", "low"])
+    assert result.exit_code == 0, result.stdout
+    assert captured == [{"style": "concise", "expects": "box", "model": "perceptron-mk1.5", "reasoning_effort": "low"}]
+
+
+def test_sdk_error_exits_with_code_and_request_id(api):
+    api.status = 400
+    result = runner.invoke(app, ["question", "https://example.com/call.wav", "Transcribe it."])
+    assert result.exit_code == 1
+    assert "audio_token_limit_exceeded" in result.stdout
+    assert "trace-1" in result.stdout
+
+
+def test_sdk_error_json_output(api):
+    api.status = 400
+    result = runner.invoke(app, ["question", "https://example.com/call.wav", "Transcribe it.", "--format", "json"])
+    assert result.exit_code == 1
+    error = json.loads(result.stdout)["error"]
+    assert error["code"] == "audio_token_limit_exceeded"
+    assert error["error_type"] == "invalid_request_error"
+    assert error["status"] == 400
+    assert error["request_id"] == "trace-1"
+    assert error["details"]["code"] == "audio_token_limit_exceeded"
+
+
+def test_stream_error_event_reports_code_details_and_exits_nonzero(api):
+    api.status = 400
+    result = runner.invoke(
+        app, ["question", "https://example.com/call.wav", "Transcribe it.", "--stream", "--format", "json"]
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    error = payload["errors"][0]
+    assert error["code"] == "audio_token_limit_exceeded"
+    assert error["request_id"] == "trace-1"
+    assert error["details"]["type"] == "invalid_request_error"
+
+
+def test_stream_truncated_mid_answer_keeps_partial_text(api):
+    from _http_mock import chunk
+
+    api.stream_events = [chunk({"role": "assistant", "content": "Partial ans"})]
+    api.answer = None
+
+    def _truncated(request):
+        from _http_mock import sse_response
+
+        return sse_response(api.stream_events, done=False)
+
+    api.http.handler = _truncated
+    result = runner.invoke(app, ["question", "https://example.com/img.png", "Hi", "--stream", "--format", "json"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["text"] == "Partial ans"
+    assert payload["errors"][0]["code"] == "stream_truncated"
+
+
+def test_stream_points_delta_context_and_status(api):
+    result = runner.invoke(app, ["detect", "https://example.com/frame.png", "--stream"])
+    assert result.exit_code == 0, result.stdout
+    assert "(1,2) → (3,4) @asset 0" in result.stdout
+    assert "Finish stop" in result.stdout
+    assert "Tokens in 12 (audio 3, cached 0)" in result.stdout
+
+
+def test_stream_json_payload_holds_boxes_tracks_and_usage(api):
+    result = runner.invoke(app, ["detect", "https://example.com/frame.png", "--stream", "--format", "json"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [(b["mention"], b.get("asset_idx"), b.get("t")) for b in payload["boxes"]] == [
+        ("person", 0, None),
+        ("car", None, 0.5),
+        ("car", None, 1.0),
+    ]
+    assert payload["tracks"][0]["mention"] == "car"
+    assert payload["finish_reason"] == "stop"
+    assert payload["usage"] == USAGE
+    assert payload["request_id"] == "trace-1"
+    assert payload["errors"] == []
+
+
+def test_stream_render_handles_tool_call_deltas(monkeypatch):
+    events = [
+        {"type": "tool_call.delta", "index": 0, "id": "call_1", "name": "get_weather", "arguments": '{"city":'},
+        {"type": "tool_call.delta", "index": 0, "id": None, "name": None, "arguments": ' "Paris"}'},
+        {"type": "final", "result": {"text": None, "finish_reason": "tool_calls", "errors": []}},
+    ]
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("perceptron.cli.console.print_json", lambda *, data: captured.update(payload=data))
+
+    _stream_render(
+        iter(events),
+        title="Question",
+        output_format=OutputFormat.JSON,
+        show_raw=False,
+        show_points_table=False,
+        expects=None,
+    )
+
+    payload = captured["payload"]
+    assert payload["finish_reason"] == "tool_calls"
+    assert payload["tool_calls"] == [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    ]
+
+
+def test_stream_render_summary_marks_track_waypoints(monkeypatch):
+    waypoint = BoundingBox(top_left=SinglePoint(1, 2), bottom_right=SinglePoint(3, 4), mention="car", t=0.5)
+    events = [
+        {
+            "type": "points.delta",
+            "points": [waypoint],
+            "context": {"mention": "car", "t": 0.5, "asset_idx": None, "container": "track"},
+        },
+    ]
+    from rich.console import Console
+
+    recorder = Console(record=True, width=160)
+    monkeypatch.setattr("perceptron.cli.console", recorder)
+    _stream_render(
+        iter(events),
+        title="Question",
+        output_format=OutputFormat.TEXT,
+        show_raw=False,
+        show_points_table=False,
+        expects="box",
+    )
+    assert "1. box: (1,2) → (3,4) t=0.50s (car) [in track]" in recorder.export_text()
+
+
+def test_describe_point_covers_tracks_assets_and_times():
+    from perceptron import bbox, pt, track
+
+    assert _describe_point(pt(5, 6, t=1.25, asset_idx=2)) == ("point", "(5,6) t=1.25s @asset 2", "")
+    moving = track([pt(1, 1, t=0.0), pt(2, 2, t=2.0)], mention="ball", asset_idx=1)
+    assert _describe_point(moving) == ("track", "2 point waypoints, 0.00s → 2.00s @asset 1", "ball")
+    kind, coords, _ = _describe_point(Clip(timestamp=ClipTimestamp(at=1.0), asset_idx=0))
+    assert (kind, coords) == ("clip", "@1.00s @asset 0")
+    assert _describe_point(bbox(1, 2, 3, 4, mention="x"))[1] == "(1,2) → (3,4)"
+
+
+def test_config_command_is_honest_about_fal_auto_detect():
+    result = runner.invoke(app, ["config", "--api-key", "abc", "--model", "perceptron-mk1.5"])
+    assert result.exit_code == 0
+    assert "PERCEPTRON_API_KEY=abc" in result.stdout
+    assert "PERCEPTRON_MODEL=perceptron-mk1.5" in result.stdout
+    assert "Nothing is saved" in result.stdout
+    assert "fal" in result.stdout
+    assert "PERCEPTRON_PROVIDER=perceptron" in result.stdout
+
+
+def test_config_command_placeholders_select_the_perceptron_api():
+    result = runner.invoke(app, ["config"])
+    assert result.exit_code == 0
+    assert "export PERCEPTRON_PROVIDER=perceptron" in result.stdout
+
+
+def test_answer_text_is_printed_literally_not_as_rich_markup(api):
+    api.answer = "Step [/INST] then [bold]x[/bold]"
+    result = runner.invoke(app, ["question", "https://example.com/img.png", "Hi"])
+    assert result.exit_code == 0, result.stdout
+    assert "[/INST]" in result.stdout
+    assert "[bold]x[/bold]" in result.stdout
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["result", "stream"])
+@pytest.mark.parametrize("mention", ["[/INST] rack", "shelf [red]", "[bold]x"])
+def test_annotation_mentions_are_printed_literally_not_as_rich_markup(api, mention, stream):
+    api.answer = f'Found <point_box mention="{mention}"> (1,2) (3,4) </point_box>'
+    result = runner.invoke(app, ["detect", "https://example.com/frame.png", *(["--stream"] if stream else [])])
+    assert result.exit_code == 0, result.stdout
+    rows = [line for line in result.stdout.splitlines() if "(1,2) → (3,4)" in line]  # the detections table
+    assert rows and all(mention in row for row in rows)
+
+
+@pytest.mark.parametrize("output_format", ["text", "json"])
+def test_stream_error_text_is_literal_and_names_the_request_id(api, output_format):
+    from _http_mock import chunk, sse_response
+
+    error = {"error": {"message": "boom [/x]", "type": "server_error", "code": "internal"}}
+    api.http.handler = lambda request: sse_response(
+        [chunk({"role": "assistant", "content": "part"}), error], headers={"x-trace-id": "trace-sse"}
+    )
+    result = runner.invoke(
+        app, ["question", "https://example.com/img.png", "Hi", "--stream", "--format", output_format]
+    )
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), result.exception  # a clean exit, not a crash
+    if output_format == "json":
+        assert json.loads(result.stdout)["errors"][0]["message"] == "boom [/x]"
+    else:
+        assert "boom [/x]" in result.stdout
+        assert "request id: trace-sse" in result.stdout
+
+
+def test_stream_http_error_text_mode_prints_code_and_request_id(api):
+    api.status = 400
+    result = runner.invoke(app, ["question", "https://example.com/call.wav", "Transcribe it.", "--stream"])
+    assert result.exit_code == 1
+    assert "audio_token_limit_exceeded" in result.stdout
+    assert "request id: trace-1" in result.stdout
+
+
+def test_directory_mode_prints_paths_and_issues_literally(api, tmp_path, monkeypatch):
+    from _image_fixtures import PNG_BYTES
+
+    batch = tmp_path / "batch [bold]"  # would print as "batch" if read as markup
+    batch.mkdir()
+    (batch / "one.png").write_bytes(PNG_BYTES)
+    api.answer = '<point_box mention="a"> (1,2) [/y] </point_box>'
+    # A relative path keeps the printed path short, so the panel never wraps it whatever the temp dir is.
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["detect", "batch [bold]"])
+    assert result.exit_code == 0, result.stdout
+    assert "batch [bold]" in result.stdout
+    assert "(1,2) [/y]" in result.stdout
+    assert (batch / "detections.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("data_url", "part_type"),
+    [
+        ("data:video/mp4;base64,AAAA", "video_url"),
+        ("data:audio/wav;base64,AAAA", "audio_url"),
+        ("data:image/png;base64,AAAA", "image_url"),
+        # Longer than a file name may be: never looked up on disk (no OSError "File name too long").
+        ("data:image/png;base64," + "A" * 4096, "image_url"),
+    ],
+    ids=["video", "audio", "image", "long-image"],
+)
+def test_data_url_media_is_routed_by_mime_type(api, data_url, part_type):
+    result = runner.invoke(app, ["question", data_url, "What is this?"])
+    assert result.exit_code == 0, result.stdout
+    media_parts = [part for part in api.http.last_body["messages"][-1]["content"] if part["type"] != "text"]
+    assert media_parts == [{"type": part_type, part_type: {"url": data_url}}]
+
+
+@pytest.mark.parametrize(
+    ("command", "extra"),
+    [("question", ["What?"]), ("caption", []), ("detect", []), ("ocr", [])],
+)
+def test_invalid_data_url_is_reported_with_its_code(api, command, extra):
+    args = [command, "data:text/plain;base64,AAAA", *extra]
+    result = runner.invoke(app, [*args, "--format", "json"])
+    assert result.exit_code == 1, result.stdout
+    assert json.loads(result.stdout)["error"]["code"] == "invalid_data_url"
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert "[invalid_data_url]" in result.stdout
+    assert api.http.requests == []
+
+
+def test_ocr_rejects_a_video_data_url_with_its_code(api):
+    result = runner.invoke(app, ["ocr", "data:video/mp4;base64,AAAA"])
+    assert result.exit_code == 1
+    assert "[invalid_data_url]" in result.stdout
+    assert api.http.requests == []
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ([], ("https://fal.run/perceptron/isaac-01/openai/v1/chat/completions", "Key sk-test", "isaac-0.1")),
+        (
+            ["--provider", "perceptron", "--model", "perceptron-mk1.5"],
+            ("https://api.perceptron.inc/v1/chat/completions", "Bearer sk-test", "perceptron-mk1.5"),
+        ),
+    ],
+    ids=["auto-detected-fal", "provider-flag"],
+)
+def test_provider_flag_overrides_the_fal_auto_detect(api, monkeypatch, flags, expected):
+    monkeypatch.delenv("PERCEPTRON_PROVIDER")  # only PERCEPTRON_API_KEY is set
+    result = runner.invoke(app, ["question", "https://example.com/img.png", "Hi", *flags])
+    assert result.exit_code == 0, result.stdout
+    request = api.http.last
+    assert (str(request.url), request.headers["authorization"], api.http.last_body["model"]) == expected
+
+
+def test_directory_mode_reads_only_the_image_formats_the_api_accepts(monkeypatch, tmp_path):
+    (tmp_path / "one.png").write_bytes(b"image-one")
+    (tmp_path / "anim.gif").write_bytes(b"GIF89a")
+    (tmp_path / "scan.tiff").write_bytes(b"II*\x00")
+    seen: list[bytes] = []
+
+    def _fake_caption(data, **kwargs):
+        seen.append(data.obj)
+        return _StubResult("caption")
+
+    monkeypatch.setattr("perceptron.cli.caption_image", _fake_caption)
+    result = runner.invoke(app, ["caption", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    assert seen == [b"image-one"]
+
+
+def test_directory_without_supported_images_names_the_formats(tmp_path):
+    (tmp_path / "anim.gif").write_bytes(b"GIF89a")
+    result = runner.invoke(app, ["detect", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "No image files (.jpeg, .jpg, .png, .webp) found" in result.stdout

@@ -227,6 +227,31 @@ def test_detect_flattens_collection_response(monkeypatch):
     assert res.boxes[1].mention == "named"
 
 
+def test_detect_flattens_track_response_into_timed_boxes(monkeypatch):
+    content = (
+        '<collection mention="player" asset_idx="0"> <track> '
+        '<point_box t="0.0 seconds"> (10,20) (30,40) </point_box> '
+        '<point_box t="0.5 seconds"> (12,20) (32,40) </point_box> </track> </collection>'
+    )
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse({"choices": [{"message": {"content": content}}]})
+
+    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+
+    with cfg(provider="fal", base_url="https://unit.test", api_key="test-key"):
+        res = detect(image(PNG_BYTES), classes=["player"])
+
+    assert [(b.mention, b.t, b.asset_idx) for b in res.boxes] == [("player", 0.0, 0), ("player", 0.5, 0)]
+
+
 def test_detect_from_coco(monkeypatch, tmp_path):
     dataset = tmp_path / "dataset"
     image_dir = dataset / "train" / "images"

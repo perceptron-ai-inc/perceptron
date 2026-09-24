@@ -17,7 +17,8 @@ class _Stub:
         return {"text": "", "raw": {}}
 
 
-def test_polygon_oob_non_strict(monkeypatch):
+@pytest.mark.parametrize("vertex", [(1001, 6), (-1, 6)])
+def test_polygon_oob_non_strict(monkeypatch, vertex):
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
     if PILImage is None:
         pytest.skip("PIL not available")
@@ -25,12 +26,12 @@ def test_polygon_oob_non_strict(monkeypatch):
     @perceive()
     def fn():
         im = image(PILImage.new("RGB", (8, 8)))
-        # One vertex out-of-bounds
-        return im + polygon([(2, 2), (6, 2), (20, 6)], image=im)
+        # One vertex off the normalized 0-1000 grid
+        return im + polygon([(2, 2), (6, 2), vertex], image=im)
 
     with cfg(api_key="test-key", provider="fal"):
         res = fn()
-    assert any(e.get("code") == "bounds_out_of_range" for e in res.errors)
+    assert [e.get("code") for e in res.errors] == ["bounds_out_of_range"]
 
 
 def test_polygon_oob_strict(monkeypatch):
@@ -41,7 +42,43 @@ def test_polygon_oob_strict(monkeypatch):
     @perceive(strict=True)
     def fn():
         im = image(PILImage.new("RGB", (8, 8)))
-        return im + polygon([(2, 2), (6, 2), (20, 6)], image=im)
+        return im + polygon([(2, 2), (6, 2), (1001, 6)], image=im)
 
     with cfg(api_key="test-key", provider="fal"), pytest.raises(ExpectationError):
         fn()
+
+
+def test_polygon_in_grid_on_a_small_image_is_valid(monkeypatch):
+    monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
+    if PILImage is None:
+        pytest.skip("PIL not available")
+
+    @perceive(strict=True)
+    def fn():
+        im = image(PILImage.new("RGB", (8, 8)))
+        return im + polygon([(100, 100), (900, 100), (500, 1000)], image=im)
+
+    with cfg(api_key="test-key", provider="fal"):
+        assert fn().errors == []
+
+
+def test_polygon_needs_three_vertices(monkeypatch):
+    monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
+
+    @perceive()
+    def fn():
+        im = image("https://example.com/a.png")
+        return im + polygon([(1, 1), (2, 2)], image=im)
+
+    with cfg(api_key="test-key", provider="fal"):
+        res = fn()
+    assert [e.get("code") for e in res.errors] == ["invalid_polygon"]
+
+    @perceive(strict=True)
+    def fn_strict():
+        im = image("https://example.com/a.png")
+        return im + polygon([(1, 1), (2, 2)], image=im)
+
+    with cfg(api_key="test-key", provider="fal"), pytest.raises(ExpectationError) as excinfo:
+        fn_strict()
+    assert excinfo.value.code == "invalid_polygon"

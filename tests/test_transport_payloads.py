@@ -536,7 +536,7 @@ def test_enable_audio_in_video_sets_vision_config(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
-    @perceive(enable_audio_in_video=True, model="perceptron-mk1.5-preview", provider="perceptron")
+    @perceive(enable_audio_in_video=True, model="perceptron-mk1.5", provider="perceptron")
     def make_request():
         return text("What is said in the clip?")
 
@@ -574,9 +574,7 @@ def test_enable_audio_in_video_false_is_sent_explicitly(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
-        perceive(
-            text("Describe."), enable_audio_in_video=False, model="perceptron-mk1.5-preview", provider="perceptron"
-        )
+        perceive(text("Describe."), enable_audio_in_video=False, model="perceptron-mk1.5", provider="perceptron")
 
     payload = captured.get("payload", {})
     assert payload.get("vision_config") == {"enable_audio_in_video": False}
@@ -615,7 +613,7 @@ def _capture_payload(monkeypatch) -> dict[str, dict]:
 def test_reasoning_effort_is_sent_top_level(monkeypatch, effort):
     captured = _capture_payload(monkeypatch)
 
-    @perceive(reasoning_effort=effort, model="perceptron-mk1.5-preview", provider="perceptron")
+    @perceive(reasoning_effort=effort, model="perceptron-mk1.5", provider="perceptron")
     def make_request():
         return text("Count the cars.")
 
@@ -633,7 +631,7 @@ def test_reasoning_effort_is_normalized_before_sending(monkeypatch):
     captured = _capture_payload(monkeypatch)
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
-        perceive(text("Describe."), reasoning_effort=" High ", model="perceptron-mk1.5-preview", provider="perceptron")
+        perceive(text("Describe."), reasoning_effort=" High ", model="perceptron-mk1.5", provider="perceptron")
 
     assert captured["payload"]["reasoning_effort"] == "high"
 
@@ -642,7 +640,7 @@ def test_reasoning_effort_absent_by_default(monkeypatch):
     captured = _capture_payload(monkeypatch)
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
-        perceive(text("Describe."), model="perceptron-mk1.5-preview", provider="perceptron")
+        perceive(text("Describe."), model="perceptron-mk1.5", provider="perceptron")
 
     assert "reasoning_effort" not in captured["payload"]
 
@@ -651,7 +649,7 @@ def test_reasoning_effort_outside_the_tiers_fails_before_any_request(monkeypatch
     captured = _capture_payload(monkeypatch)
 
     with cfg(provider="perceptron", base_url="https://mock.api"), pytest.raises(BadRequestError) as excinfo:
-        perceive(text("Describe."), reasoning_effort="extreme", model="perceptron-mk1.5-preview", provider="perceptron")
+        perceive(text("Describe."), reasoning_effort="extreme", model="perceptron-mk1.5", provider="perceptron")
 
     assert excinfo.value.code == INVALID_REASONING_EFFORT
     assert "extreme" in str(excinfo.value)

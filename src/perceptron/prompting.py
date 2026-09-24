@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from .dsl.nodes import Audio, Image, Media, Video
+from .dsl.nodes import Audio, Image, Media, Video, VideoFrames
 
 
 @dataclass(frozen=True)
@@ -25,11 +25,11 @@ class ModalityPrompt:
     def get(self, media: Media) -> str:
         if isinstance(media, Image):
             return self.image
-        if isinstance(media, Video):
+        if isinstance(media, (Video, VideoFrames)):  # video_frames() is a video too
             return self.video
         if isinstance(media, Audio):
             return self.audio if self.audio is not None else self.image
-        raise TypeError(f"ModalityPrompt.get expected Image, Video, or Audio, got {type(media).__name__}")
+        raise TypeError(f"ModalityPrompt.get expected Image, Video, VideoFrames, or Audio, got {type(media).__name__}")
 
 
 @dataclass(frozen=True)
@@ -180,7 +180,7 @@ PROMPT_REGISTRY.register(
     _ISAAC_PROFILE.key,
     _ISAAC_PROFILE,
     is_default=True,
-    aliases=("default", "isaac", "perceptron", "isaac-0.1", "perceptron-mk1"),
+    aliases=("default", "isaac", "perceptron", "isaac-0.1", "perceptron-mk1", "perceptron-mk1.5"),
     prefixes=("isaac-",),
 )
 

@@ -10,17 +10,23 @@ from typing import Any
 class Settings:
     """SDK configuration with environment overlay.
 
-    Provider options: currently only "fal" is bundled, but additional providers can be
-    registered by extending `_PROVIDER_CONFIG` in `perceptron.client`.
+    Providers: ``"perceptron"`` (the Perceptron API, ``https://api.perceptron.inc/v1``; default model
+    ``perceptron-mk1.5``) and ``"fal"`` (``isaac-0.1`` only). The registry is ``perceptron._providers._PROVIDER_CONFIG``.
+
+    When no provider is configured (``configure``/``config``/``PERCEPTRON_PROVIDER``) and ``FAL_KEY`` or
+    ``PERCEPTRON_API_KEY`` is set, ``settings()`` reports provider ``"fal"``: the helpers, ``perceive`` and
+    ``Client.generate``/``stream`` then call fal. Select the Perceptron API with ``configure(provider="perceptron")``
+    or ``PERCEPTRON_PROVIDER=perceptron``. The message API (``client.chat.completions``), ``client.files``,
+    ``client.models`` and multilook ignore that auto-detect: they use the provider you chose, else ``"perceptron"``.
     """
 
-    base_url: str | None = None
+    base_url: str | None = None  # for provider "perceptron" include the /v1 prefix
     api_key: str | None = None
-    provider: str | None = None  # currently "fal"; extensible for custom transports
-    model: str | None = None
+    provider: str | None = None  # "perceptron" or "fal"; None = auto-detect (see above)
+    model: str | None = None  # None = the provider's default model
 
-    timeout: float = 60.0
-    retries: int = 3
+    timeout: float = 60.0  # seconds per request (multilook waits at least 305 s)
+    retries: int = 3  # accepted for compatibility; the SDK does not retry requests
 
     strict: bool = False
     allow_multiple: bool = False
@@ -55,7 +61,8 @@ def _from_env(s: Settings) -> Settings:
     provider = s.provider if "provider" in _explicit_fields else os.getenv("PERCEPTRON_PROVIDER", s.provider)
     model = s.model if "model" in _explicit_fields else os.getenv("PERCEPTRON_MODEL", s.model)
 
-    # Providers - only apply default logic if provider wasn't explicitly set
+    # Legacy auto-detect, kept for compatibility: with no provider configured, any key selects fal (whose env keys
+    # include PERCEPTRON_API_KEY). Only the legacy surfaces read it; see `_providers.surface_provider_cfg`.
     if (
         provider is None
         and "provider" not in _explicit_fields
@@ -86,10 +93,10 @@ def _from_env(s: Settings) -> Settings:
 
 
 def configure(**kwargs: Any) -> None:
-    """Configure global SDK defaults.
+    """Configure global SDK defaults. A configured field wins over its environment variable.
 
     Example:
-        configure(provider="fal", timeout=60)
+        configure(provider="perceptron", api_key="sk_live_...", model="perceptron-mk1.5", timeout=60)
     """
     global _global_settings, _explicit_fields
     for k, v in kwargs.items():

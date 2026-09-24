@@ -28,7 +28,7 @@ def test_anchoring_single_image_implicit_no_issue(monkeypatch):
     def fn():
         im = image(PILImage.new("RGB", (8, 8)))
         # implicit anchor to the single image present
-        return im + point(9, 9)  # out-of-bounds; will be caught below in bounds test
+        return im + point(9, 9)
 
     with cfg(api_key="test-key", provider="fal"):
         res = fn()
@@ -62,7 +62,10 @@ def test_anchoring_multi_image_missing_anchor(monkeypatch):
         fn_strict()
 
 
-def test_bounds_point_out_of_bounds(monkeypatch):
+# Coordinates live on the normalized 0-1000 grid, whatever the image's pixel size (8x8 here).
+
+
+def test_bounds_point_out_of_range(monkeypatch):
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
     if PILImage is None:
         pytest.skip("PIL not available")
@@ -70,7 +73,7 @@ def test_bounds_point_out_of_bounds(monkeypatch):
     @perceive()
     def fn_non_strict():
         im = image(PILImage.new("RGB", (8, 8)))
-        return im + point(9, 9, image=im)  # OOB
+        return im + point(1001, 5, image=im)
 
     with cfg(api_key="test-key", provider="fal"):
         res = fn_non_strict()
@@ -79,13 +82,14 @@ def test_bounds_point_out_of_bounds(monkeypatch):
     @perceive(strict=True)
     def fn_strict():
         im = image(PILImage.new("RGB", (8, 8)))
-        return im + point(9, 9, image=im)
+        return im + point(1001, 5, image=im)
 
     with cfg(api_key="test-key", provider="fal"), pytest.raises(ExpectationError):
         fn_strict()
 
 
-def test_bounds_box_out_of_bounds(monkeypatch):
+@pytest.mark.parametrize("coords", [(0, 0, 1001, 10), (800, 800, 100, 100)], ids=["out_of_range", "unordered"])
+def test_bounds_box_out_of_range_or_unordered(monkeypatch, coords):
     monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
     if PILImage is None:
         pytest.skip("PIL not available")
@@ -93,7 +97,7 @@ def test_bounds_box_out_of_bounds(monkeypatch):
     @perceive()
     def fn_non_strict():
         im = image(PILImage.new("RGB", (8, 8)))
-        return im + box(0, 0, 10, 10, image=im)
+        return im + box(*coords, image=im)
 
     with cfg(api_key="test-key", provider="fal"):
         res = fn_non_strict()
@@ -102,7 +106,22 @@ def test_bounds_box_out_of_bounds(monkeypatch):
     @perceive(strict=True)
     def fn_strict():
         im = image(PILImage.new("RGB", (8, 8)))
-        return im + box(0, 0, 10, 10, image=im)
+        return im + box(*coords, image=im)
 
     with cfg(api_key="test-key", provider="fal"), pytest.raises(ExpectationError):
         fn_strict()
+
+
+def test_grid_coordinates_on_a_small_image_are_valid(monkeypatch):
+    monkeypatch.setattr(client_mod.Client, "generate", _Stub.generate)
+    if PILImage is None:
+        pytest.skip("PIL not available")
+
+    @perceive(strict=True)
+    def fn():
+        im = image(PILImage.new("RGB", (8, 8)))
+        return im + point(500, 500, image=im) + box(0, 0, 1000, 1000, image=im)
+
+    with cfg(api_key="test-key", provider="fal"):
+        res = fn()
+    assert res.errors == []

@@ -1,24 +1,27 @@
 """DSL compiler and `@perceive` decorator.
 
-Compiles typed nodes (text/image/point/box/polygon) into a Task shape and
-optionally executes it via the Client. Performs compile-time validation of
-anchoring and bounds, returning issues (non-strict) or raising (strict).
+Compiles typed nodes (text/image/video/audio/video_frames/point/box/polygon) into
+a Task shape and optionally executes it via the Client. Performs compile-time
+validation of anchoring (``asset_idx``) and of coordinates on the normalized
+0-1000 grid, returning issues (non-strict) or raising (strict).
 
 PerceiveResult
 - text: final text (if executed)
 - points: list of parsed pointing objects if `expects` set and present
 - parsed: ordered segments mixing text and all tags with spans
-- errors: semantic/validation issues from compilation/streaming
-- raw: provider response or compiled Task for compile-only
+- errors: semantic/validation issues from compilation, and parse issues in the answer
+- raw: the provider response
+- finish_reason, tool_calls, usage, id, model, request_id, message: completion metadata (see `PerceiveResult`)
 """
 
 from __future__ import annotations
 
 import base64
 import inspect
+import numbers
 import os
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -34,9 +37,25 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore
 
-from ..client import _PROVIDER_CONFIG, AsyncClient, Client, ResponseFormat, _inject_expectation_hint
+from .._lowering import MEDIA_PART_TYPES, entry_to_part
+from ..chat import _COMPLETE_FINISH_REASONS, ChatCompletionMessage, ToolCall
+from ..client import (
+    _PROVIDER_CONFIG,
+    AsyncClient,
+    Client,
+    ResponseFormat,
+    _inject_expectation_hint,
+    _reject_unexpected_kwargs,
+)
 from ..config import settings
 from ..errors import (
+    ANCHOR_AMBIGUOUS,
+    ANCHOR_MISSING,
+    ANCHOR_UNKNOWN,
+    BOUNDS_OUT_OF_RANGE,
+    INVALID_MEDIA_PATH,
+    INVALID_PARAMETER,
+    INVALID_POLYGON,
     REASONING_DISABLED_FOR_THINKING_MODEL,
     REASONING_NOT_SUPPORTED,
     REASONING_REQUIRED_FOR_MODEL,
@@ -44,9 +63,11 @@ from ..errors import (
     AuthError,
     BadRequestError,
     ExpectationError,
+    SDKError,
 )
-from ..pointing.geometry import scale_points_to_pixels
-from ..pointing.parser import PointParser_serialize
+from ..files import _is_mp3_frame
+from ..pointing.geometry import NORMALIZED_COORD_MAX, scale_points_to_pixels
+from ..pointing.parser import PointParser_serialize, resolve_asset_idx
 from ..pointing.types import BoundingBox, Clip, Polygon, SinglePoint
 from .nodes import (
     Agent,
@@ -54,6 +75,9 @@ from .nodes import (
     Sequence,
     System,
     Text,
+    ToolResult,
+    VideoFrame,
+    _frame_image,
 )
 from .nodes import (
     Audio as AudioNode,
@@ -73,6 +97,14 @@ from .nodes import (
 from .nodes import (
     Video as VideoNode,
 )
+from .nodes import (
+    VideoFrames as VideoFramesNode,
+)
+
+# Media nodes; each takes the next `asset_idx` (images in tool results do too).
+_MEDIA_NODES = (ImageNode, VideoNode, AudioNode, VideoFramesNode)
+_TAG_NODES = (PointTagNode, BoxTagNode, PolygonTagNode)
+_POLYGON_MIN_VERTICES = 3
 
 _IMAGE_SIGNATURES = (
     b"\x89PNG\r\n\x1a\n",
@@ -135,19 +167,38 @@ def _encode_bytes(data: bytes) -> tuple[str, dict[str, Any]]:
     return b64, meta
 
 
+def _is_passthrough_url(obj: Any) -> bool:
+    """True for an http(s) or ``data:`` URL, which is sent as given rather than read and encoded."""
+    return isinstance(obj, str) and (obj.startswith("data:") or urlparse(obj).scheme in {"http", "https"})
+
+
+def _read_media_file(path: str | Path, kind: str) -> tuple[Path, bytes]:
+    """Read a local media file; I/O failures become ``BadRequestError(code="invalid_media_path")``."""
+    p = Path(path)
+    try:
+        return p, p.read_bytes()
+    except (OSError, ValueError) as exc:  # ValueError: e.g. an embedded null byte
+        reason = getattr(exc, "strerror", None) or str(exc)
+        raise BadRequestError(
+            f"Could not read {kind} file {str(p)[:200]!r}: {reason}",
+            code=INVALID_MEDIA_PATH,
+            details={"origin": str(p)},
+        ) from exc
+
+
 def _to_b64_image(obj: Any) -> tuple[str, dict]:
     """Return base64 string and metadata with width/height.
 
-    Accepts: Path/str (path or http/https URL), bytes, file-like, PIL.Image.Image, numpy.ndarray (HxWxC, uint8)
+    Accepts: Path/str (path, http/https URL or data URL), bytes, file-like, PIL.Image.Image, numpy.ndarray
+    (HxWxC, uint8). URLs are returned verbatim with ``meta["url"]=True``, like video and audio URLs.
     """
     meta: dict[str, Any] = {}
 
-    if isinstance(obj, str) and urlparse(obj).scheme in {"http", "https"}:
-        return obj, {}
+    if _is_passthrough_url(obj):
+        return obj, {"url": True}
 
     if isinstance(obj, (str, Path)):
-        p = Path(obj)
-        data = p.read_bytes()
+        p, data = _read_media_file(obj, "image")
         meta = _validate_image_bytes(data, origin=str(p))
         b64 = base64.b64encode(data).decode("ascii")
         return b64, meta
@@ -194,20 +245,19 @@ def _detect_video_format(data: bytes) -> str | None:
 def _to_b64_video(obj: Any) -> tuple[str, dict[str, Any]]:
     """Return (base64-or-URL, metadata).
 
-    Accepts: Path/str (path or http/https URL) or bytes. URLs are returned
-    verbatim with ``meta["url"]=True``; bytes are base64-encoded and the
-    format is detected from magic bytes (mp4 / webm).
+    Accepts: Path/str (path, http/https URL or data URL) or bytes. URLs are
+    returned verbatim with ``meta["url"]=True``; bytes are base64-encoded and
+    the format is detected from magic bytes (mp4 / webm).
     """
 
     meta: dict[str, Any] = {}
 
-    if isinstance(obj, str) and urlparse(obj).scheme in {"http", "https"}:
+    if _is_passthrough_url(obj):
         meta["url"] = True
         return obj, meta
 
     if isinstance(obj, (str, Path)):
-        p = Path(obj)
-        data = p.read_bytes()
+        p, data = _read_media_file(obj, "video")
         fmt = _detect_video_format(data)
         if fmt is None:
             raise BadRequestError(
@@ -234,7 +284,6 @@ def _to_b64_video(obj: Any) -> tuple[str, dict[str, Any]]:
 
 
 _WAV_SIGNATURE_LENGTH = 12
-_MP3_FRAME_SYNC = b"\xff\xe0"
 
 
 def _is_wav(data: bytes) -> bool:
@@ -242,10 +291,9 @@ def _is_wav(data: bytes) -> bool:
 
 
 def _is_mp3(data: bytes) -> bool:
-    # ID3v2 tag, or a bare MPEG frame sync (first 11 bits set)
-    if data.startswith(b"ID3"):
-        return True
-    return len(data) >= len(_MP3_FRAME_SYNC) and bytes([data[0], data[1] & _MP3_FRAME_SYNC[1]]) == _MP3_FRAME_SYNC
+    # ID3v2 tag, or an MPEG Layer III frame header as the server checks it (ADTS AAC and MPEG Layer I/II audio share
+    # the frame sync but are not MP3)
+    return data.startswith(b"ID3") or _is_mp3_frame(data)
 
 
 def _detect_audio_format(data: bytes) -> str | None:
@@ -263,20 +311,19 @@ def _detect_audio_format(data: bytes) -> str | None:
 def _to_b64_audio(obj: Any) -> tuple[str, dict[str, Any]]:
     """Return (base64-or-URL, metadata).
 
-    Accepts: Path/str (path or http/https URL) or bytes. URLs are returned
-    verbatim with ``meta["url"]=True``; bytes are base64-encoded and the
-    format is detected from magic bytes (wav / mp3 / flac).
+    Accepts: Path/str (path, http/https URL or data URL) or bytes. URLs are
+    returned verbatim with ``meta["url"]=True``; bytes are base64-encoded and
+    the format is detected from magic bytes (wav / mp3 / flac).
     """
 
     meta: dict[str, Any] = {}
 
-    if isinstance(obj, str) and urlparse(obj).scheme in {"http", "https"}:
+    if _is_passthrough_url(obj):
         meta["url"] = True
         return obj, meta
 
     if isinstance(obj, (str, Path)):
-        p = Path(obj)
-        data = p.read_bytes()
+        p, data = _read_media_file(obj, "audio")
         fmt = _detect_audio_format(data)
         if fmt is None:
             raise BadRequestError(
@@ -302,31 +349,248 @@ def _to_b64_audio(obj: Any) -> tuple[str, dict[str, Any]]:
     raise TypeError(f"Unsupported audio object: {type(obj)}")
 
 
-def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) -> tuple[dict, list[dict]]:
-    """Compile DSL nodes into a Task JSON and return (task, issues)."""
-    seq = nodes if isinstance(nodes, Sequence) else Sequence([nodes])
-    content: list[dict[str, Any]] = []
-    image_nodes: list[ImageNode] = [n for n in seq.nodes if isinstance(n, ImageNode)]
-    total_images = len(image_nodes)
-    image_dims: dict[int, tuple[int | None, int | None]] = {}
-    last_image_seen: ImageNode | None = None
-    issues: list[dict] = []
+def _media_entry(node: ImageNode | VideoNode | AudioNode, *, role: str = "user") -> dict[str, Any]:
+    """The task entry for an image, video or audio node: an uploaded file's id, a URL passed through, or base64."""
+    kind = "image" if isinstance(node, ImageNode) else "video" if isinstance(node, VideoNode) else "audio"
+    if node.file_id is not None:
+        return {"type": kind, "role": role, "file_id": node.file_id}
+    if kind == "image":
+        b64, meta = _to_b64_image(node.obj)
+        return {
+            "type": "image",
+            "role": role,
+            "content": b64,
+            "format": meta.get("format"),
+            "metadata": {
+                "width": meta.get("width"),
+                "height": meta.get("height"),
+            },
+            # This check decides what is a URL (not the lowering's prefix fallback), as for video and audio.
+            **({"url": True} if meta.get("url") else {}),
+        }
+    payload, meta = (_to_b64_video if kind == "video" else _to_b64_audio)(node.obj)
+    return {
+        "type": kind,
+        "role": role,
+        "content": payload,
+        "format": meta.get("format"),
+        "url": bool(meta.get("url")),
+    }
 
-    def resolve_dims(
-        img_node: ImageNode | None,
-    ) -> tuple[int | None, int | None] | None:
-        if img_node is None:
-            return None
-        dims = image_dims.get(id(img_node))
-        if dims is not None:
-            return dims
-        try:
-            _, meta = _to_b64_image(img_node.obj)
-            dims = (meta.get("width"), meta.get("height"))
-            image_dims[id(img_node)] = dims
-            return dims
-        except Exception:
-            return (None, None)
+
+def _frame_entry(frame: VideoFrame) -> dict[str, Any]:
+    """A ``video_frames`` frame: its image as a URL (data URL for local images), or an uploaded file's id."""
+    node = _frame_image(frame.image)
+    if node.file_id is not None:
+        return {"file_id": node.file_id, "timestamp_ms": frame.timestamp_ms}
+    part = entry_to_part(_media_entry(node))  # the same URL an image(...) of this frame would send
+    return {"url": part["image_url"]["url"], "timestamp_ms": frame.timestamp_ms}
+
+
+def _video_frames_entry(node: VideoFramesNode) -> dict[str, Any]:
+    return {"type": "video_frames", "role": "user", "frames": [_frame_entry(frame) for frame in node.frames]}
+
+
+def _tool_call_dict(call: Any) -> dict[str, Any]:
+    if isinstance(call, Mapping):
+        return dict(call)
+    to_dict = getattr(call, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    raise TypeError(f"agent() tool_calls must be ToolCall objects or tool call dicts; got {type(call).__name__}")
+
+
+def _agent_entry(node: Agent) -> dict[str, Any]:
+    """A plain assistant text entry (merged like other text), or a standalone ``assistant_turn`` for a replayed turn."""
+    if node.tool_calls is None and node.reasoning_content is None and isinstance(node.content, str):
+        return {"type": "text", "role": "assistant", "content": node.content}
+    tool_calls = node.tool_calls
+    if tool_calls is not None and not isinstance(tool_calls, (list, tuple)):
+        raise TypeError(f"agent() tool_calls must be a list; got {type(tool_calls).__name__}")
+    if node.content is None and not tool_calls and node.reasoning_content is None:
+        # The API rejects an assistant message with none of these.
+        raise TypeError("agent() needs content, tool_calls or reasoning_content")
+    return {
+        "type": "assistant_turn",
+        "role": "assistant",
+        "content": node.content,
+        "tool_calls": [_tool_call_dict(call) for call in tool_calls] if tool_calls else None,
+        "reasoning_content": node.reasoning_content,
+    }
+
+
+def _tool_result_entry(node: ToolResult) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for item in node.content:
+        if isinstance(item, Text):
+            items.append({"type": "text", "role": "tool", "content": item.content})
+        elif isinstance(item, ImageNode):
+            items.append(_media_entry(item, role="tool"))
+        else:
+            raise TypeError(f"Tool results may contain only text and images; got {type(item).__name__}")
+    return {"type": "tool_result", "role": "tool", "tool_call_id": node.tool_call_id, "content": items}
+
+
+@dataclass
+class _AssetLedger:
+    """Media assets numbered in wire order (the ``asset_idx`` space): ``uses`` maps ``id(node)`` to the index of each
+    use of a media node, and ``count`` is the number of assets."""
+
+    uses: dict[int, list[int]] = field(default_factory=dict)
+    count: int = 0
+
+
+def _media_items(item: Any) -> list[Any]:
+    """The media assets ``item`` puts on the wire, in order: a media node, the images of a tool result, the media of a
+    sequence, or a media part given as a wire dict (in chat message content)."""
+    if isinstance(item, Sequence):
+        return [media for node in item.nodes for media in _media_items(node)]
+    if isinstance(item, ToolResult):
+        return [node for node in item.content if isinstance(node, ImageNode)]
+    if isinstance(item, _MEDIA_NODES) or (isinstance(item, dict) and item.get("type") in MEDIA_PART_TYPES):
+        return [item]
+    return []
+
+
+def _asset_ledger(items: Iterable[Any]) -> _AssetLedger:
+    """Number the media assets of ``items`` in wire order: image, video, audio and video_frames nodes, images inside
+    tool results, and media part dicts share one counter."""
+    ledger = _AssetLedger()
+    for item in items:
+        for media in _media_items(item):
+            ledger.uses.setdefault(id(media), []).append(ledger.count)
+            ledger.count += 1
+    return ledger
+
+
+def _anchor(
+    node: PointTagNode | BoxTagNode | PolygonTagNode, seen: int, ledger: _AssetLedger
+) -> tuple[int | None, dict[str, str] | None]:
+    """The ``asset_idx`` to write for a tag that follows ``seen`` media assets, and an anchoring issue (or None).
+
+    The index is written only when the prompt has more than one media asset, or when given raw with ``asset_idx=``
+    (always written); a single-asset prompt keeps its markup unchanged. ``image=``/``asset=`` is looked up by identity:
+    a node used more than once resolves to its latest use before the tag (else its first use after it).
+    """
+    n_assets = ledger.count
+    if node.asset_idx is not None:
+        issue = None
+        if node.asset_idx >= n_assets:
+            issue = {
+                "code": ANCHOR_UNKNOWN,
+                "message": f"asset_idx={node.asset_idx} is out of range: the prompt has {n_assets} media asset(s)",
+            }
+        return node.asset_idx, issue
+    target = node.asset if node.asset is not None else node.image
+    if target is None:
+        if n_assets == 1:
+            return None, None
+        if n_assets == 0:
+            message = "Tag has no media asset to refer to"
+        else:
+            message = "Tag missing image=/asset= in a multi-asset prompt"
+        return None, {"code": ANCHOR_MISSING, "message": message}
+    if not isinstance(target, _MEDIA_NODES):
+        return None, {
+            "code": ANCHOR_MISSING,
+            "message": "image=/asset= must reference an image(), video(), audio() or video_frames() node",
+        }
+    uses = ledger.uses.get(id(target))
+    if not uses:
+        return None, {
+            "code": ANCHOR_UNKNOWN,
+            "message": "image=/asset= references a media node that is not part of this prompt",
+        }
+    before = [asset_idx for asset_idx in uses if asset_idx < seen]
+    asset_idx = before[-1] if before else uses[0]
+    issue = None
+    if len(uses) > 1:
+        issue = {
+            "code": ANCHOR_AMBIGUOUS,
+            "message": f"image=/asset= references a media node used {len(uses)} times in this prompt; "
+            f"anchored to asset_idx {asset_idx}",
+        }
+    return (asset_idx if n_assets > 1 else None), issue
+
+
+def _report(issues: list[dict], issue: dict[str, str], *, strict: bool, error: type[SDKError]) -> None:
+    if strict:
+        raise error(issue["message"], code=issue["code"], details=issue)
+    issues.append(issue)
+
+
+def _grid_coord(value: Any) -> int | None:
+    """``value`` as a coordinate of the normalized 0-1000 grid, or None (bools, non-integers, out of range)."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return None
+    if not isinstance(value, numbers.Integral) and not float(value).is_integer():
+        return None
+    coord = int(value)
+    return coord if 0 <= coord <= NORMALIZED_COORD_MAX else None
+
+
+def _grid_point(label: str, x: Any, y: Any, issues: list[dict], *, strict: bool) -> tuple[SinglePoint, bool]:
+    """A vertex checked against the 0-1000 grid, and whether it is valid. Integral floats become ints; an invalid
+    vertex is reported and written as given."""
+    gx, gy = _grid_coord(x), _grid_coord(y)
+    if gx is None or gy is None:
+        issue = {
+            "code": BOUNDS_OUT_OF_RANGE,
+            "message": f"{label} ({x},{y}) outside the 0-1000 normalized grid (coordinates are integers 0-1000)",
+        }
+        _report(issues, issue, strict=strict, error=ExpectationError)
+        return SinglePoint(x, y), False
+    return SinglePoint(gx, gy), True
+
+
+def _tag_markup(
+    node: PointTagNode | BoxTagNode | PolygonTagNode, asset_idx: int | None, issues: list[dict], *, strict: bool
+) -> str:
+    """Serialize a tag; coordinates are validated on the normalized grid, independent of any image's pixel size."""
+    context: dict[str, Any] = {"mention": node.mention, "t": node.t, "asset_idx": asset_idx}
+    if isinstance(node, PointTagNode):
+        p, _ = _grid_point("point", node.x, node.y, issues, strict=strict)
+        return PointParser_serialize(SinglePoint(p.x, p.y, **context))
+    if isinstance(node, BoxTagNode):
+        a, a_ok = _grid_point("box corner", node.x1, node.y1, issues, strict=strict)
+        b, b_ok = _grid_point("box corner", node.x2, node.y2, issues, strict=strict)
+        if a_ok and b_ok and (a.x > b.x or a.y > b.y):
+            issue = {
+                "code": BOUNDS_OUT_OF_RANGE,
+                "message": f"box ({a.x},{a.y}) ({b.x},{b.y}) needs x1 <= x2 and y1 <= y2 (top-left corner first)",
+            }
+            _report(issues, issue, strict=strict, error=ExpectationError)
+        return PointParser_serialize(BoundingBox(a, b, **context))
+    if len(node.coords) < _POLYGON_MIN_VERTICES:
+        issue = {
+            "code": INVALID_POLYGON,
+            "message": f"polygon needs at least {_POLYGON_MIN_VERTICES} vertices; got {len(node.coords)}",
+        }
+        _report(issues, issue, strict=strict, error=ExpectationError)
+    hull = [_grid_point("polygon vertex", x, y, issues, strict=strict)[0] for (x, y) in node.coords]
+    return PointParser_serialize(Polygon(hull, **context))
+
+
+def _compile(
+    nodes: DSLNode | Sequence,
+    *,
+    expects: str | None,
+    strict: bool,
+    ledger: _AssetLedger | None = None,
+    first_asset: int = 0,
+) -> tuple[dict, list[dict]]:
+    """Compile DSL nodes into a Task JSON and return (task, issues).
+
+    Media assets are numbered first (see ``_asset_ledger``) so a tag can anchor to an asset that comes after it. For
+    nodes that are one part of a larger request (DSL nodes in chat message content), ``ledger`` numbers the whole
+    request's assets and ``first_asset`` is the index of the first asset here.
+    """
+    seq = nodes if isinstance(nodes, Sequence) else Sequence([nodes])
+    if ledger is None:
+        ledger = _asset_ledger(seq.nodes)
+    seen = first_asset  # media assets before the current node
+    content: list[dict[str, Any]] = []
+    issues: list[dict] = []
 
     for node in seq.nodes:
         if isinstance(node, Text):
@@ -334,126 +598,22 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
         elif isinstance(node, System):
             content.append({"type": "text", "role": "system", "content": node.content})
         elif isinstance(node, Agent):
-            content.append({"type": "text", "role": "assistant", "content": node.content})
-        elif isinstance(node, ImageNode):
-            b64, meta = _to_b64_image(node.obj)
-            image_dims[id(node)] = (meta.get("width"), meta.get("height"))
-            last_image_seen = node
-            content.append(
-                {
-                    "type": "image",
-                    "role": "user",
-                    "content": b64,
-                    "format": meta.get("format"),
-                    "metadata": {
-                        "width": meta.get("width"),
-                        "height": meta.get("height"),
-                    },
-                }
-            )
-        elif isinstance(node, VideoNode):
-            payload, meta = _to_b64_video(node.obj)
-            content.append(
-                {
-                    "type": "video",
-                    "role": "user",
-                    "content": payload,
-                    "format": meta.get("format"),
-                    "url": bool(meta.get("url")),
-                }
-            )
-        elif isinstance(node, AudioNode):
-            payload, meta = _to_b64_audio(node.obj)
-            content.append(
-                {
-                    "type": "audio",
-                    "role": "user",
-                    "content": payload,
-                    "format": meta.get("format"),
-                    "url": bool(meta.get("url")),
-                }
-            )
-        elif isinstance(node, (PointTagNode, BoxTagNode, PolygonTagNode)):
-            ref: ImageNode | None = node.image
-            dims = None
-            if ref is None:
-                if total_images == 1 and last_image_seen is not None:
-                    ref = last_image_seen
-                    dims = resolve_dims(ref)
-                else:
-                    issue = {
-                        "code": "anchor_missing",
-                        "message": "Tag missing image= in multi-image context",
-                    }
-                    if strict:
-                        raise AnchorError(issue["message"], code=issue.get("code"), details=issue)
-                    issues.append(issue)
-            elif isinstance(ref, ImageNode):
-                dims = resolve_dims(ref)
-            else:
-                issue = {
-                    "code": "anchor_missing",
-                    "message": "image= must reference an image(...) node",
-                }
-                if strict:
-                    raise AnchorError(issue["message"], code=issue.get("code"), details=issue)
-                issues.append(issue)
-
-            if isinstance(node, PointTagNode):
-                obj = SinglePoint(node.x, node.y, mention=node.mention, t=node.t)
-                if dims and all(d is not None for d in dims):
-                    w, h = dims
-                    if not (0 <= obj.x <= (w - 1) and 0 <= obj.y <= (h - 1)):
-                        issue = {
-                            "code": "bounds_out_of_range",
-                            "message": f"point ({obj.x},{obj.y}) outside image bounds ({w}x{h})",
-                        }
-                        if strict:
-                            raise ExpectationError(issue["message"], code=issue.get("code"), details=issue)
-                        issues.append(issue)
-                tag = PointParser_serialize(obj)
-            elif isinstance(node, BoxTagNode):
-                obj = BoundingBox(
-                    SinglePoint(node.x1, node.y1),
-                    SinglePoint(node.x2, node.y2),
-                    mention=node.mention,
-                    t=node.t,
-                )
-                if dims and all(d is not None for d in dims):
-                    w, h = dims
-                    x1, y1 = obj.top_left.x, obj.top_left.y
-                    x2, y2 = obj.bottom_right.x, obj.bottom_right.y
-                    ok = (0 <= x1 <= x2 <= (w - 1)) and (0 <= y1 <= y2 <= (h - 1))
-                    if not ok:
-                        issue = {
-                            "code": "bounds_out_of_range",
-                            "message": f"box coords out of bounds or invalid for image ({w}x{h})",
-                        }
-                        if strict:
-                            raise ExpectationError(issue["message"], code=issue.get("code"), details=issue)
-                        issues.append(issue)
-                tag = PointParser_serialize(obj)
-            else:
-                obj = Polygon(
-                    [SinglePoint(x, y) for (x, y) in node.coords],
-                    mention=node.mention,
-                    t=node.t,
-                )
-                if dims and all(d is not None for d in dims):
-                    w, h = dims
-                    for p in obj.hull:
-                        if not (0 <= p.x <= (w - 1) and 0 <= p.y <= (h - 1)):
-                            issue = {
-                                "code": "bounds_out_of_range",
-                                "message": f"polygon contains point ({p.x},{p.y}) outside image bounds ({w}x{h})",
-                            }
-                            if strict:
-                                raise ExpectationError(issue["message"], code=issue.get("code"), details=issue)
-                            issues.append(issue)
-                tag = PointParser_serialize(obj)
+            content.append(_agent_entry(node))
+        elif isinstance(node, ToolResult):
+            content.append(_tool_result_entry(node))
+        elif isinstance(node, (ImageNode, VideoNode, AudioNode)):
+            content.append(_media_entry(node))
+        elif isinstance(node, VideoFramesNode):
+            content.append(_video_frames_entry(node))
+        elif isinstance(node, _TAG_NODES):
+            asset_idx, issue = _anchor(node, seen, ledger)
+            if issue is not None:
+                _report(issues, issue, strict=strict, error=AnchorError)
+            tag = _tag_markup(node, asset_idx, issues, strict=strict)
             content.append({"type": "text", "role": "user", "content": tag})
         else:
             raise TypeError(f"Unknown node type: {type(node)}")
+        seen += len(_media_items(node))
 
     task = {"content": content, "expects": expects}
     return task, issues
@@ -461,6 +621,19 @@ def _compile(nodes: DSLNode | Sequence, *, expects: str | None, strict: bool) ->
 
 @dataclass
 class PerceiveResult:
+    """The result of running a prompt.
+
+    ``points``/``boxes``/``polygons``/``clips`` hold the ``expects`` kind, flattened: collection children and track
+    waypoints included, each with the ``mention``/``t``/``asset_idx`` its markup gives it; ``tracks`` (every track, for
+    any structured ``expects``) and ``parsed`` keep the tree. Malformed markup is listed in ``errors`` (``strict=True``
+    raises ``ParseError`` with ``request_id`` and the answer as ``partial``).
+    ``usage`` is the server's usage object as sent (e.g. ``prompt_tokens_details.audio_tokens``), or None.
+    ``finish_reason`` is ``stop``, ``tool_calls``, ``length``, ...; ``tool_calls`` are the calls the model asked you to
+    run (execute them only when ``complete``); ``request_id`` is the ``x-trace-id`` response header; ``message`` is the
+    assistant message (``as_agent()`` replays it in a follow-up prompt); ``asset_count`` is the number of media assets
+    in the request (the ``asset_idx`` space; see ``resolve_asset_idx``).
+    """
+
     text: str | None
     points: list[SinglePoint] | None
     boxes: list[BoundingBox] | None
@@ -471,6 +644,35 @@ class PerceiveResult:
     usage: dict | None
     errors: list[dict]
     raw: Any
+    finish_reason: str | None = field(default=None, kw_only=True)
+    tool_calls: list[ToolCall] | None = field(default=None, kw_only=True)
+    id: str | None = field(default=None, kw_only=True)
+    model: str | None = field(default=None, kw_only=True)
+    request_id: str | None = field(default=None, kw_only=True)
+    tracks: list[Any] | None = field(default=None, kw_only=True)
+    message: ChatCompletionMessage | None = field(default=None, kw_only=True)
+    asset_count: int | None = field(default=None, kw_only=True)
+
+    @property
+    def complete(self) -> bool:
+        """True for a finished answer: ``stop``/``tool_calls``/``interrupted``, with tool calls present exactly when
+        ``finish_reason == "tool_calls"``. ``length`` (cut off) is incomplete."""
+        finish_reason = self.finish_reason
+        return finish_reason in _COMPLETE_FINISH_REASONS and (finish_reason == "tool_calls") == bool(self.tool_calls)
+
+    def as_agent(self) -> Agent:
+        """This answer as an ``agent(...)`` node (with its tool calls and reasoning), to replay it in a follow-up
+        prompt followed by one ``tool_result(...)`` per call."""
+        message = self.message
+        if message is None:
+            return Agent(self.text, tool_calls=self.tool_calls, reasoning_content=self.reasoning)
+        return Agent(message.content, tool_calls=message.tool_calls, reasoning_content=message.reasoning_content)
+
+    def resolve_asset_idx(self, annotation: Any) -> int | None:
+        """The request asset an annotation from this result refers to: its own (or inherited) ``asset_idx``, else the
+        last asset (``asset_count - 1``). ``ValueError`` when the ``asset_idx`` is out of range; None without assets.
+        Bucket items (``points``, ``boxes``, ...) already carry their container's selector."""
+        return resolve_asset_idx(annotation, self.asset_count)
 
     def points_to_pixels(self, width: int, height: int, *, clamp: bool = True) -> list[SinglePoint] | None:
         """Return a pixel-space copy of ``points`` given the image dimensions."""
@@ -488,60 +690,58 @@ class PerceiveResult:
         return scale_points_to_pixels(self.polygons, width=width, height=height, clamp=clamp)
 
 
+def _client_options(**options: Any) -> dict[str, Any]:
+    """The generation options ``perceive`` forwards to the client: only those set, and ``strict`` only when True.
+
+    ``allow_multiple``/``max_outputs`` are not among them: they never changed the request.
+    """
+    if not options.get("strict"):
+        options.pop("strict", None)
+    return {name: value for name, value in options.items() if value is not None}
+
+
+def _stream_only_options(stream: bool, stream_options: Any) -> Any:
+    """``stream_options`` for the client; it only applies to streams, so passing it without ``stream=True`` raises."""
+    if stream_options is not None and not stream:
+        raise BadRequestError(
+            "stream_options applies only to streaming requests; pass stream=True.",
+            code=INVALID_PARAMETER,
+            param="stream_options",
+        )
+    return stream_options
+
+
 def _prepare_client_kwargs(
     *,
     provider_override: str | None,
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
-    enable_audio_in_video: bool | None,
-    reasoning_effort: str | None,
-    allow_multiple: bool,
-    max_outputs: int | None,
-    temperature: float | None,
-    max_tokens: int | None,
-    top_p: float | None,
-    top_k: int | None,
-    frequency_penalty: float | None,
-    presence_penalty: float | None,
-    response_format: ResponseFormat | None,
+    options: dict[str, Any],
 ):
     env = settings()
     resolved_provider = provider_override or env.provider
-    provider_name = resolved_provider or "fal"
+    provider_name = _provider_key(resolved_provider)
     reasoning_enabled = reasoning if reasoning is not None else _expects_reasoning(expects)
     client_kwargs: dict[str, Any] = {
         "expects": expects,
         "provider": provider_name,
-        "allow_multiple": allow_multiple,
-        "max_outputs": max_outputs,
     }
     if reasoning_enabled:
         client_kwargs["reasoning"] = True
-    if enable_audio_in_video is not None:
-        client_kwargs["enable_audio_in_video"] = enable_audio_in_video
-    if reasoning_effort is not None:
-        client_kwargs["reasoning_effort"] = reasoning_effort
     if model_override is not None:
         client_kwargs["model"] = model_override
-    if response_format is not None:
-        client_kwargs["response_format"] = response_format
-    if temperature is not None:
-        client_kwargs["temperature"] = temperature
-    if max_tokens is not None:
-        client_kwargs["max_tokens"] = max_tokens
-    if top_p is not None:
-        client_kwargs["top_p"] = top_p
-    if top_k is not None:
-        client_kwargs["top_k"] = top_k
-    if frequency_penalty is not None:
-        client_kwargs["frequency_penalty"] = frequency_penalty
-    if presence_penalty is not None:
-        client_kwargs["presence_penalty"] = presence_penalty
+    client_kwargs.update(options)
     return env, resolved_provider, provider_name, client_kwargs
 
 
-def _maybe_compile_only_result(
+def _provider_key(provider: str | None) -> str:
+    """The registry key of a provider name (case-insensitive, like the client's); no provider means ``fal``."""
+    provider = provider or "fal"
+    return provider.lower() if isinstance(provider, str) else provider
+
+
+def _require_credentials(
     *,
     stream: bool,
     resolved_provider: str | None,
@@ -549,29 +749,68 @@ def _maybe_compile_only_result(
     env,
     issues: list[dict],
     task: dict,
-):
-    if resolved_provider is None or not _has_credentials(provider_name, env):
-        errors_with_hint = [*issues, _credentials_issue(provider_name)]
-        issue = errors_with_hint[-1]
-        raise AuthError(
-            issue["message"],
-            code=issue.get("code"),
-            details={"task": task, "errors": errors_with_hint, "stream": stream, "provider": provider_name},
-        )
+) -> None:
+    """Raise ``AuthError`` (code ``credentials_missing``) when no provider is configured or it has no credentials."""
+    if resolved_provider is not None and _has_credentials(provider_name, env):
+        return
+    # A configured key with no provider: say how to pick one rather than ask for the key.
+    no_provider = resolved_provider is None and env.api_key
+    issue = _provider_issue() if no_provider else _credentials_issue(provider_name)
+    raise AuthError(
+        issue["message"],
+        code=issue["code"],
+        details={"task": task, "errors": [*issues, issue], "stream": stream, "provider": provider_name},
+    )
+
+
+def _with_issues(event: Any, issues: list[dict]) -> Any:
+    """``event`` with the compile ``issues`` put first in a ``final`` result's ``errors``, as the non-stream result
+    has them."""
+    if not issues or not isinstance(event, dict) or event.get("type") != "final":
+        return event
+    result = event.get("result") or {}
+    return {**event, "result": {**result, "errors": [*issues, *(result.get("errors") or [])]}}
+
+
+def _stream_with_issues(events: Any, issues: list[dict]) -> Iterator[Any]:
+    """The stream's events, with the compile ``issues`` added to the ``final`` result (see :func:`_with_issues`)."""
+    try:
+        for event in events:
+            yield _with_issues(event, issues)
+    finally:
+        close = getattr(events, "close", None)
+        if close is not None:
+            close()
 
 
 def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:
+    text = resp.get("text")
+    reasoning = resp.get("reasoning")
+    tool_calls = resp.get("tool_calls")
     return PerceiveResult(
-        text=resp.get("text"),
+        text=text,
         points=resp.get("points"),
         boxes=resp.get("boxes"),
         polygons=resp.get("polygons"),
         clips=resp.get("clips"),
         parsed=resp.get("parsed"),
-        reasoning=resp.get("reasoning"),
-        usage=None,
-        errors=issues,
+        reasoning=reasoning,
+        usage=resp.get("usage"),
+        errors=[*issues, *(resp.get("errors") or [])],
         raw=resp.get("raw"),
+        finish_reason=resp.get("finish_reason"),
+        tool_calls=tool_calls,
+        id=resp.get("id"),
+        model=resp.get("model"),
+        request_id=resp.get("request_id"),
+        tracks=resp.get("tracks"),
+        message=ChatCompletionMessage(
+            role="assistant",
+            content=text if isinstance(text, str) else None,
+            reasoning_content=reasoning,
+            tool_calls=tool_calls or None,
+        ),
+        asset_count=resp.get("asset_count"),
     )
 
 
@@ -605,37 +844,17 @@ def _prepare_execution_context(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
-    enable_audio_in_video: bool | None,
-    reasoning_effort: str | None,
-    allow_multiple: bool,
-    max_outputs: int | None,
-    temperature: float | None,
-    max_tokens: int | None,
-    top_p: float | None,
-    top_k: int | None,
-    frequency_penalty: float | None,
-    presence_penalty: float | None,
-    response_format: ResponseFormat | None,
+    options: dict[str, Any],
 ):
     env, resolved_provider, provider_name, client_kwargs = _prepare_client_kwargs(
         provider_override=provider_override,
         model_override=model_override,
         expects=expects,
         reasoning=reasoning,
-        enable_audio_in_video=enable_audio_in_video,
-        reasoning_effort=reasoning_effort,
-        allow_multiple=allow_multiple,
-        max_outputs=max_outputs,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        top_p=top_p,
-        top_k=top_k,
-        frequency_penalty=frequency_penalty,
-        presence_penalty=presence_penalty,
-        response_format=response_format,
+        options=options,
     )
 
-    provider_cfg = _PROVIDER_CONFIG.get(provider_name or "", {})
+    provider_cfg = _PROVIDER_CONFIG.get(provider_name, {})
     model_name = model_override or env.model or provider_cfg.get("default_model")
 
     requires_reasoning = _requires_reasoning(model_name, provider_cfg)
@@ -669,7 +888,7 @@ def _prepare_execution_context(
             }
         )
 
-    compile_only = _maybe_compile_only_result(
+    _require_credentials(
         stream=stream,
         resolved_provider=resolved_provider,
         provider_name=provider_name,
@@ -677,7 +896,7 @@ def _prepare_execution_context(
         issues=issues,
         task=task,
     )
-    return compile_only, client_kwargs
+    return client_kwargs
 
 
 def _expects_structured(expects: str | None) -> bool:
@@ -735,7 +954,7 @@ def _prepare_task_with_hints(
     appropriate hints for structured expectations and/or reasoning.
     """
     env_local = settings()
-    provider_name = client_kwargs.get("provider") or env_local.provider or "fal"
+    provider_name = _provider_key(client_kwargs.get("provider") or env_local.provider)
     provider_cfg = {"name": provider_name, **(_PROVIDER_CONFIG.get(provider_name) or {})}
     model_name = client_kwargs.get("model") or env_local.model or provider_cfg.get("default_model")
     include_reasoning = bool(
@@ -783,6 +1002,14 @@ def _normalize_direct_nodes(values: tuple[Any, ...]) -> DSLNode | Sequence:
     return Sequence(flat)
 
 
+def _takes_self(fn: Callable[..., Any]) -> bool:
+    try:
+        params = list(inspect.signature(fn).parameters)
+    except (TypeError, ValueError):
+        return True
+    return bool(params) and params[0] == "self"
+
+
 def _execute_sync_task(
     *,
     task: dict,
@@ -793,19 +1020,9 @@ def _execute_sync_task(
     model_override: str | None,
     expects: str | None,
     reasoning: bool | None,
-    enable_audio_in_video: bool | None,
-    reasoning_effort: str | None,
-    allow_multiple: bool,
-    max_outputs: int | None,
-    temperature: float | None,
-    max_tokens: int | None,
-    top_p: float | None,
-    top_k: int | None,
-    frequency_penalty: float | None,
-    presence_penalty: float | None,
-    response_format: ResponseFormat | None,
+    options: dict[str, Any],
 ):
-    compile_only, client_kwargs = _prepare_execution_context(
+    client_kwargs = _prepare_execution_context(
         task=task,
         issues=issues,
         stream=stream,
@@ -813,45 +1030,35 @@ def _execute_sync_task(
         model_override=model_override,
         expects=expects,
         reasoning=reasoning,
-        enable_audio_in_video=enable_audio_in_video,
-        reasoning_effort=reasoning_effort,
-        allow_multiple=allow_multiple,
-        max_outputs=max_outputs,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        top_p=top_p,
-        top_k=top_k,
-        frequency_penalty=frequency_penalty,
-        presence_penalty=presence_penalty,
-        response_format=response_format,
+        options=options,
     )
-    if compile_only is not None:
-        return compile_only
 
     task = _prepare_task_with_hints(task, expects, client_kwargs)
 
     client = Client()
     if stream:
-        return client.stream(
-            task,
-            parse_points=parse_points,
-            **client_kwargs,
+        return _stream_with_issues(
+            client.stream(
+                task,
+                parse_points=parse_points,
+                **client_kwargs,
+            ),
+            issues,
         )
 
     try:
         resp = client.generate(task, **client_kwargs)
     except TypeError:
+        # Only for a `generate` stub without `self` (a staticmethod patched onto the class); real errors re-raise.
         gen = getattr(type(client), "generate", None)
-        if callable(gen):
-            resp = gen(task, **client_kwargs)
-        else:
+        if not callable(gen) or _takes_self(gen):
             raise
+        resp = gen(task, **client_kwargs)
     return _perceive_result_from_response(resp, issues)
 
 
 def perceive(
     *nodes_or_fn: Any,
-    visual_reasoning: str | None = None,
     expects: str | None = None,
     reasoning: bool | None = None,
     enable_audio_in_video: bool | None = None,
@@ -869,21 +1076,56 @@ def perceive(
     max_outputs: int | None = 1,
     stream: bool = False,
     response_format: ResponseFormat | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | None = None,
+    parallel_tool_calls: bool | None = None,
+    extra_body: dict[str, Any] | None = None,
+    stream_options: dict[str, Any] | None = None,
+    **kwargs: Any,
 ):
     """Decorator (or direct helper) for building Tasks from DSL nodes.
 
     When called without nodes it returns a decorator; when passed nodes directly
-    it immediately compiles and executes them. Executes via the default Client
-    unless compile-only fallback is triggered (no provider configured or the
-    selected provider lacks credentials).
+    it immediately compiles and executes them with the default Client. With no
+    provider configured, or no credentials for it, it raises ``AuthError`` (code
+    ``credentials_missing``) before anything is sent; use ``inspect_task`` to
+    compile without executing.
 
     Args:
         response_format: Optional constraint for output format. Use
             :func:`~perceptron.json_schema_format` or :func:`~perceptron.regex_format`
             to construct this parameter. Enables constrained decoding on supported models.
+        tools: Function tools the model may call (see :func:`~perceptron.chat.function_tool`), with
+            ``tool_choice`` (``"auto"``/``"none"``) and ``parallel_tool_calls``. The result's ``tool_calls`` lists the
+            calls to run; replay them with ``result.as_agent()`` followed by one ``tool_result(...)`` per call.
+        extra_body: Extra request fields, merged into the body last and not validated.
+        stream_options: Streaming options (``stream=True`` only), sent as given, e.g. ``{"include_usage": False}``.
+            Streams to provider ``perceptron`` request ``{"include_usage": True}`` when you do not pass it; the
+            usage then arrives on the ``final`` event.
+        allow_multiple, max_outputs: Accepted for compatibility; they do not change the request.
+
+    Unknown keyword arguments raise ``TypeError`` (the retired ``focus`` and ``visual_reasoning`` say so).
     """
 
+    _reject_unexpected_kwargs("perceive", kwargs)
     parse_points = _expects_structured(expects)
+    options = _client_options(
+        enable_audio_in_video=enable_audio_in_video,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+        frequency_penalty=frequency_penalty,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
+        parallel_tool_calls=parallel_tool_calls,
+        extra_body=extra_body,
+        stream_options=_stream_only_options(stream, stream_options),
+        strict=strict,
+    )
 
     def wrapper(fn: Callable[..., Any]):
         def _inspect(*args: Any, **kwargs: Any):
@@ -900,17 +1142,7 @@ def perceive(
                 model_override=model,
                 expects=expects,
                 reasoning=reasoning,
-                enable_audio_in_video=enable_audio_in_video,
-                reasoning_effort=reasoning_effort,
-                allow_multiple=allow_multiple,
-                max_outputs=max_outputs,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                top_k=top_k,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                response_format=response_format,
+                options=options,
             )
 
         _call.__perceptron_inspector__ = _inspect  # type: ignore[attr-defined]
@@ -933,24 +1165,13 @@ def perceive(
         provider_override=provider,
         model_override=model,
         expects=expects,
-        allow_multiple=allow_multiple,
-        max_outputs=max_outputs,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        top_p=top_p,
-        top_k=top_k,
-        frequency_penalty=frequency_penalty,
-        presence_penalty=presence_penalty,
         reasoning=reasoning,
-        response_format=response_format,
-        enable_audio_in_video=enable_audio_in_video,
-        reasoning_effort=reasoning_effort,
+        options=options,
     )
 
 
 def async_perceive(
     *,
-    visual_reasoning: str | None = None,
     expects: str | None = None,
     reasoning: bool | None = None,
     enable_audio_in_video: bool | None = None,
@@ -968,8 +1189,14 @@ def async_perceive(
     max_outputs: int | None = 1,
     stream: bool = False,
     response_format: ResponseFormat | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | None = None,
+    parallel_tool_calls: bool | None = None,
+    extra_body: dict[str, Any] | None = None,
+    stream_options: dict[str, Any] | None = None,
+    **kwargs: Any,
 ):
-    """Async counterpart to ``perceive`` using :class:`AsyncClient`.
+    """Async counterpart to ``perceive`` using :class:`AsyncClient` (same parameters).
 
     Args:
         response_format: Optional constraint for output format. Use
@@ -977,7 +1204,25 @@ def async_perceive(
             to construct this parameter. Enables constrained decoding on supported models.
     """
 
+    _reject_unexpected_kwargs("async_perceive", kwargs)
     parse_points = _expects_structured(expects)
+    options = _client_options(
+        enable_audio_in_video=enable_audio_in_video,
+        reasoning_effort=reasoning_effort,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        top_p=top_p,
+        top_k=top_k,
+        frequency_penalty=frequency_penalty,
+        presence_penalty=presence_penalty,
+        response_format=response_format,
+        tools=tools,
+        tool_choice=tool_choice,
+        parallel_tool_calls=parallel_tool_calls,
+        extra_body=extra_body,
+        stream_options=_stream_only_options(stream, stream_options),
+        strict=strict,
+    )
 
     def wrapper(fn: Callable[..., Any]):
         async def _inspect_async(*args: Any, **kwargs: Any):
@@ -988,7 +1233,7 @@ def async_perceive(
             def _call(*args: Any, **kwargs: Any):
                 async def _generator():
                     task, issues = await _inspect_async(*args, **kwargs)
-                    compile_only, client_kwargs = _prepare_execution_context(
+                    client_kwargs = _prepare_execution_context(
                         task=task,
                         issues=issues,
                         stream=True,
@@ -996,28 +1241,22 @@ def async_perceive(
                         model_override=model,
                         expects=expects,
                         reasoning=reasoning,
-                        enable_audio_in_video=enable_audio_in_video,
-                        reasoning_effort=reasoning_effort,
-                        allow_multiple=allow_multiple,
-                        max_outputs=max_outputs,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        top_p=top_p,
-                        top_k=top_k,
-                        frequency_penalty=frequency_penalty,
-                        presence_penalty=presence_penalty,
-                        response_format=response_format,
+                        options=options,
                     )
-                    if compile_only is not None:
-                        return
                     task_with_hint = _prepare_task_with_hints(task, expects, client_kwargs)
                     client = AsyncClient()
-                    async for event in client.stream(
+                    events = client.stream(
                         task_with_hint,
                         parse_points=parse_points,
                         **client_kwargs,
-                    ):
-                        yield event
+                    )
+                    try:
+                        async for event in events:
+                            yield _with_issues(event, issues)
+                    finally:
+                        aclose = getattr(events, "aclose", None)
+                        if aclose is not None:
+                            await aclose()
 
                 return _generator()
 
@@ -1027,7 +1266,7 @@ def async_perceive(
 
         async def _call(*args: Any, **kwargs: Any):
             task, issues = await _inspect_async(*args, **kwargs)
-            compile_only, client_kwargs = _prepare_execution_context(
+            client_kwargs = _prepare_execution_context(
                 task=task,
                 issues=issues,
                 stream=False,
@@ -1035,20 +1274,8 @@ def async_perceive(
                 model_override=model,
                 expects=expects,
                 reasoning=reasoning,
-                enable_audio_in_video=enable_audio_in_video,
-                reasoning_effort=reasoning_effort,
-                allow_multiple=allow_multiple,
-                max_outputs=max_outputs,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                top_k=top_k,
-                frequency_penalty=frequency_penalty,
-                presence_penalty=presence_penalty,
-                response_format=response_format,
+                options=options,
             )
-            if compile_only is not None:
-                return compile_only
             task = _prepare_task_with_hints(task, expects, client_kwargs)
 
             client = AsyncClient()
@@ -1083,9 +1310,17 @@ def _credentials_issue(provider_name: str) -> dict[str, str]:
     return {"code": "credentials_missing", "message": message}
 
 
+def _provider_issue() -> dict[str, str]:
+    message = (
+        "No provider is configured (an API key is set). Select the Perceptron API with "
+        'configure(provider="perceptron") or PERCEPTRON_PROVIDER=perceptron.'
+    )
+    return {"code": "credentials_missing", "message": message}
+
+
 def _has_credentials(provider_name: str, env) -> bool:
     if env.api_key:
         return True
 
-    provider_cfg = _PROVIDER_CONFIG.get(provider_name or "") or {}
+    provider_cfg = _PROVIDER_CONFIG.get(_provider_key(provider_name)) or {}
     return any(os.getenv(env_key) for env_key in provider_cfg.get("env_keys", []))
