@@ -1,14 +1,19 @@
 """
-perceptron - Python SDK (v0.1 scaffolding)
+perceptron - Python SDK for Perceptron's perceptive-language models.
 
-Public surface (subject to refinement):
-- DSL: perceive (decorator), text, system, agent, image, point, box, polygon, block
-- Pointing: PointParser, parse_text, extract_points, strip_tags
-- Data constructors for annotations/examples: pt, bbox, poly
+Public surface:
+- Helpers: caption, question, detect, ocr (+ ocr_markdown, ocr_html), detect_from_coco
+- DSL: perceive / async_perceive (decorator or direct call), inspect_task, and the nodes text, system, agent,
+  image, video, audio, video_frames, tool_result, point, box, polygon, block
+- Message API: Client / AsyncClient with ``client.chat.completions.create`` (and ``.multilook``), ``client.files``,
+  ``client.models``; chat types (ChatCompletion, ToolCall, Usage, ...) and function_tool
+- Annotations: SinglePoint, BoundingBox, Polygon, Collection, Clip, Track and their constructors; parse_text,
+  parse_annotations, collect_annotations, extract_points / extract_clips / extract_tracks, scan_leaves,
+  resolve_asset_idx, strip_tags; pixel scaling
 - Config: configure, config (context manager), settings
+- Errors: SDKError and its subclasses
 
-This initial scaffold focuses on the compile/runtime pieces that do not require
-network access. Transport and streaming are added in later phases.
+``perceptron.tensorstream`` (optional torch dependency) is imported lazily on first access.
 """
 
 import importlib
@@ -16,6 +21,22 @@ import importlib
 __version__ = "0.3.5"
 
 from .annotations import annotate_image
+from .chat import (
+    AsyncChatCompletionStream,
+    ChatCompletion,
+    ChatCompletionChunk,
+    ChatCompletionMessage,
+    ChatCompletionStream,
+    Choice,
+    ChoiceDelta,
+    ChunkChoice,
+    FunctionCall,
+    FunctionCallDelta,
+    ToolCall,
+    ToolCallDelta,
+    Usage,
+    function_tool,
+)
 from .client import (
     AsyncClient,
     Client,
@@ -28,26 +49,63 @@ from .client import (
     regex_format,
 )
 from .config import config, configure, settings
-from .dsl.nodes import agent, audio, block, box, image, point, polygon, system, text, video
+from .dsl.nodes import (
+    ToolResult,
+    VideoFrame,
+    VideoFrames,
+    agent,
+    audio,
+    block,
+    box,
+    image,
+    point,
+    polygon,
+    system,
+    text,
+    tool_result,
+    video,
+    video_frames,
+)
 from .dsl.perceive import PerceiveResult, async_perceive, inspect_task, perceive
 from .errors import (
     AnchorError,
     AuthError,
     BadRequestError,
     ExpectationError,
+    IncompleteStreamError,
+    NotFoundError,
+    ParseError,
+    PermissionDeniedError,
+    QuotaExceededError,
     RateLimitError,
     SDKError,
     ServerError,
     TimeoutError,
     TransportError,
 )
+from .files import AsyncFiles, File, FileDeleted, FileList, Files
 from .highlevel import caption, detect, detect_from_coco, ocr, ocr_html, ocr_markdown, question
-from .pointing.geometry import scale_points_to_pixels
+from .models import AsyncModels, Model, ModelInfo, ModelReasoning, Models
+from .multilook import (
+    MultilookCompletion,
+    MultilookPromptError,
+    MultilookResponse,
+    MultilookResult,
+    MultilookUsage,
+)
+from .pointing.geometry import scale_annotations_by_asset, scale_points_to_pixels
 from .pointing.parser import (
+    AnnotationCollection,
+    AnnotationParse,
     PointParser,
+    collect_annotations,
     extract_clips,
     extract_points,
+    extract_tracks,
+    parse_annotations,
     parse_text,
+    resolve_asset_idx,
+    scan_leaves,
     strip_tags,
 )
 from .pointing.types import (
@@ -57,17 +115,20 @@ from .pointing.types import (
     Collection,
     Polygon,
     SinglePoint,
+    Track,
     bbox,
     clip,
     collection,
     poly,
     pt,
+    track,
 )
 
 
 # Lazy-load selected subpackages to allow attribute-style access like
 # `perceptron.tensorstream` without importing it eagerly (and without forcing
-# optional dependencies like torch unless used).
+# optional dependencies like torch unless used). It is not in `__all__`, so
+# `from perceptron import *` works without torch.
 def __getattr__(name):
     if name == "tensorstream":
         module = importlib.import_module(f"{__name__}.tensorstream")
@@ -78,20 +139,52 @@ def __getattr__(name):
 
 __all__ = [
     "AnchorError",
+    "AnnotationCollection",
+    "AnnotationParse",
+    "AsyncChatCompletionStream",
     "AsyncClient",
+    "AsyncFiles",
+    "AsyncModels",
     "AuthError",
     "BadRequestError",
     "BoundingBox",
+    "ChatCompletion",
+    "ChatCompletionChunk",
+    "ChatCompletionMessage",
+    "ChatCompletionStream",
+    "Choice",
+    "ChoiceDelta",
+    "ChunkChoice",
     "Client",
     "Clip",
     "ClipTimestamp",
     "Collection",
     "ExpectationError",
+    "File",
+    "FileDeleted",
+    "FileList",
+    "Files",
+    "FunctionCall",
+    "FunctionCallDelta",
+    "IncompleteStreamError",
     "JsonSchemaFormat",
     "JsonSchemaSpec",
+    "Model",
+    "ModelInfo",
+    "ModelReasoning",
+    "Models",
+    "MultilookCompletion",
+    "MultilookPromptError",
+    "MultilookResponse",
+    "MultilookResult",
+    "MultilookUsage",
+    "NotFoundError",
+    "ParseError",
     "PerceiveResult",
+    "PermissionDeniedError",
     "PointParser",
     "Polygon",
+    "QuotaExceededError",
     "RateLimitError",
     "RegexFormat",
     "ResponseFormat",
@@ -99,7 +192,14 @@ __all__ = [
     "ServerError",
     "SinglePoint",
     "TimeoutError",
+    "ToolCall",
+    "ToolCallDelta",
+    "ToolResult",
+    "Track",
     "TransportError",
+    "Usage",
+    "VideoFrame",
+    "VideoFrames",
     "__version__",
     "agent",
     "annotate_image",
@@ -110,6 +210,7 @@ __all__ = [
     "box",
     "caption",
     "clip",
+    "collect_annotations",
     "collection",
     "config",
     "configure",
@@ -117,12 +218,15 @@ __all__ = [
     "detect_from_coco",
     "extract_clips",
     "extract_points",
+    "extract_tracks",
+    "function_tool",
     "image",
     "inspect_task",
     "json_schema_format",
     "ocr",
     "ocr_html",
     "ocr_markdown",
+    "parse_annotations",
     "parse_text",
     "perceive",
     "point",
@@ -132,11 +236,16 @@ __all__ = [
     "pydantic_format",
     "question",
     "regex_format",
+    "resolve_asset_idx",
+    "scale_annotations_by_asset",
     "scale_points_to_pixels",
+    "scan_leaves",
     "settings",
     "strip_tags",
     "system",
-    "tensorstream",
     "text",
+    "tool_result",
+    "track",
     "video",
+    "video_frames",
 ]

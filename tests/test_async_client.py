@@ -1,73 +1,22 @@
+"""`AsyncClient.generate` / `AsyncClient.stream` over `httpx.MockTransport` (see `_http_mock`)."""
+
 import asyncio
 import json
-from types import SimpleNamespace
+
+import pytest
+from _http_mock import install, json_response, sse_response
 
 from perceptron import AsyncClient
-from perceptron import client as client_mod
+
+FAL_URL = "https://fal.run/perceptron/isaac-01/openai/v1/chat/completions"
+TASK = {"content": [{"type": "text", "role": "user", "content": "Hi"}]}
 
 
-class _StubResponse:
-    def __init__(self, payload, status=200):
-        self._payload = payload
-        self.status_code = status
-        self.headers = {}
-
-    def json(self):
-        return self._payload
-
-
-class _StubStreamResponse:
-    def __init__(self, lines, status=200):
-        self._lines = lines
-        self.status_code = status
-        self.headers = {}
-
-    def json(self):  # pragma: no cover - parity helper
-        return {}
-
-    async def aiter_lines(self):
-        for line in self._lines:
-            yield line
-
-
-class _StubStreamContext:
-    def __init__(self, response):
-        self._response = response
-
-    async def __aenter__(self):
-        return self._response
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
-def _make_async_client(response, stream_response):
-    class _AsyncClient:
-        def __init__(self, timeout):  # pylint: disable=unused-argument
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def post(self, url, headers=None, content=None):  # pragma: no cover - passthrough
-            return response
-
-        def stream(self, method, url, headers=None, content=None):  # pragma: no cover
-            return _StubStreamContext(stream_response)
-
-    return _AsyncClient
-
-
-def _patch_httpx(monkeypatch, response, stream_response):
-    stub_module = SimpleNamespace(
-        AsyncClient=_make_async_client(response, stream_response),
-        TimeoutException=Exception,
-        HTTPError=Exception,
-    )
-    monkeypatch.setattr(client_mod, "httpx", stub_module, raising=False)
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    # FAL_KEY is the only key, so the provider is fal.
+    for key in ("PERCEPTRON_API_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("FAL_KEY", "test-fal-key")
 
 
@@ -83,48 +32,42 @@ def test_async_generate(monkeypatch):
             }
         ]
     }
-    _patch_httpx(monkeypatch, _StubResponse(payload), _StubStreamResponse([]))
+    http = install(monkeypatch, lambda request: json_response(payload))
 
     async def _run():
-        client = AsyncClient()
-        task = {"content": [{"type": "text", "role": "user", "content": "Hi"}]}
-        result = await client.generate(task)
-        assert result["text"] == "Hello async!"
+        async with AsyncClient() as client:
+            return await client.generate(TASK)
 
-    asyncio.run(_run())
+    result = asyncio.run(_run())
+
+    assert result["text"] == "Hello async!"
+    assert result["raw"] == payload
+    request = http.last
+    assert (request.method, str(request.url)) == ("POST", FAL_URL)
+    assert request.headers["authorization"] == "Key test-fal-key"
+    # The async path sends the body as pre-encoded JSON.
+    assert request.headers["content-type"] == "application/json"
+    assert json.loads(request.content) == {"model": "isaac-0.1", "messages": [{"role": "user", "content": "Hi"}]}
 
 
 def test_async_stream(monkeypatch):
-    stream_lines = [
-        "data: " + json.dumps({"choices": [{"delta": {"content": "Hello "}}]}),
-        "data: " + json.dumps({"choices": [{"delta": {"content": "<point> (1,2) </point>"}}]}),
-        "data: [DONE]",
+    chunks = [
+        {"choices": [{"delta": {"content": "Hello "}}]},
+        {"choices": [{"delta": {"content": "<point> (1,2) </point>"}}]},
     ]
-    response = _StubResponse(
-        {
-            "choices": [
-                {
-                    "message": {
-                        "content": "Hello <point> (1,2) </point>",
-                        "reasoning_content": None,
-                        "tool_calls": None,
-                    }
-                }
-            ]
-        }
-    )
-    _patch_httpx(monkeypatch, response, _StubStreamResponse(stream_lines))
+    http = install(monkeypatch, lambda request: sse_response(chunks))
 
     async def _run():
-        client = AsyncClient()
-        task = {"content": [{"type": "text", "role": "user", "content": "Hi"}]}
-        events = []
-        async for ev in client.stream(task, expects="point", parse_points=True):
-            events.append(ev)
-        kinds = [ev.get("type") for ev in events]
-        assert "text.delta" in kinds
-        assert kinds[-1] == "final"
-        final = next(ev for ev in events if ev["type"] == "final")
-        assert final["result"]["points"]
+        async with AsyncClient() as client:
+            return [ev async for ev in client.stream(TASK, expects="point", parse_points=True)]
 
-    asyncio.run(_run())
+    events = asyncio.run(_run())
+
+    kinds = [ev["type"] for ev in events]
+    assert kinds == ["text.delta", "text.delta", "points.delta", "final"]
+    final = events[-1]["result"]
+    assert final["text"] == "Hello <point> (1,2) </point>"
+    assert [(point.x, point.y) for point in final["points"]] == [(1, 2)]
+    assert events[2]["points"] == final["points"]
+    assert (http.last.method, str(http.last.url)) == ("POST", FAL_URL)
+    assert http.last_body["stream"] is True

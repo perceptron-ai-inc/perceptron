@@ -1,31 +1,16 @@
 import json
-from typing import ClassVar
+
+import httpx
+from _http_mock import Body
 
 from perceptron import client as client_mod
 from perceptron.errors import AuthError, BadRequestError, RateLimitError, ServerError
 
 
-class _StubResponse:
-    def __init__(self, status_code, payload, *, text=None, headers=None, json_raises=False):
-        self.status_code = status_code
-        self._payload = payload
-        self._text = text
-        self._json_raises = json_raises
-        self.headers = headers or {}
-
-    def json(self):
-        if self._json_raises:
-            raise ValueError("invalid json")
-        return self._payload
-
-    @property
-    def text(self):
-        if self._text is not None:
-            return self._text
-        try:
-            return json.dumps(self._payload)
-        except Exception:
-            return ""
+def _response(status_code, payload, *, text=None, headers=None):
+    """A read ``httpx.Response`` whose body is ``text``, else ``payload`` as JSON."""
+    content = text if text is not None else json.dumps(payload)
+    return httpx.Response(status_code, content=content.encode(), headers=headers or {})
 
 
 # ========== Status Code Coverage ==========
@@ -39,7 +24,7 @@ def test_map_http_error_401_nested_error():
             "type": "invalid_request_error",
         }
     }
-    resp = _StubResponse(401, payload)
+    resp = _response(401, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -51,7 +36,7 @@ def test_map_http_error_401_nested_error():
 
 def test_map_http_error_403_forbidden():
     payload = {"error": {"message": "Access denied", "code": "forbidden"}}
-    resp = _StubResponse(403, payload)
+    resp = _response(403, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -61,7 +46,7 @@ def test_map_http_error_403_forbidden():
 
 
 def test_map_http_error_403_with_fallback():
-    resp = _StubResponse(403, {}, text="Forbidden")
+    resp = _response(403, {}, text="Forbidden")
 
     err = client_mod._map_http_error(resp)
 
@@ -72,7 +57,7 @@ def test_map_http_error_403_with_fallback():
 
 def test_map_http_error_404_not_found():
     payload = {"error": {"message": "Resource not found", "code": "not_found"}}
-    resp = _StubResponse(404, payload)
+    resp = _response(404, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -82,7 +67,7 @@ def test_map_http_error_404_not_found():
 
 
 def test_map_http_error_404_with_default_message():
-    resp = _StubResponse(404, {})
+    resp = _response(404, {})
 
     err = client_mod._map_http_error(resp)
 
@@ -93,7 +78,7 @@ def test_map_http_error_404_with_default_message():
 
 def test_map_http_error_429_rate_limit_with_retry_after():
     payload = {"error": {"message": "Rate limit exceeded", "code": "rate_limited"}}
-    resp = _StubResponse(429, payload, headers={"Retry-After": "60"})
+    resp = _response(429, payload, headers={"Retry-After": "60"})
 
     err = client_mod._map_http_error(resp)
 
@@ -104,7 +89,7 @@ def test_map_http_error_429_rate_limit_with_retry_after():
 
 def test_map_http_error_429_without_retry_after():
     payload = {"message": "Too many requests"}
-    resp = _StubResponse(429, payload)
+    resp = _response(429, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -114,7 +99,7 @@ def test_map_http_error_429_without_retry_after():
 
 def test_map_http_error_429_invalid_retry_after_header():
     payload = {"error": {"message": "Rate limited"}}
-    resp = _StubResponse(429, payload, headers={"Retry-After": "invalid"})
+    resp = _response(429, payload, headers={"Retry-After": "invalid"})
 
     err = client_mod._map_http_error(resp)
 
@@ -124,7 +109,7 @@ def test_map_http_error_429_invalid_retry_after_header():
 
 def test_map_http_error_422_other_4xx():
     payload = {"error": {"message": "Validation failed", "code": "validation_error"}}
-    resp = _StubResponse(422, payload)
+    resp = _response(422, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -134,7 +119,7 @@ def test_map_http_error_422_other_4xx():
 
 
 def test_map_http_error_400_bad_request():
-    resp = _StubResponse(400, payload=None, text="malformed request", json_raises=True)
+    resp = _response(400, payload=None, text="malformed request")
 
     err = client_mod._map_http_error(resp)
 
@@ -144,7 +129,7 @@ def test_map_http_error_400_bad_request():
 
 def test_map_http_error_500_server_error():
     payload = {"error": {"message": "Internal server error", "code": "server_error"}}
-    resp = _StubResponse(500, payload)
+    resp = _response(500, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -154,7 +139,7 @@ def test_map_http_error_500_server_error():
 
 
 def test_map_http_error_503_service_unavailable():
-    resp = _StubResponse(503, {}, text="Service Unavailable")
+    resp = _response(503, {}, text="Service Unavailable")
 
     err = client_mod._map_http_error(resp)
 
@@ -163,7 +148,7 @@ def test_map_http_error_503_service_unavailable():
 
 
 def test_map_http_error_500_with_default_message():
-    resp = _StubResponse(502, {})
+    resp = _response(502, {})
 
     err = client_mod._map_http_error(resp)
 
@@ -180,7 +165,7 @@ def test_extract_error_list_payload():
         {"message": "First error", "code": "error_1"},
         {"message": "Second error", "code": "error_2"},
     ]
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -191,7 +176,7 @@ def test_extract_error_list_payload():
 
 def test_extract_error_list_with_string():
     payload = ["  ", "", "First non-empty error"]
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -201,7 +186,7 @@ def test_extract_error_list_with_string():
 
 def test_extract_error_flat_dict_no_nested_error():
     payload = {"message": "Direct message", "code": "direct_code"}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -212,7 +197,7 @@ def test_extract_error_flat_dict_no_nested_error():
 
 def test_extract_error_detail_field():
     payload = {"detail": "Detailed error message", "code": "detail_code"}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -223,7 +208,7 @@ def test_extract_error_detail_field():
 
 def test_extract_error_string_in_error_field():
     payload = {"error": "Simple error string"}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -233,7 +218,7 @@ def test_extract_error_string_in_error_field():
 
 def test_extract_error_nested_error_string():
     payload = {"error": "Error occurred"}
-    resp = _StubResponse(500, payload)
+    resp = _response(500, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -242,7 +227,7 @@ def test_extract_error_nested_error_string():
 
 
 def test_extract_error_string_payload():
-    resp = _StubResponse(400, "Plain error string", text="Plain error string")
+    resp = _response(400, "Plain error string")
 
     err = client_mod._map_http_error(resp)
 
@@ -252,7 +237,7 @@ def test_extract_error_string_payload():
 
 
 def test_extract_error_empty_payload():
-    resp = _StubResponse(400, {})
+    resp = _response(400, {})
 
     err = client_mod._map_http_error(resp)
 
@@ -262,12 +247,12 @@ def test_extract_error_empty_payload():
 
 
 def test_extract_error_null_payload():
-    resp = _StubResponse(500, None, json_raises=True)
+    resp = _response(500, None)
 
     err = client_mod._map_http_error(resp)
 
     assert isinstance(err, ServerError)
-    # When json() raises, text property returns json.dumps(None) = 'null'
+    # A JSON null body has no error fields, so the body text 'null' is the message
     assert str(err) == "null"
 
 
@@ -276,7 +261,7 @@ def test_extract_error_null_payload():
 
 def test_extract_code_from_type_field():
     payload = {"error": {"message": "Invalid request", "type": "invalid_request_error"}}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -286,7 +271,7 @@ def test_extract_code_from_type_field():
 
 def test_extract_code_prefers_code_over_type():
     payload = {"error": {"message": "Error", "code": "specific_code", "type": "general_type"}}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -295,7 +280,7 @@ def test_extract_code_prefers_code_over_type():
 
 def test_extract_code_missing():
     payload = {"error": {"message": "Error without code"}}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -304,7 +289,7 @@ def test_extract_code_missing():
 
 def test_extract_code_from_flat_structure():
     payload = {"message": "Error", "code": "flat_code"}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -316,7 +301,7 @@ def test_extract_code_from_flat_structure():
 
 def test_details_includes_nested_error_dict():
     payload = {"error": {"message": "Error", "code": "test", "extra": "metadata"}}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -326,7 +311,7 @@ def test_details_includes_nested_error_dict():
 
 def test_details_includes_full_dict_when_no_nesting():
     payload = {"message": "Error", "code": "test", "request_id": "12345"}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -336,7 +321,7 @@ def test_details_includes_full_dict_when_no_nesting():
 
 def test_details_none_when_list_payload():
     payload = [{"message": "Error"}]
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -349,7 +334,7 @@ def test_details_none_when_list_payload():
 
 def test_first_nonempty_skips_whitespace():
     payload = {"error": {"message": "  \n  ", "detail": "Actual message"}}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -357,18 +342,8 @@ def test_first_nonempty_skips_whitespace():
 
 
 def test_response_text_exception_handled():
-    class _BrokenResponse:
-        status_code = 500
-        headers: ClassVar[dict[str, str]] = {}
-
-        def json(self):
-            raise ValueError("bad json")
-
-        @property
-        def text(self):
-            raise RuntimeError("text unavailable")
-
-    resp = _BrokenResponse()
+    # An unread body: both `json()` and `text` raise `httpx.ResponseNotRead`.
+    resp = httpx.Response(500, stream=Body(b"bad json"))
     err = client_mod._map_http_error(resp)
 
     assert isinstance(err, ServerError)
@@ -377,7 +352,7 @@ def test_response_text_exception_handled():
 
 def test_message_precedence_message_over_detail():
     payload = {"error": {"message": "Primary", "detail": "Secondary"}}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -386,7 +361,7 @@ def test_message_precedence_message_over_detail():
 
 def test_message_precedence_detail_over_error_string():
     payload = {"error": {"detail": "Detail message", "error": "Error string"}}
-    resp = _StubResponse(400, payload)
+    resp = _response(400, payload)
 
     err = client_mod._map_http_error(resp)
 
@@ -394,7 +369,7 @@ def test_message_precedence_detail_over_error_string():
 
 
 def test_empty_list_payload():
-    resp = _StubResponse(400, [])
+    resp = _response(400, [])
 
     err = client_mod._map_http_error(resp)
 
@@ -405,7 +380,7 @@ def test_empty_list_payload():
 
 def test_retry_after_zero_is_valid():
     payload = {"message": "Rate limited"}
-    resp = _StubResponse(429, payload, headers={"Retry-After": "0"})
+    resp = _response(429, payload, headers={"Retry-After": "0"})
 
     err = client_mod._map_http_error(resp)
 

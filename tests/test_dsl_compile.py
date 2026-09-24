@@ -1,27 +1,28 @@
 import pytest
+from _http_mock import completion, install, json_response
+from _image_fixtures import PNG_BYTES
 
 from perceptron import box, image, inspect_task, perceive, text
 
-
-class _StubClient:
-    last_task = None
-    last_kwargs = None
-
-    def __init__(self, **kwargs):  # pylint: disable=unused-argument
-        pass
-
-    def generate(self, task, **kwargs):  # pylint: disable=unused-argument
-        type(self).last_task = task
-        type(self).last_kwargs = kwargs
-        return {"text": "", "points": None, "parsed": None, "raw": task}
+FAL_URL = "https://fal.run/perceptron/isaac-01/openai/v1/chat/completions"
 
 
-def _patch_direct_client(monkeypatch):
-    _StubClient.last_task = None
-    _StubClient.last_kwargs = None
+@pytest.fixture
+def http(monkeypatch):
+    """Direct `perceive` calls on fal (``FAL_KEY`` is the only key), answered through `httpx.MockTransport`."""
+    for key in ("PERCEPTRON_API_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.Client", _StubClient)
-    return _StubClient
+    return install(monkeypatch, lambda request: json_response(completion("")))
+
+
+def _sent_parts(http):
+    """The content parts of the only request's single user message, a POST to fal; the call's client was closed."""
+    assert [(request.method, str(request.url)) for request in http.requests] == [("POST", FAL_URL)]
+    assert [client.is_closed for client in http.clients] == [True]
+    [message] = http.last_body["messages"]
+    assert message["role"] == "user"
+    return message["content"]
 
 
 @perceive(max_tokens=32)
@@ -42,44 +43,36 @@ def test_compile_task_no_execute():
     assert "image" in kinds and "text" in kinds
 
 
-def test_perceive_direct_sequence_executes(monkeypatch):
-    stub = _patch_direct_client(monkeypatch)
-    png_bytes = b"\x89PNG\r\n\x1a\n" + b"1" * 10
-    seq = image(png_bytes) + text("Describe the scene.")
+def test_perceive_direct_sequence_executes(http):
+    seq = image(PNG_BYTES) + text("Describe the scene.")
 
     res = perceive(seq, expects="text")
 
-    assert stub.last_task is not None
-    kinds = [entry.get("type") for entry in stub.last_task.get("content", [])]
-    assert kinds.count("image") == 1
+    kinds = [part["type"] for part in _sent_parts(http)]
+    assert kinds.count("image_url") == 1
     assert kinds.count("text") >= 1
     assert res.text == ""
 
 
-def test_perceive_direct_list_normalization(monkeypatch):
-    stub = _patch_direct_client(monkeypatch)
-    png_bytes = b"\x89PNG\r\n\x1a\n" + b"2" * 10
-    nodes = [image(png_bytes), text("Who is in the frame?")]
+def test_perceive_direct_list_normalization(http):
+    nodes = [image(PNG_BYTES), text("Who is in the frame?")]
 
     perceive(nodes, expects="text")
 
-    assert stub.last_task is not None
-    content = stub.last_task.get("content", [])
-    assert content and content[0]["type"] == "image"
-    assert any(item.get("type") == "text" for item in content)
+    content = _sent_parts(http)
+    assert content and content[0]["type"] == "image_url"
+    assert {"type": "text", "text": "Who is in the frame?"} in content
 
 
-def test_perceive_direct_nested_iterables(monkeypatch):
-    stub = _patch_direct_client(monkeypatch)
-    png_bytes = b"\x89PNG\r\n\x1a\n" + b"3" * 10
-    nested = [image(png_bytes), [text("First"), (text("Second"),)]]
+def test_perceive_direct_nested_iterables(http):
+    nested = [image(PNG_BYTES), [text("First"), (text("Second"),)]]
 
     perceive(nested, expects="text")
 
-    assert stub.last_task is not None
-    kinds = [item["type"] for item in stub.last_task.get("content", [])]
-    assert kinds[:2] == ["image", "text"]
-    assert kinds.count("text") == 2
+    content = _sent_parts(http)
+    kinds = [part["type"] for part in content]
+    assert kinds[:2] == ["image_url", "text"]
+    assert [part["text"] for part in content if part["type"] == "text"] == ["First", "Second"]
 
 
 def test_perceive_direct_invalid_payload_type():
@@ -96,12 +89,15 @@ def test_perceive_direct_invalid_payload_type():
         ("polygon", True),
     ],
 )
-def test_perceive_direct_structured_matrix(monkeypatch, expects, allow_multiple):
-    stub = _patch_direct_client(monkeypatch)
-    png_bytes = b"\x89PNG\r\n\x1a\n" + b"4" * 10
+def test_perceive_direct_structured_matrix(http, expects, allow_multiple):
+    perceive(image(PNG_BYTES) + text("Label"), expects=expects, allow_multiple=allow_multiple)
 
-    perceive(image(png_bytes) + text("Label"), expects=expects, allow_multiple=allow_multiple)
-
-    assert stub.last_kwargs is not None
-    assert stub.last_kwargs.get("expects") == expects
-    assert stub.last_kwargs.get("allow_multiple") == allow_multiple
+    # `expects` reaches the request as its hint (none for text).
+    hints = [part["text"] for part in _sent_parts(http) if part["type"] == "text" and "<hint>" in part["text"]]
+    assert hints == ([] if expects == "text" else [f"<hint>{expects.upper()}</hint>"])
+    # `allow_multiple`/`max_outputs` stay accepted by perceive but never changed the request, so they are not forwarded
+    # (the real `Client.generate` rejects unknown keyword arguments) and not sent.
+    body = http.last_body
+    assert "allow_multiple" not in body
+    assert "max_outputs" not in body
+    assert "n" not in body

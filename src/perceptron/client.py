@@ -1,30 +1,76 @@
 """HTTP client for executing compiled Tasks against supported providers.
 
 Providers
-- fal: Fal-hosted endpoint (OpenAI-compatible)
+- perceptron: the Perceptron API (the default)
+- fal: Fal-hosted endpoint (OpenAI-compatible); selected when you choose it, or when `FAL_KEY` is set and neither
+  `PERCEPTRON_API_KEY` nor a key set in code is (see `perceptron.config.Settings`)
 
 Additional transports can be registered by extending `_PROVIDER_CONFIG`.
 
-Streaming yields SSE `data:` lines and maps them to:
-- text.delta: textual deltas as they arrive
-- points.delta: emitted when a full canonical tag closes (based on cumulative parse)
-- final: final text, parsed segments, usage, and any parsing issues
+`Client.stream` reads the SSE stream and yields events:
+- reasoning.delta / text.delta: reasoning and answer text as they arrive
+- tool_call.delta: one tool-call fragment (`index`; `id`/`name` on the fragment that first carries them; `arguments`)
+- points.delta: emitted once per leaf of the expected kind when it closes, even inside a still-open collection or
+  track; `context` holds the `mention`/`t`/`asset_idx` it gets from its containers and the `container` kind. Deltas
+  are provisional (later markup can invalidate a leaf's container); `final` is authoritative
+- final: the result, with the `generate()` keys (`raw` is None); the last event of a finished stream
+- error: a terminal error (HTTP error, error event, cut or malformed stream, or malformed markup with `strict=True`)
+  with its `details` and what arrived before it (`partial`); no `final` follows
+
+Connections: each `Client` sends every request (all surfaces) through one pooled `httpx.Client`, created on first
+use, and each `AsyncClient` through one `httpx.AsyncClient`; close them with `close()` / `await aclose()` or a `with` /
+`async with` block. The pools keep HTTP/1.1 connections alive between requests; a stream closed before its end closes
+its connection, so the server stops sending. Pass `http_client=` to use your own httpx client instead; the SDK never
+closes it.
 """
 
 from __future__ import annotations
 
-import json
-import os
-from dataclasses import dataclass
+import asyncio
+import threading
+from collections.abc import AsyncIterator, Iterator, Mapping
+from dataclasses import dataclass, fields
+from functools import cached_property
 from typing import Any, TypedDict
 
 import httpx
 
-from .config import settings
-from .errors import (
+from . import _transport
+
+# Registry, error mapping and lowering moved to these modules; the old names stay importable from here.
+from ._lowering import _is_url_payload, count_assets, task_to_messages  # noqa: F401
+from ._providers import (  # noqa: F401
+    _PROVIDER_CONFIG,
+    PERCEPTRON_PROVIDER,
+    REASONING_EFFORTS,
+    _normalize_reasoning_effort,
+    _pop_and_resolve_model,
+    _resolve_provider,
+    _select_model,
+)
+from ._transport import _extract_error_metadata, _first_nonempty, http_error_from_response  # noqa: F401
+from .chat import (
+    AsyncChat,
+    Chat,
+    ChatCompletion,
+    ChatStreamAccumulator,
+    _decode_chunk,
+    _normalize_vision_config,
+    _validate_request_body,
+)
+from .config import Settings, _settings_with
+
+# The error classes, INVALID_REASONING_EFFORT, parse_text, extract_points and extract_clips stay importable from here,
+# as in earlier releases.
+from .errors import (  # noqa: F401
     INVALID_REASONING_EFFORT,
+    INVALID_RESPONSE,
+    STREAM_INCOMPLETE,
+    STREAM_TRUNCATED,
     AuthError,
     BadRequestError,
+    IncompleteStreamError,
+    ParseError,
     RateLimitError,
     SDKError,
     ServerError,
@@ -32,32 +78,34 @@ from .errors import (
     TransportError,
 )
 from .expectations import STRUCTURED_EXPECTATIONS
-from .pointing.parser import extract_clips, extract_points, parse_text
+from .pointing.parser import (  # noqa: F401
+    _scan_leaves,
+    collect_annotations,
+    extract_clips,
+    extract_points,
+    parse_text,
+    scan_leaves,
+)
 
-# The `reasoning_effort` tiers the API accepts, sent as the top-level request field.
-REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+# Maps each structured `expects` value to its PerceiveResult bucket (an `AnnotationCollection` attribute).
+_BUCKET_BY_EXPECTS = {"point": "points", "box": "boxes", "polygon": "polygons", "clip": "clips"}
 
-
-def _normalize_reasoning_effort(value: Any) -> str | None:
-    """Lower-case a `reasoning_effort` tier, or raise before any request for a value the API rejects."""
-    if value is None:
-        return None
-    normalized = str(value).strip().lower()
-    if normalized not in REASONING_EFFORTS:
-        raise BadRequestError(
-            f"reasoning_effort must be one of {', '.join(REASONING_EFFORTS)}; got {value!r}.",
-            code=INVALID_REASONING_EFFORT,
-        )
-    return normalized
+# Retired Mk1 arguments; passing one raises a TypeError that says so.
+_RETIRED_ARGUMENTS = ("focus", "visual_reasoning")
 
 
-# Maps each structured `expects` value to (PerceiveResult bucket name, extractor).
-_BUCKET_BY_EXPECTS = {
-    "point": ("points", lambda c: extract_points(c, expected="point")),
-    "box": ("boxes", lambda c: extract_points(c, expected="box")),
-    "polygon": ("polygons", lambda c: extract_points(c, expected="polygon")),
-    "clip": ("clips", extract_clips),
-}
+def _unexpected_keyword(func: str, name: str) -> TypeError:
+    """The ``TypeError`` for an unknown keyword argument of ``func``; a retired Focus argument says it was removed."""
+    message = f"{func}() got an unexpected keyword argument {name!r}"
+    if name in _RETIRED_ARGUMENTS:
+        message += f': "{name}" was removed: Focus controls are retired (see "Migrate from Mk1")'
+    return TypeError(message)
+
+
+def _reject_unexpected_kwargs(func: str, kwargs: Mapping[str, Any]) -> None:
+    if kwargs:
+        raise _unexpected_keyword(func, next(iter(kwargs)))
+
 
 # ---------------------------------------------------------------------------
 # Response format types for constrained decoding
@@ -92,11 +140,10 @@ ResponseFormat = JsonSchemaFormat | RegexFormat | dict[str, Any]
 
 @dataclass
 class _PreparedInvocation:
-    url: str
-    headers: dict[str, Any]
     body: dict[str, Any]
     expects: str | None
-    provider_cfg: dict[str, Any]
+    provider_cfg: dict[str, Any]  # with the effective base_url
+    asset_count: int  # media assets in the lowered messages (the `asset_idx` space)
 
 
 def _build_response_format(
@@ -106,6 +153,7 @@ def _build_response_format(
 
     Returns:
         None if response_format is None, otherwise a tuple of (field_name, value):
+        - For text: ("response_format", {"type": "text"})
         - For json_schema: ("response_format", {"type": "json_schema", "json_schema": {...}})
         - For regex: ("regex", "pattern_string")
     """
@@ -113,6 +161,9 @@ def _build_response_format(
         return None
 
     fmt_type = response_format.get("type")
+    if fmt_type == "text":
+        return ("response_format", {"type": "text"})
+
     if fmt_type == "json_schema":
         schema_spec = response_format.get("json_schema")
         if not isinstance(schema_spec, dict):
@@ -125,89 +176,220 @@ def _build_response_format(
             raise ValueError("regex response_format requires a 'regex' string pattern")
         return ("regex", regex_pattern)
 
-    raise ValueError(f"Unknown response_format type: {fmt_type!r}. Supported types: 'json_schema', 'regex'")
+    raise ValueError(f"Unknown response_format type: {fmt_type!r}. Supported types: 'text', 'json_schema', 'regex'")
+
+
+def _add_buckets(
+    result: dict[str, Any], content: str, expects: str, errors: list[dict[str, Any]], *, strict: bool = False
+) -> None:
+    """Set the ``expects`` bucket, ``tracks`` and ``parsed`` from ``content``.
+
+    Buckets are flattened: collection children and track waypoints appear with the context their markup gives them
+    (own ?? track ?? collection); ``tracks`` (every track, whatever its kind) and ``parsed`` keep the tree. Lenient: a
+    malformed element stays text and adds an ``errors`` entry, and an unclosed container (truncated output) is kept
+    with ``complete=False`` and reported as ``incomplete_annotation``. ``strict`` raises the first problem as
+    ``ParseError``. For ``clip``, whose parse leaves spatial markup as text, ``tracks`` come from a lenient parse of
+    that markup whose problems are not reported (like other markup outside the ``expects`` family).
+    """
+    found = collect_annotations(content, expects=expects, strict=strict)
+    result[_BUCKET_BY_EXPECTS[expects]] = getattr(found, _BUCKET_BY_EXPECTS[expects])
+    result["tracks"] = collect_annotations(content).tracks if expects == "clip" else found.tracks
+    result["parsed"] = found.parsed
+    errors.extend(found.errors)
+
+
+def _result_metadata(completion: ChatCompletion, usage: Any) -> dict[str, Any]:
+    """The completion metadata shared by ``generate()`` results and the stream's ``final`` result."""
+    return {
+        "finish_reason": completion.finish_reason,
+        "tool_calls": completion.tool_calls,
+        "usage": dict(usage) if isinstance(usage, Mapping) else None,
+        "id": completion.id,
+        "model": completion.model,
+        "request_id": completion.request_id,
+        "complete": completion.complete,
+        "asset_count": completion.asset_count,
+    }
+
+
+def _error_event(
+    exc: SDKError, *, partial: dict[str, Any] | None = None, request_id: str | None = None
+) -> dict[str, Any]:
+    """The terminal ``error`` event. ``details`` is the error's ``details`` dict (the server's error object, when there
+    is one, with ``request_id`` mirrored in as on raised errors); ``partial`` is what arrived before the error (None
+    before the stream opened)."""
+    request_id = exc.request_id if exc.request_id is not None else request_id
+    details = dict(exc.details)
+    if request_id is not None:
+        details.setdefault("request_id", request_id)
+    return {
+        "type": "error",
+        "message": str(exc),
+        "code": exc.code,
+        "error_type": exc.error_type,
+        "param": exc.param,
+        "status": exc.status_code,
+        "request_id": request_id,
+        "details": details,
+        "partial": partial,
+    }
+
+
+def _error_events(exc: SDKError) -> Iterator[dict[str, Any]]:
+    yield _error_event(exc)
+
+
+async def _aerror_events(exc: SDKError) -> AsyncIterator[dict[str, Any]]:
+    yield _error_event(exc)
 
 
 class _StreamProcessor:
-    def __init__(
+    """Turns stream payloads into events and, at the end, the ``final`` result or a terminal ``error`` event."""
+
+    def __init__(  # noqa: PLR0913 - keyword-only stream settings
         self,
         *,
         client_core: _ClientCore,
         expects: str | None,
         parse_points: bool,
         max_buffer_bytes: int | None,
+        request_id: str | None = None,
+        n_assets: int | None = None,
+        strict: bool = False,
     ) -> None:
         self._client_core = client_core
         self._expects = expects
         self._parse_points = parse_points and expects in _BUCKET_BY_EXPECTS
         self._max_buffer_bytes = max_buffer_bytes
+        self._strict = strict  # malformed markup in the final answer ends the stream with an `error` event
         self._cumulative: str = ""
         self._reasoning: str = ""
         self._emitted_spans: set[tuple[int, int]] = set()
+        self._scan_start = 0  # the answer before this offset holds only complete top-level elements, already scanned
         self._parsing_enabled = True
-        self._usage_payload: dict[str, Any] | None = None
+        self._accumulator = ChatStreamAccumulator(request_id=request_id, asset_count=n_assets)
+        self._announced_ids: set[int] = set()
+        self._announced_names: set[int] = set()
+
+    @property
+    def done(self) -> bool:
+        """True once ``[DONE]`` arrived."""
+        return self._accumulator.done
+
+    def feed(self, data: Any) -> list[dict[str, Any]]:
+        """Events for one SSE payload (``_transport.DONE`` for ``[DONE]``).
+
+        Raises the mapped ``SDKError`` for an error event and ``ServerError(code="invalid_stream_chunk")`` for a
+        malformed chunk.
+        """
+        if data is _transport.DONE:
+            self._accumulator.mark_done()
+            return []
+        obj = _decode_chunk(data)
+        if obj.get("error") is not None:
+            raise _transport.stream_error_from_event(obj["error"], request_id=self._accumulator.request_id)
+        return self.handle_payload(obj)
 
     def handle_payload(self, obj: Any) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         if not isinstance(obj, dict):
             return events
 
-        # Capture usage info
-        usage_field = obj.get("usage")
-        if isinstance(usage_field, dict) and self._usage_payload is None:
-            self._usage_payload = usage_field
+        answer_chars = len(self._cumulative)
+        # Usage, finish_reason, id/model and tool calls accumulate here (`delta: null` and `choices: []` included).
+        chunk = self._accumulator.feed(obj)
+        for choice in chunk.choices:
+            delta = choice.delta
 
-        # Extract delta
-        try:
-            delta = obj["choices"][0]["delta"]
-        except (KeyError, IndexError, TypeError):
-            return events
+            # Process reasoning content
+            reasoning = delta.reasoning_content
+            if reasoning:
+                self._reasoning += reasoning
+                events.append(
+                    {
+                        "type": "reasoning.delta",
+                        "chunk": reasoning,
+                        "total_chars": len(self._reasoning),
+                    }
+                )
 
-        # Process reasoning content
-        reasoning = delta.get("reasoning_content")
-        if reasoning:
-            self._reasoning += reasoning
-            events.append(
-                {
-                    "type": "reasoning.delta",
-                    "chunk": reasoning,
-                    "total_chars": len(self._reasoning),
-                }
-            )
+            # Process answer content
+            content = delta.content
+            if content:
+                self._cumulative += content
+                events.append(
+                    {
+                        "type": "text.delta",
+                        "chunk": content,
+                        "total_chars": len(self._cumulative),
+                    }
+                )
 
-        # Process answer content
-        content = delta.get("content")
-        if content:
-            self._cumulative += content
-            events.append(
-                {
-                    "type": "text.delta",
-                    "chunk": content,
-                    "total_chars": len(self._cumulative),
-                }
-            )
+            events.extend(self._tool_call_events(delta.tool_calls))
 
         # Check buffer limits
         if self._parsing_enabled and self._max_buffer_bytes is not None:
             if len(self._cumulative.encode("utf-8")) > self._max_buffer_bytes:
                 self._parsing_enabled = False
 
-        # Parse points
-        if self._parse_points and self._parsing_enabled:
+        # Parse points only when this chunk brought a `>`: every leaf and clip ends with one, so no new leaf can close
+        # without it. Each scan starts after the last complete top-level element (see `_point_events`).
+        if self._parse_points and self._parsing_enabled and ">" in self._cumulative[answer_chars:]:
             events.extend(self._point_events())
 
         return events
 
+    def _tool_call_events(self, pieces: list[Any] | None) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        for piece in pieces or []:
+            index = piece.index
+            call_id = piece.id if piece.id and index not in self._announced_ids else None
+            if call_id is not None:
+                self._announced_ids.add(index)
+            function = piece.function
+            name = function.name if function is not None else None
+            if not name or index in self._announced_names:
+                name = None
+            else:
+                self._announced_names.add(index)
+            arguments = function.arguments if function is not None else None
+            events.append(
+                {"type": "tool_call.delta", "index": index, "id": call_id, "name": name, "arguments": arguments or ""}
+            )
+        return events
+
+    def partial(self) -> dict[str, Any]:
+        """What arrived so far; never a complete answer, so its tool calls must not be run."""
+        return {
+            "text": self._cumulative or None,
+            "reasoning": self._reasoning or None,
+            "tool_calls": self._accumulator.tool_calls,
+            "finish_reason": self._accumulator.finish_reason,
+        }
+
+    def error_event(self, exc: SDKError) -> dict[str, Any]:
+        return _error_event(exc, partial=self.partial(), request_id=self._accumulator.request_id)
+
+    def terminal_event(self) -> dict[str, Any]:
+        """``final`` once ``[DONE]`` arrived; a ``stream_truncated`` error event when the body ended without it."""
+        if not self.done:
+            return self.error_event(IncompleteStreamError("The stream ended before [DONE].", code=STREAM_TRUNCATED))
+        return self.finalize()
+
     def finalize(self) -> dict[str, Any]:
+        """The ``final`` event. Never raises: malformed markup (including containers the answer left unclosed, which
+        are never auto-closed) and a missing ``finish_reason`` become ``errors``. With ``strict``, malformed markup
+        gives the terminal ``error`` event (the ``ParseError`` code, with ``partial``) instead of ``final``."""
         content = self._cumulative or None
         reasoning = self._reasoning or None
         result: dict[str, Any] = {"text": content, "reasoning": reasoning, "raw": None}
+        issues: list[dict[str, Any]] = []
         expects = self._expects
         if expects in _BUCKET_BY_EXPECTS and self._parsing_enabled and isinstance(content, str):
-            bucket_name, extract = _BUCKET_BY_EXPECTS[expects]
-            result[bucket_name] = extract(content)
-            result["parsed"] = parse_text(content, expects=expects)
-        issues: list[dict[str, Any]] = []
+            try:
+                _add_buckets(result, content, expects, issues, strict=self._strict)
+            except ParseError as exc:
+                return self.error_event(exc)
         if not self._parsing_enabled:
             issues.append(
                 {
@@ -215,189 +397,50 @@ class _StreamProcessor:
                     "message": "parsing disabled due to buffer limit",
                 }
             )
+        completion = self._accumulator.snapshot()
+        if completion.finish_reason is None:
+            issues.append(
+                {
+                    "code": STREAM_INCOMPLETE,
+                    "message": "The stream ended without a finish_reason, so the answer may be incomplete.",
+                }
+            )
         return {
             "type": "final",
             "result": {
                 **result,
-                "usage": self._usage_payload,
+                **_result_metadata(completion, self._accumulator.usage),
                 "errors": issues,
             },
         }
 
     def _point_events(self) -> list[dict[str, Any]]:
+        """One ``points.delta`` per newly closed leaf of the expected kind, keyed by its span so each is emitted once.
+
+        Leaves inside still-open collections and tracks count; ``context`` carries what the open containers give them
+        (``mention``, ``t``, ``asset_idx``, and ``container``: ``"collection"``, ``"track"`` or None). Leaves of a
+        container that is already invalid are not emitted. Deltas are provisional: one cannot be retracted when later
+        markup invalidates its container, so the ``final`` result is authoritative.
+        """
         events: list[dict[str, Any]] = []
-        expects = self._expects
-        if expects not in _BUCKET_BY_EXPECTS:
-            return events
-        try:
-            segments = parse_text(self._cumulative, expects=expects)
-        except Exception:
-            return events
-        for seg in segments:
-            if seg.get("kind") not in _BUCKET_BY_EXPECTS:
+        # Rescan only from the element still arriving, not the whole answer on every chunk.
+        leaves, self._scan_start = _scan_leaves(self._cumulative, self._expects, self._scan_start)
+        for leaf in leaves:
+            span = (leaf["span"]["start"], leaf["span"]["end"])
+            if span in self._emitted_spans:
                 continue
-            span_info = seg.get("span")
-            if not isinstance(span_info, dict):
-                continue
-            span = (span_info.get("start"), span_info.get("end"))
-            if None in span:
-                continue
-            if span in self._emitted_spans or seg.get("kind") != expects:
-                continue
-            self._emitted_spans.add(span)  # type: ignore[arg-type]
+            self._emitted_spans.add(span)
             events.append(
-                {
-                    "type": "points.delta",
-                    "points": [seg.get("value")],
-                    "span": span_info,
-                }
+                {"type": "points.delta", "points": [leaf["value"]], "span": leaf["span"], "context": leaf["context"]}
             )
         return events
 
 
-def _iter_sse_lines(resp):
-    for raw_line in resp.iter_lines():
-        if not raw_line:
-            continue
-        if isinstance(raw_line, bytes):
-            yield raw_line.decode("utf-8", errors="ignore")
-        else:
-            yield raw_line
-
-
-async def _aiter_sse_lines(resp):
-    async for line in resp.aiter_lines():
-        if not line:
-            continue
-        yield line
-
-
-def _process_sse_line(line: str, processor: _StreamProcessor) -> tuple[bool, list[dict[str, Any]]]:
-    if not line.startswith("data:"):
-        return False, []
-    data_line = line[len("data:") :].strip()
-    if data_line == "[DONE]":
-        return True, []
-    try:
-        obj = json.loads(data_line)
-    except Exception:
-        return False, []
-    return False, processor.handle_payload(obj)
-
-
-def _response_json(resp) -> dict[str, Any]:
-    if resp.status_code != 200:
-        raise _map_http_error(resp)
-    return resp.json()
-
-
-def _is_url_payload(item: dict[str, Any]) -> bool:
-    """True when the payload should pass through as a URL rather than a data URL."""
-
-    if item.get("url"):
-        return True
-    payload = item.get("content")
-    return isinstance(payload, str) and payload.startswith(("http://", "https://"))
-
-
-def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    current_role: str | None = None
-    current_content: list[dict[str, Any]] = []
-    contains_non_text = False
-
-    def _flush() -> None:
-        nonlocal current_role, current_content, contains_non_text
-        if current_role is not None:
-            if not contains_non_text and all(part.get("type") == "text" for part in current_content):
-                text = "".join(part.get("text", "") for part in current_content)
-                messages.append({"role": current_role, "content": text})
-            else:
-                messages.append({"role": current_role, "content": list(current_content)})
-        current_role = None
-        current_content = []
-        contains_non_text = False
-
-    for item in task.get("content", []):
-        itype = item.get("type")
-        role = item.get("role", "user")
-        if role == "agent":
-            role = "assistant"
-        if itype == "text":
-            part = {"type": "text", "text": item.get("content", "")}
-            if current_role not in {role, None}:
-                _flush()
-            current_role = role
-            current_content.append(part)
-        elif itype == "image":
-            payload = item.get("content")
-            if payload is None:
-                continue
-            if _is_url_payload(item):
-                image_part = {"type": "image_url", "image_url": {"url": payload}}
-            else:
-                fmt = item.get("format")
-                if fmt is None:
-                    raise BadRequestError(
-                        "Could not determine image format from input. The wire protocol "
-                        "supports png, jpeg, and webp; convert the image to one of these "
-                        "formats before passing it to the SDK.",
-                        code="invalid_image_format",
-                    )
-                image_part = {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/{fmt};base64,{payload}"},
-                }
-            if current_role not in {role, None}:
-                _flush()
-            current_role = role
-            current_content.append(image_part)
-            contains_non_text = True
-        elif itype == "video":
-            payload = item.get("content")
-            if payload is None:
-                continue
-            if _is_url_payload(item):
-                video_part = {"type": "video_url", "video_url": {"url": payload}}
-            else:
-                fmt = item.get("format")
-                if fmt is None:
-                    raise BadRequestError(
-                        "Could not determine video format from input. The wire protocol supports mp4 and webm.",
-                        code="invalid_video_format",
-                    )
-                video_part = {
-                    "type": "video_url",
-                    "video_url": {"url": f"data:video/{fmt};base64,{payload}"},
-                }
-            if current_role not in {role, None}:
-                _flush()
-            current_role = role
-            current_content.append(video_part)
-            contains_non_text = True
-        elif itype == "audio":
-            payload = item.get("content")
-            if payload is None:
-                continue
-            if _is_url_payload(item):
-                audio_part = {"type": "audio_url", "audio_url": {"url": payload}}
-            else:
-                fmt = item.get("format")
-                if fmt is None:
-                    raise BadRequestError(
-                        "Could not determine audio format from input. The wire protocol supports wav, mp3, and flac.",
-                        code="invalid_audio_format",
-                    )
-                audio_part = {"type": "input_audio", "input_audio": {"data": payload, "format": fmt}}
-            if current_role not in {role, None}:
-                _flush()
-            current_role = role
-            current_content.append(audio_part)
-            contains_non_text = True
-        else:
-            continue
-    _flush()
-    return messages
+def _task_to_openai_messages(
+    task: dict, *, base_url: str | None = None, provider_name: str | None = None
+) -> list[dict[str, Any]]:
+    """Lower a compiled task to chat messages (see `_lowering.task_to_messages`)."""
+    return task_to_messages(task, base_url=base_url, provider_name=provider_name)
 
 
 def _model_entry(model_name: str | None, provider_cfg: dict[str, Any] | None) -> dict | None:
@@ -523,213 +566,84 @@ def _apply_reasoning_and_hints(
     return task_with_hint, final_reasoning
 
 
-_PROVIDER_CONFIG = {
-    "fal": {
-        "base_url": "https://fal.run",
-        "path": "/perceptron/isaac-01/openai/v1/chat/completions",
-        "auth_header": "Authorization",
-        "auth_prefix": "Key ",
-        "env_keys": ["FAL_KEY", "PERCEPTRON_API_KEY"],
-        "default_model": "isaac-0.1",
-        "supported_models": ["isaac-0.1"],
-        "models": {
-            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
-        },
-        "stream": True,
-    },
-    "perceptron": {
-        "base_url": "https://api.perceptron.inc/v1",
-        "path": "/chat/completions",
-        "auth_header": "Authorization",
-        "auth_prefix": "Bearer ",
-        "env_keys": ["PERCEPTRON_API_KEY"],
-        "default_model": "perceptron-mk1",
-        "supported_models": [
-            "isaac-0.1",
-            "isaac-0.2-1b",
-            "isaac-0.2-2b-preview",
-            "perceptron-mk1",
-            "perceptron-mk1.5-preview",
-        ],
-        "models": {
-            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
-            "isaac-0.2-1b": {"reasoning": True, "skip_structured_hints": False},
-            "isaac-0.2-2b-preview": {"reasoning": True, "skip_structured_hints": False},
-            "perceptron-mk1": {"reasoning": True, "skip_structured_hints": False},
-            "perceptron-mk1.5-preview": {"reasoning": True, "skip_structured_hints": False},
-        },
-        "stream": True,
-    },
-}
+# Kept under its old name; `http_error_from_response` also reads x-trace-id, Retry-After on 503 and quota errors.
+_map_http_error = http_error_from_response
 
 
-def _select_model(
-    provider_cfg: dict[str, Any],
-    requested_model: str | None,
-    *,
-    provider_name: str | None = None,
-) -> str | None:
-    model = requested_model or provider_cfg.get("default_model")
-    supported = provider_cfg.get("supported_models")
-    provider_label = provider_name or provider_cfg.get("name") or "unknown"
-    if supported and model and model not in supported:
-        allowed = ", ".join(supported)
-        raise BadRequestError(f"Model '{model}' is not supported for provider='{provider_label}'. Allowed: {allowed}")
-    return model
+def _http_client(timeout: float | None) -> httpx.Client:
+    """The pooled HTTP client a :class:`Client` creates on first use; looked up at call time so tests can patch it.
+
+    HTTP/1.1 keep-alive, not HTTP/2: an HTTP/1.1 response closed before its end closes its connection, so the server
+    sees an abandoned stream or download at once and stops. httpcore closes an HTTP/2 response without resetting its
+    stream: the server would keep generating, and its unread data would fill the shared connection's flow-control
+    window until other requests on that connection stall.
+    """
+    return httpx.Client(timeout=timeout)
 
 
-def _pop_and_resolve_model(provider_cfg: dict[str, Any], gen_kwargs: dict[str, Any]) -> str:
-    requested_model = gen_kwargs.pop("model", None)
-    resolved = _select_model(provider_cfg, requested_model)
-    if resolved:
-        return resolved
-    default_model = provider_cfg.get("default_model")
-    if default_model:
-        return default_model
-    provider_label = provider_cfg.get("name") or "unknown"
-    raise BadRequestError(
-        f"No model configured for provider '{provider_label}'. Specify a model explicitly or configure a default."
-    )
-
-
-def _resolve_provider(provider: str | None) -> dict:
-    provider = provider or "fal"
-    provider_lc = provider.lower() if isinstance(provider, str) else provider
-    if provider_lc not in _PROVIDER_CONFIG:
-        raise BadRequestError(f"Unsupported provider: {provider}")
-    return {"name": provider_lc, **_PROVIDER_CONFIG[provider_lc]}
-
-
-def _prepare_transport(settings_obj, provider_cfg, task, *, stream=False):
-    base_url = settings_obj.base_url or provider_cfg.get("base_url")
-    if not base_url:
-        raise BadRequestError(f"base_url required for provider={provider_cfg['name']}")
-    url = base_url.rstrip("/") + provider_cfg["path"]
-    headers = {"Content-Type": "application/json"}
-    token = settings_obj.api_key
-    for env in provider_cfg.get("env_keys", []):
-        token = token or os.getenv(env)
-    auth_header = provider_cfg.get("auth_header")
-    if auth_header:
-        if not token:
-            raise AuthError(f"API key required for provider='{provider_cfg['name']}'")
-        prefix = provider_cfg.get("auth_prefix", "")
-        headers[auth_header] = f"{prefix}{token}"
-    if stream and not provider_cfg.get("stream", True):
-        raise BadRequestError(f"Streaming is not supported for provider='{provider_cfg['name']}'")
-    return task, url, headers, provider_cfg
-
-
-def _first_nonempty(*values: Any) -> str | None:
-    for value in values:
-        if isinstance(value, str):
-            stripped = value.strip()
-            if stripped:
-                return stripped
-    return None
-
-
-def _extract_error_metadata(
-    data: Any,
-) -> tuple[str | None, str | None, dict[str, Any] | None]:
-    message: str | None = None
-    code: str | None = None
-    details: dict[str, Any] | None = None
-
-    if isinstance(data, dict):
-        nested_error = data.get("error")
-        if isinstance(nested_error, dict):
-            message = _first_nonempty(
-                nested_error.get("message"),
-                nested_error.get("detail"),
-                nested_error.get("error"),
-            )
-            code = nested_error.get("code") or nested_error.get("type")
-            details = nested_error or None
-        elif isinstance(nested_error, str):
-            message = _first_nonempty(nested_error)
-            details = data or None
-        else:
-            message = _first_nonempty(
-                data.get("message"),
-                data.get("detail"),
-                data.get("error") if isinstance(data.get("error"), str) else None,
-            )
-            code = data.get("code")
-            details = data or None
-    elif isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict):
-                candidate = _first_nonempty(item.get("message"), item.get("detail"))
-                if candidate:
-                    message = candidate
-                    code = item.get("code")
-                    details = item
-                    break
-            elif isinstance(item, str):
-                candidate = item.strip()
-                if candidate:
-                    message = candidate
-                    break
-    elif isinstance(data, str):
-        message = data.strip() or None
-
-    return message, code, details
-
-
-def _map_http_error(resp) -> SDKError:
-    try:
-        data = resp.json()
-    except Exception:
-        data = None
-
-    message, code, details = _extract_error_metadata(data)
-    try:
-        fallback_text = resp.text
-    except Exception:
-        fallback_text = ""
-    fallback_text = fallback_text.strip()
-    detail_payload = details if isinstance(details, dict) and details else None
-
-    if resp.status_code == 400:
-        msg = message or fallback_text or "bad request"
-        return BadRequestError(msg, code=code, details=detail_payload)
-
-    if resp.status_code in (401, 403):
-        auth_msg = message or fallback_text or "authentication failed"
-        return AuthError(auth_msg, code=code or "auth_error", details=detail_payload)
-
-    if resp.status_code == 404:
-        msg = message or fallback_text or "not found"
-        return BadRequestError(msg, code=code, details=detail_payload)
-
-    if resp.status_code == 429:
-        retry_after = None
-        try:
-            retry_after = float(resp.headers.get("Retry-After", "0"))
-        except Exception:
-            retry_after = None
-        msg = message or fallback_text or "rate limited"
-        return RateLimitError(msg, retry_after=retry_after, details=detail_payload)
-
-    if 400 <= resp.status_code < 500:
-        msg = message or fallback_text or "bad request"
-        return BadRequestError(msg, code=code, details=detail_payload)
-
-    msg = message or fallback_text or f"server error: {resp.status_code}"
-    return ServerError(msg, code=code, details=detail_payload)
-
-
-def _http_client(timeout: float):
-    return httpx.Client(timeout=timeout, http2=True)
+def _async_http_client(timeout: float | None) -> httpx.AsyncClient:
+    """The pooled HTTP client an :class:`AsyncClient` creates on first use (HTTP/1.1 keep-alive, as in
+    :func:`_http_client`); looked up at call time so tests can patch it."""
+    return httpx.AsyncClient(timeout=timeout)
 
 
 class _ClientCore:
-    def __init__(self, **overrides: Any) -> None:
-        self._settings = settings()
-        for k, v in overrides.items():
-            if hasattr(self._settings, k):
-                setattr(self._settings, k, v)
+    _HTTP_CLIENT_TYPE: type = httpx.Client  # what `http_client=` must be
+
+    def __init__(self, *, http_client: Any = None, **overrides: Any) -> None:
+        known = {f.name for f in fields(Settings)}
+        for k in overrides:
+            if k not in known:
+                raise TypeError(f"{type(self).__name__}() got an unexpected keyword argument {k!r}")
+        if http_client is not None and not isinstance(http_client, self._HTTP_CLIENT_TYPE):
+            raise TypeError(
+                f"http_client must be an httpx.{self._HTTP_CLIENT_TYPE.__name__}; got {type(http_client).__name__}"
+            )
+        # The keyword arguments count as configured settings, so the provider rule sees a key passed here.
+        self._settings = _settings_with(overrides)
+        self._http: Any = http_client  # the pooled HTTP client; created on first use unless one was passed
+        self._owns_http = http_client is None  # only an HTTP client created here is closed by close()/aclose()
+        self._http_loop: asyncio.AbstractEventLoop | None = None  # the loop an AsyncClient's own pool belongs to
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def _current_loop(self) -> asyncio.AbstractEventLoop | None:
+        """The event loop an HTTP client created now would belong to; None for :class:`Client`, whose pool has none."""
+        return None
+
+    def _session(self) -> Any:
+        """The HTTP client every request goes through: ``http_client``, else one created on first use (by the
+        subclass's ``_new_session``) and reused until the client is closed.
+
+        An :class:`AsyncClient`'s own HTTP client belongs to the event loop it was created on, whose connections cannot
+        be used from another. Once that loop has stopped (a later ``asyncio.run``), a request on a new loop creates a
+        new one; while it still runs in another thread, a request from a different loop raises ``RuntimeError``.
+        """
+        loop = self._current_loop()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError(f"This {type(self).__name__} is closed; create a new one to send requests.")
+            if self._owns_http and self._http is not None and loop is not self._http_loop:
+                if self._http_loop is not None and self._http_loop.is_running():
+                    raise RuntimeError(
+                        f"This {type(self).__name__} is in use on an event loop running in another thread, which its "
+                        f"connections belong to; create one {type(self).__name__} per event loop."
+                    )
+                # Released, not closed: only its stopped loop could close it (asyncio closes the sockets on collection).
+                self._http = None
+            if self._http is None:
+                self._http, self._http_loop = self._new_session(self._settings.timeout), loop
+            return self._http
+
+    def _detach_session(self) -> Any:
+        """Mark the client closed; returns the HTTP client to close: None when there is none, it was passed in, or it
+        belongs to another event loop (which alone could close it)."""
+        loop = self._current_loop()
+        with self._lock:
+            self._closed = True
+            session, self._http = self._http, None
+            closable = self._owns_http and loop is self._http_loop
+        return session if closable else None
 
     def _prepare_invocation(
         self,
@@ -739,23 +653,36 @@ class _ClientCore:
         stream: bool,
         gen_kwargs: dict[str, Any],
     ) -> _PreparedInvocation:
-        s = self._settings
-        local_kwargs = dict(gen_kwargs)
-        reasoning_flag = local_kwargs.pop("reasoning", None)
-        reasoning_effort = _normalize_reasoning_effort(local_kwargs.pop("reasoning_effort", None))
-        enable_audio_in_video = local_kwargs.pop("enable_audio_in_video", None)
-        provider_cfg = _resolve_provider(local_kwargs.pop("provider", None) or s.provider)
-        temperature = local_kwargs.pop("temperature", s.temperature)
-        max_tokens = local_kwargs.pop("max_tokens", s.max_tokens)
-        top_p = local_kwargs.pop("top_p", s.top_p)
-        top_k = local_kwargs.pop("top_k", s.top_k)
-        frequency_penalty = local_kwargs.pop("frequency_penalty", s.frequency_penalty)
-        presence_penalty = local_kwargs.pop("presence_penalty", s.presence_penalty)
-        response_format = local_kwargs.pop("response_format", None)
+        """Resolve provider and model, apply the `<hint>` encoding, lower the task and build the request body.
 
-        if "model" not in local_kwargs and s.model is not None:
-            local_kwargs["model"] = s.model
-        model = _pop_and_resolve_model(provider_cfg, local_kwargs)
+        Only parameters the caller set (or configured defaults) are sent. Tool parameters and structured-output controls
+        go through the message API's validators before any request; ``extra_body`` is merged last, unvalidated.
+        """
+        s = self._settings
+        stream_options = gen_kwargs.get("stream_options")
+        if stream_options is not None and not isinstance(stream_options, Mapping):
+            raise TypeError("stream_options must be a dict, e.g. {'include_usage': True}")
+        extra_body = gen_kwargs.get("extra_body")
+        if extra_body is not None and not isinstance(extra_body, Mapping):
+            raise TypeError("extra_body must be a dict")
+
+        def _option(name: str) -> Any:
+            # An explicit argument, else the configured default.
+            value = gen_kwargs.get(name)
+            return getattr(s, name) if value is None else value
+
+        reasoning_flag = gen_kwargs.get("reasoning")
+        reasoning_effort = _normalize_reasoning_effort(gen_kwargs.get("reasoning_effort"))
+        enable_audio_in_video = gen_kwargs.get("enable_audio_in_video")
+        # The message API's `vision_config` check: a non-bool raises (coercing would send "false" as true).
+        vision_config = (
+            None
+            if enable_audio_in_video is None
+            else _normalize_vision_config({"enable_audio_in_video": enable_audio_in_video})
+        )
+        provider_cfg = _resolve_provider(_option("provider"))
+        provider_name = provider_cfg["name"]
+        model = _pop_and_resolve_model(provider_cfg, {"model": _option("model")})
         task_with_hint, reasoning_flag = _apply_reasoning_and_hints(
             task=task,
             expects=expects,
@@ -763,22 +690,30 @@ class _ClientCore:
             provider_cfg=provider_cfg,
             reasoning_flag=reasoning_flag,
         )
-        prepared_task, url, headers, resolved_cfg = _prepare_transport(s, provider_cfg, task_with_hint, stream=stream)
-        messages = _task_to_openai_messages(prepared_task)
+        if stream and not provider_cfg.get("stream", True):
+            raise BadRequestError(f"Streaming is not supported for provider='{provider_name}'")
+        base_url = s.base_url or provider_cfg.get("base_url")
+        messages = _task_to_openai_messages(task_with_hint, base_url=base_url, provider_name=provider_name)
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
         }
+        temperature = _option("temperature")
         if temperature is not None:
             body["temperature"] = temperature
+        max_tokens = _option("max_tokens")
         if max_tokens is not None:
             body["max_completion_tokens"] = max_tokens
+        top_p = _option("top_p")
         if top_p is not None:
             body["top_p"] = top_p
+        top_k = _option("top_k")
         if top_k is not None:
             body["top_k"] = top_k
+        frequency_penalty = _option("frequency_penalty")
         if frequency_penalty is not None:
             body["frequency_penalty"] = frequency_penalty
+        presence_penalty = _option("presence_penalty")
         if presence_penalty is not None:
             body["presence_penalty"] = presence_penalty
         if reasoning_flag:
@@ -787,164 +722,502 @@ class _ClientCore:
             # `_inject_expectation_hint` prepends. Non-perceptron providers
             # keep the original top-level `reasoning` field until each
             # backend's exact format is verified.
-            if provider_cfg.get("name") != "perceptron":
+            if provider_name != "perceptron":
                 body["reasoning"] = True
         if stream:
             body["stream"] = True
+            # Usage arrives on perceptron streams only when requested; fal's support is unverified.
+            if stream_options is None and provider_name == PERCEPTRON_PROVIDER:
+                stream_options = {"include_usage": True}
+            if stream_options is not None:
+                body["stream_options"] = dict(stream_options)
         if reasoning_effort is not None:
             # Top-level, as the API defines it. Independent of the `<hint>` THINK encoding of
             # `reasoning=True`: the API turns reasoning on for any tier other than `none`.
             body["reasoning_effort"] = reasoning_effort
-        if enable_audio_in_video is not None:
-            body["vision_config"] = {"enable_audio_in_video": bool(enable_audio_in_video)}
+        if vision_config is not None:
+            body["vision_config"] = vision_config
 
         # Add constrained decoding field (json_schema → response_format, regex → regex)
-        format_result = _build_response_format(response_format)
+        format_result = _build_response_format(gen_kwargs.get("response_format"))
         if format_result is not None:
             field_name, field_value = format_result
             body[field_name] = field_value
 
-        return _PreparedInvocation(url=url, headers=headers, body=body, expects=expects, provider_cfg=resolved_cfg)
+        tools = gen_kwargs.get("tools")
+        if tools is not None:
+            body["tools"] = list(tools) if isinstance(tools, tuple) else tools
+        for name in ("tool_choice", "parallel_tool_calls"):
+            if gen_kwargs.get(name) is not None:
+                body[name] = gen_kwargs[name]
+        _validate_request_body(body)
+        if extra_body:
+            body.update(extra_body)  # merged last, unvalidated
 
-    def _build_result(self, data: dict[str, Any], expects: str | None) -> dict[str, Any]:
-        message = data.get("choices", [{}])[0].get("message", {})
+        return _PreparedInvocation(
+            body=body,
+            expects=expects,
+            provider_cfg={**provider_cfg, "base_url": base_url},
+            asset_count=count_assets(messages),
+        )
+
+    def _build_result(
+        self,
+        data: dict[str, Any],
+        expects: str | None,
+        *,
+        headers: Any = None,
+        n_assets: int | None = None,
+        strict: bool = False,
+    ) -> dict[str, Any]:
+        """Normalize a chat completion response.
+
+        Keys: ``text``, ``reasoning``, ``raw``, the ``expects`` bucket, ``tracks`` and ``parsed`` (see
+        ``_add_buckets``), ``finish_reason``, ``tool_calls`` (``list[ToolCall]`` or None), ``usage`` (the server's
+        usage object as sent, or None), ``id``, ``model``, ``request_id`` (the ``x-trace-id`` header), ``complete``,
+        ``asset_count`` (``n_assets``, the ``asset_idx`` space) and ``errors``. Malformed markup in the answer becomes an
+        ``errors`` entry; with ``strict`` it raises ``ParseError`` carrying ``request_id`` (also in ``details``) and the
+        answer as ``partial`` (``text``, ``reasoning``, ``tool_calls``, ``finish_reason``), like the strict stream's
+        ``error`` event. A response without choices raises ``ServerError``.
+        """
+        request_id = _transport.header_value(headers, _transport.TRACE_ID_HEADER)
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list) or not choices:
+            raise ServerError(
+                "The server returned a chat completion without choices.",
+                code=INVALID_RESPONSE,
+                request_id=request_id,
+                details={"response": data},
+            )
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        message = first.get("message") if isinstance(first.get("message"), dict) else {}
 
         reasoning_content = message.get("reasoning_content")
         content = message.get("content")
 
         result: dict[str, Any] = {"text": content, "reasoning": reasoning_content, "raw": data}
+        errors: list[dict[str, Any]] = []
+        completion = ChatCompletion.from_dict(data, request_id=request_id, asset_count=n_assets)
         if expects in _BUCKET_BY_EXPECTS and isinstance(content, str):
-            bucket_name, extract = _BUCKET_BY_EXPECTS[expects]
-            result[bucket_name] = extract(content)
-            result["parsed"] = parse_text(content, expects=expects)
+            try:
+                _add_buckets(result, content, expects, errors, strict=strict)
+            except ParseError as exc:
+                exc.request_id = request_id
+                if request_id is not None:
+                    exc.details.setdefault("request_id", request_id)
+                exc.partial = {
+                    "text": content,
+                    "reasoning": completion.reasoning,
+                    "tool_calls": completion.tool_calls,
+                    "finish_reason": completion.finish_reason,
+                }
+                raise
+        result.update(_result_metadata(completion, data.get("usage")))
+        result["errors"] = errors
         return result
+
+    def _stream_processor(
+        self, invocation: _PreparedInvocation, response: Any, *, parse_points: bool, strict: bool
+    ) -> _StreamProcessor:
+        return _StreamProcessor(
+            client_core=self,
+            expects=invocation.expects,
+            parse_points=parse_points,
+            max_buffer_bytes=self._settings.max_buffer_bytes,
+            request_id=_transport.request_id_of(response),
+            n_assets=invocation.asset_count,
+            strict=strict,
+        )
 
 
 class Client(_ClientCore):
-    def generate(self, task: dict, *, expects: str | None = None, **gen_kwargs: Any) -> dict:
-        invocation = self._prepare_invocation(task, expects=expects, stream=False, gen_kwargs=gen_kwargs)
-        try:
-            with _http_client(self._settings.timeout) as session:
-                resp = session.post(invocation.url, headers=invocation.headers, json=invocation.body)
-        except httpx.TimeoutException as e:  # pragma: no cover - error path
-            raise TimeoutError("request timed out") from e
-        except httpx.HTTPError as e:  # pragma: no cover
-            raise TransportError(str(e)) from e
-        data = _response_json(resp)
-        return self._build_result(data, invocation.expects)
+    """Runs compiled tasks (``generate``/``stream``) and hosts the message API (``chat``), ``files`` and ``models``.
 
-    def stream(
+    Keyword arguments override the settings for this client (``Client(provider="fal", api_key=...)``). The provider is
+    resolved when the client is built, with the rule of :class:`~perceptron.config.Settings` (``perceptron`` unless you
+    choose one, or ``FAL_KEY`` is your only key; an ``api_key=`` without a ``provider=`` goes to the Perceptron API),
+    and every surface uses it; ``files``, ``models`` and multilook need provider ``perceptron``. ``generate``/``stream``
+    also take a per-call ``provider=``.
+
+    ``generate``/``stream`` send only the parameters you set (or configured defaults). ``reasoning=True`` adds the
+    ``<hint>THINK</hint>`` encoding and ``expects`` the ``<hint>BOX</hint>``-style one (a system message on provider
+    ``perceptron``); ``reasoning_effort`` is sent as the top-level field. They are independent: the server treats a
+    THINK hint as reasoning on, so ``reasoning=True, reasoning_effort="none"`` still reasons; use ``reasoning_effort``
+    alone to pick a tier. ``tools``, ``tool_choice`` (``"auto"``/``"none"``) and ``parallel_tool_calls`` are checked
+    like ``client.chat.completions.create``; ``extra_body`` is merged into the body last, unvalidated. Malformed markup
+    in the answer is an ``errors`` entry; ``strict=True`` raises ``ParseError`` instead (streams end with an ``error``
+    event). Unknown keyword arguments raise ``TypeError``; the retired ``focus`` and ``visual_reasoning`` say so.
+
+    Every request goes through one pooled HTTP client (``httpx.Client`` keeping HTTP/1.1 connections alive), created
+    on first use and reused by ``generate``/``stream``, ``chat``, ``files``, ``models`` and multilook. A stream closed
+    before its end closes its connection, so the server stops generating. Close the client with :meth:`close` or a
+    ``with Client() as client:`` block; a closed client cannot send requests. ``http_client=`` supplies your own
+    ``httpx.Client`` (proxies, custom transports, limits): the client uses it as is and never closes it, and each
+    request still carries the SDK's timeout (``timeout``, or a per-call one). With ``httpx.Client(http2=True)``, a
+    stream closed early is not cancelled: the server keeps generating it.
+    """
+
+    def _new_session(self, timeout: float | None) -> httpx.Client:
+        return _http_client(timeout)
+
+    def close(self) -> None:
+        """Close the HTTP client this client created (an ``http_client`` you passed stays open); streams still
+        reading from it then end with an error. Safe to call more than once."""
+        session = self._detach_session()
+        if session is not None:
+            session.close()
+
+    def __enter__(self) -> Client:
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
+
+    @cached_property
+    def chat(self) -> Chat:
+        """The message-level API: ``client.chat.completions.create(messages=[...])``."""
+        return Chat(self)
+
+    @cached_property
+    def files(self) -> Any:
+        """The Files API (upload, list, retrieve, content, download, delete)."""
+        from .files import Files  # noqa: PLC0415
+
+        return Files(self)
+
+    @cached_property
+    def models(self) -> Any:
+        """The Models API (list, retrieve)."""
+        from .models import Models  # noqa: PLC0415
+
+        return Models(self)
+
+    def generate(  # noqa: PLR0913 - the generation parameters
+        self,
+        task: dict,
+        *,
+        expects: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        reasoning: bool | None = None,
+        reasoning_effort: str | None = None,
+        enable_audio_in_video: bool | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+        response_format: ResponseFormat | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+        parallel_tool_calls: bool | None = None,
+        extra_body: dict[str, Any] | None = None,
+        strict: bool = False,
+        **kwargs: Any,
+    ) -> dict:
+        """Run ``task`` and return the normalized result (see ``_build_result`` for its keys)."""
+        _reject_unexpected_kwargs("generate", kwargs)
+        invocation = self._prepare_invocation(
+            task,
+            expects=expects,
+            stream=False,
+            gen_kwargs={
+                "model": model,
+                "provider": provider,
+                "reasoning": reasoning,
+                "reasoning_effort": reasoning_effort,
+                "enable_audio_in_video": enable_audio_in_video,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": top_p,
+                "top_k": top_k,
+                "frequency_penalty": frequency_penalty,
+                "presence_penalty": presence_penalty,
+                "response_format": response_format,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "parallel_tool_calls": parallel_tool_calls,
+                "extra_body": extra_body,
+            },
+        )
+        cfg = invocation.provider_cfg
+        payload, headers = _transport.request_json(self, "POST", cfg["path"], json=invocation.body, provider_cfg=cfg)
+        return self._build_result(payload, expects, headers=headers, n_assets=invocation.asset_count, strict=strict)
+
+    def stream(  # noqa: PLR0913 - the generation parameters
         self,
         task: dict,
         *,
         expects: str | None = None,
         parse_points: bool = False,
-        **gen_kwargs: Any,
-    ):
+        model: str | None = None,
+        provider: str | None = None,
+        reasoning: bool | None = None,
+        reasoning_effort: str | None = None,
+        enable_audio_in_video: bool | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+        response_format: ResponseFormat | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+        parallel_tool_calls: bool | None = None,
+        extra_body: dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
+        strict: bool = False,
+        **kwargs: Any,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream ``task`` as events (see the module docstring); ends with one ``final`` or one ``error`` event.
+
+        Keyword arguments are checked when called (``TypeError``); other errors before the request (lowering, model
+        resolution, validation) arrive as the single ``error`` event. Streams to provider ``perceptron`` request usage
+        (``stream_options={"include_usage": True}``) unless you pass ``stream_options``.
+        """
+        _reject_unexpected_kwargs("stream", kwargs)
         try:
-            invocation = self._prepare_invocation(task, expects=expects, stream=True, gen_kwargs=gen_kwargs)
+            invocation = self._prepare_invocation(
+                task,
+                expects=expects,
+                stream=True,
+                gen_kwargs={
+                    "model": model,
+                    "provider": provider,
+                    "reasoning": reasoning,
+                    "reasoning_effort": reasoning_effort,
+                    "enable_audio_in_video": enable_audio_in_video,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                    "frequency_penalty": frequency_penalty,
+                    "presence_penalty": presence_penalty,
+                    "response_format": response_format,
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "parallel_tool_calls": parallel_tool_calls,
+                    "extra_body": extra_body,
+                    "stream_options": stream_options,
+                },
+            )
         except SDKError as exc:
-            yield {"type": "error", "message": str(exc)}
-            return
+            return _error_events(exc)
+        return self._stream_events(invocation, parse_points=parse_points, strict=strict)
 
-        processor = _StreamProcessor(
-            client_core=self,
-            expects=expects,
-            parse_points=parse_points,
-            max_buffer_bytes=self._settings.max_buffer_bytes,
-        )
-
+    def _stream_events(
+        self, invocation: _PreparedInvocation, *, parse_points: bool, strict: bool
+    ) -> Iterator[dict[str, Any]]:
+        cfg = invocation.provider_cfg
         try:
-            with _http_client(self._settings.timeout) as session:
-                with session.stream("POST", invocation.url, headers=invocation.headers, json=invocation.body) as resp:
-                    if resp.status_code != 200:
-                        err = _map_http_error(resp)
-                        yield {"type": "error", "message": str(err)}
-                        return
-                    for line in _iter_sse_lines(resp):
-                        done, events = _process_sse_line(line, processor)
-                        yield from events
-                        if done:
-                            break
-        except httpx.TimeoutException:
-            yield {"type": "error", "message": "timeout"}
+            response, closer = _transport.open_stream(self, "POST", cfg["path"], json=invocation.body, provider_cfg=cfg)
+        except SDKError as exc:  # HTTP errors carry the full body (it is read before mapping)
+            yield _error_event(exc)
             return
-        except httpx.HTTPError as e:
-            yield {"type": "error", "message": str(e)}
-            return
-
-        yield processor.finalize()
+        processor = self._stream_processor(invocation, response, parse_points=parse_points, strict=strict)
+        with closer:
+            try:
+                for data in _transport.iter_sse_data(_transport.iter_response_lines(response)):
+                    yield from processor.feed(data)
+                    if processor.done:
+                        break
+            except SDKError as exc:
+                yield processor.error_event(exc)
+                return
+        yield processor.terminal_event()
 
 
 class AsyncClient(_ClientCore):
-    """Asynchronous variant using httpx.AsyncClient."""
+    """Asynchronous variant of :class:`Client` (same parameters) over one pooled ``httpx.AsyncClient`` (HTTP/1.1).
 
-    async def generate(self, task: dict, *, expects: str | None = None, **gen_kwargs: Any) -> dict:
-        invocation = self._prepare_invocation(task, expects=expects, stream=False, gen_kwargs=gen_kwargs)
+    Close it with ``await client.aclose()`` or an ``async with AsyncClient() as client:`` block. Its pool belongs to
+    the event loop it runs on: after that loop ends (say, a second ``asyncio.run``), the next request opens a new pool
+    on the new loop; using the client from event loops running at the same time in different threads raises
+    ``RuntimeError`` (create one client per loop). ``http_client=`` takes your own ``httpx.AsyncClient``, which the SDK
+    uses as is and never closes.
+    """
+
+    _HTTP_CLIENT_TYPE = httpx.AsyncClient
+
+    def _new_session(self, timeout: float | None) -> httpx.AsyncClient:
+        return _async_http_client(timeout)
+
+    def _current_loop(self) -> asyncio.AbstractEventLoop | None:
         try:
-            async with httpx.AsyncClient(timeout=self._settings.timeout) as session:
-                resp = await session.post(
-                    invocation.url,
-                    headers=invocation.headers,
-                    content=json.dumps(invocation.body),
-                )
-        except httpx.TimeoutException as e:  # pragma: no cover - error path
-            raise TimeoutError("request timed out") from e
-        except httpx.HTTPError as e:  # pragma: no cover
-            raise TransportError(str(e)) from e
-        data = _response_json(resp)
-        return self._build_result(data, invocation.expects)
+            return asyncio.get_running_loop()
+        except RuntimeError:  # not on an asyncio loop (another async library): the pool is not bound to one
+            return None
 
-    def stream(
+    async def aclose(self) -> None:
+        """Close the HTTP client this client created (an ``http_client`` you passed stays open); streams still
+        reading from it then end with an error. Safe to call more than once, and from a later event loop: a pool left
+        on a loop that has ended is only released, since that loop took its connections with it."""
+        session = self._detach_session()
+        if session is not None:
+            await session.aclose()
+
+    async def __aenter__(self) -> AsyncClient:
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        await self.aclose()
+
+    @cached_property
+    def chat(self) -> AsyncChat:
+        """The async message-level API: ``await client.chat.completions.create(messages=[...])``."""
+        return AsyncChat(self)
+
+    @cached_property
+    def files(self) -> Any:
+        """The async Files API."""
+        from .files import AsyncFiles  # noqa: PLC0415
+
+        return AsyncFiles(self)
+
+    @cached_property
+    def models(self) -> Any:
+        """The async Models API."""
+        from .models import AsyncModels  # noqa: PLC0415
+
+        return AsyncModels(self)
+
+    async def generate(  # noqa: PLR0913 - the generation parameters
+        self,
+        task: dict,
+        *,
+        expects: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        reasoning: bool | None = None,
+        reasoning_effort: str | None = None,
+        enable_audio_in_video: bool | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+        response_format: ResponseFormat | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+        parallel_tool_calls: bool | None = None,
+        extra_body: dict[str, Any] | None = None,
+        strict: bool = False,
+        **kwargs: Any,
+    ) -> dict:
+        """Async :meth:`Client.generate`."""
+        _reject_unexpected_kwargs("generate", kwargs)
+        invocation = self._prepare_invocation(
+            task,
+            expects=expects,
+            stream=False,
+            gen_kwargs={
+                "model": model,
+                "provider": provider,
+                "reasoning": reasoning,
+                "reasoning_effort": reasoning_effort,
+                "enable_audio_in_video": enable_audio_in_video,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": top_p,
+                "top_k": top_k,
+                "frequency_penalty": frequency_penalty,
+                "presence_penalty": presence_penalty,
+                "response_format": response_format,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "parallel_tool_calls": parallel_tool_calls,
+                "extra_body": extra_body,
+            },
+        )
+        cfg = invocation.provider_cfg
+        payload, headers = await _transport.arequest_json(
+            self, "POST", cfg["path"], json=invocation.body, provider_cfg=cfg
+        )
+        return self._build_result(payload, expects, headers=headers, n_assets=invocation.asset_count, strict=strict)
+
+    def stream(  # noqa: PLR0913 - the generation parameters
         self,
         task: dict,
         *,
         expects: str | None = None,
         parse_points: bool = False,
-        **gen_kwargs: Any,
-    ):
-        async def _run_async_stream():
-            try:
-                invocation = self._prepare_invocation(task, expects=expects, stream=True, gen_kwargs=gen_kwargs)
-            except SDKError as exc:
-                yield {"type": "error", "message": str(exc)}
-                return
-
-            processor = _StreamProcessor(
-                client_core=self,
+        model: str | None = None,
+        provider: str | None = None,
+        reasoning: bool | None = None,
+        reasoning_effort: str | None = None,
+        enable_audio_in_video: bool | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        frequency_penalty: float | None = None,
+        presence_penalty: float | None = None,
+        response_format: ResponseFormat | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | None = None,
+        parallel_tool_calls: bool | None = None,
+        extra_body: dict[str, Any] | None = None,
+        stream_options: dict[str, Any] | None = None,
+        strict: bool = False,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Async :meth:`Client.stream`: returns an async iterator of the same events."""
+        _reject_unexpected_kwargs("stream", kwargs)
+        try:
+            invocation = self._prepare_invocation(
+                task,
                 expects=expects,
-                parse_points=parse_points,
-                max_buffer_bytes=self._settings.max_buffer_bytes,
+                stream=True,
+                gen_kwargs={
+                    "model": model,
+                    "provider": provider,
+                    "reasoning": reasoning,
+                    "reasoning_effort": reasoning_effort,
+                    "enable_audio_in_video": enable_audio_in_video,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                    "frequency_penalty": frequency_penalty,
+                    "presence_penalty": presence_penalty,
+                    "response_format": response_format,
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "parallel_tool_calls": parallel_tool_calls,
+                    "extra_body": extra_body,
+                    "stream_options": stream_options,
+                },
             )
+        except SDKError as exc:
+            return _aerror_events(exc)
+        return self._stream_events(invocation, parse_points=parse_points, strict=strict)
 
+    async def _stream_events(
+        self, invocation: _PreparedInvocation, *, parse_points: bool, strict: bool
+    ) -> AsyncIterator[dict[str, Any]]:
+        cfg = invocation.provider_cfg
+        try:
+            response, closer = await _transport.aopen_stream(
+                self, "POST", cfg["path"], json=invocation.body, provider_cfg=cfg
+            )
+        except SDKError as exc:  # HTTP errors carry the full body (it is read before mapping)
+            yield _error_event(exc)
+            return
+        processor = self._stream_processor(invocation, response, parse_points=parse_points, strict=strict)
+        async with closer:
             try:
-                async with httpx.AsyncClient(timeout=self._settings.timeout) as session:
-                    async with session.stream(
-                        "POST",
-                        invocation.url,
-                        headers=invocation.headers,
-                        content=json.dumps(invocation.body),
-                    ) as resp:
-                        if resp.status_code != 200:
-                            err = _map_http_error(resp)
-                            yield {"type": "error", "message": str(err)}
-                            return
-                        async for line in _aiter_sse_lines(resp):
-                            done, events = _process_sse_line(line, processor)
-                            for event in events:
-                                yield event
-                            if done:
-                                break
-            except httpx.TimeoutException:
-                yield {"type": "error", "message": "timeout"}
+                async for data in _transport.aiter_sse_data(_transport.aiter_response_lines(response)):
+                    for event in processor.feed(data):
+                        yield event
+                    if processor.done:
+                        break
+            except SDKError as exc:
+                yield processor.error_event(exc)
                 return
-            except httpx.HTTPError as e:
-                yield {"type": "error", "message": str(e)}
-                return
-
-            yield processor.finalize()
-
-        return _run_async_stream()
+        yield processor.terminal_event()
 
 
 # ---------------------------------------------------------------------------

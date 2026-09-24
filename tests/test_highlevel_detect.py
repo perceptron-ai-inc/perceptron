@@ -1,66 +1,69 @@
 import json
 
+import pytest
+from _http_mock import chunk, completion, install, json_response, sse_response
 from _image_fixtures import PNG_BYTES
 
 from cookbook.utils import cookbook_asset
 from perceptron import annotate_image, detect, detect_from_coco, image
-from perceptron import client as client_mod
 from perceptron import config as cfg
 from perceptron.highlevel import CocoDetectResult
 from perceptron.pointing.types import SinglePoint, bbox, collection
 
 
-class _StubClient:
-    def generate(self, task, **kwargs):
-        return {"text": "", "points": None, "parsed": None, "raw": task}
-
-    def stream(self, task, **kwargs):
-        yield {"type": "text.delta", "chunk": "hello"}
-        yield {"type": "final", "result": {"text": "done", "points": [], "errors": []}}
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    for key in ("FAL_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
 
 
-class _FakeResponse:
-    def __init__(self, payload, status=200):
-        self._payload = payload
-        self.status_code = status
-        self.text = json.dumps(payload)
-        self.headers = {}
-
-    def json(self):
-        return self._payload
+@pytest.fixture
+def http(monkeypatch):
+    """The API behind `httpx.MockTransport`, answering with an empty completion."""
+    return install(monkeypatch, lambda request: json_response(completion("")))
 
 
-def test_detect_compile_only(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
+def _texts(http, role: str) -> list[str]:
+    """The text of each ``role`` message in the last request (string content, or its text parts joined)."""
+    texts = []
+    for message in http.last_body["messages"]:
+        if message["role"] != role:
+            continue
+        content = message["content"]
+        if isinstance(content, str):
+            texts.append(content)
+        else:
+            texts.append("".join(part["text"] for part in content if part["type"] == "text"))
+    return texts
 
-    # Execute with stubbed client to inspect compiled task without API calls
+
+def test_detect_compile_only(http):
     with cfg(api_key="test-key", provider="fal"):
         res = detect(image(PNG_BYTES), classes=["person"], max_tokens=16)
-    assert res.raw and isinstance(res.raw, dict)
-    roles = [item.get("role") for item in res.raw.get("content", [])]
+    assert res.raw == completion("")
+    body = http.last_body
+    roles = [message["role"] for message in body["messages"]]
     assert roles and roles[0] == "system"
+    assert "person" in body["messages"][0]["content"]
+    assert body["max_completion_tokens"] == 16
     assert res.errors == []
 
 
-def test_detect_with_examples(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
-
+def test_detect_with_examples(http):
     example = annotate_image(
         PNG_BYTES,
         [bbox(1, 2, 3, 4, mention="car")],
     )
-    # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(image(PNG_BYTES), classes=["car"], examples=[example])
-    content = res.raw.get("content", [])
+        detect(image(PNG_BYTES), classes=["car"], examples=[example])
     # Should include example turns before target image
-    assistants = [item for item in content if item.get("role") == "assistant"]
-    assert assistants and "<point_box" in assistants[0]["content"]
+    roles = [message["role"] for message in http.last_body["messages"]]
+    assert roles == ["system", "user", "assistant", "user"]
+    assistants = _texts(http, "assistant")
+    assert assistants and "<point_box" in assistants[0]
 
 
-def test_detect_with_collection_examples(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
-
+def test_detect_with_collection_examples(http):
     example = annotate_image(
         PNG_BYTES,
         [
@@ -74,37 +77,31 @@ def test_detect_with_collection_examples(monkeypatch):
         ],
     )
 
-    # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(image(PNG_BYTES), classes=["group"], examples=[example])
-    content = res.raw.get("content", [])
-    assistants = [item for item in content if item.get("role") == "assistant"]
-    assert assistants and "<collection" in assistants[0]["content"]
+        detect(image(PNG_BYTES), classes=["group"], examples=[example])
+    assistants = _texts(http, "assistant")
+    assert assistants and "<collection" in assistants[0]
 
 
-def test_detect_canonicalizes_collection_order(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
+def test_detect_canonicalizes_collection_order(http):
     example = annotate_image(
-        b"img",
+        PNG_BYTES,
         {
             "car": [bbox(1, 2, 3, 4, mention="car")],
             "person": [bbox(5, 6, 7, 8, mention="person")],
         },
     )
 
-    # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(image(b"target"), classes=["person", "car"], examples=[example])
+        detect(image(PNG_BYTES), classes=["person", "car"], examples=[example])
 
-    assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
-    content = assistant["content"]
+    content = _texts(http, "assistant")[0]
     assert content.index('mention="person"') < content.index('mention="car"')
 
 
-def test_detect_sorts_collection_children(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
+def test_detect_sorts_collection_children(http):
     example = annotate_image(
-        b"img",
+        PNG_BYTES,
         [
             collection(
                 [
@@ -116,12 +113,10 @@ def test_detect_sorts_collection_children(monkeypatch):
         ],
     )
 
-    # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(image(b"target"), classes=["group"], examples=[example])
+        detect(image(PNG_BYTES), classes=["group"], examples=[example])
 
-    assistant = next(item for item in res.raw["content"] if item.get("role") == "assistant")
-    content = assistant["content"]
+    content = _texts(http, "assistant")[0]
     first_idx = content.index("(10,20) (30,40)")
     second_idx = content.index("(50,60) (70,80)")
     assert first_idx < second_idx
@@ -159,31 +154,33 @@ def test_annotate_image_sorts_mapping_collections():
     assert mentions == ["a", "z"]
 
 
-def test_prompt_collection_canonicalization(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "generate", _StubClient.generate)
+def test_prompt_collection_canonicalization(http):
     example = {
-        "image": b"img",
+        "image": PNG_BYTES,
         "collections": [collection([bbox(5, 5, 10, 10)], mention="group")],
         "prompt": 'context <collection mention="group"> <point_box> (20,20) (30,30) </point_box> <point_box> (10,10) (15,15) </point_box> </collection>',
     }
 
-    # Execute with stubbed client to inspect compiled task without API calls
     with cfg(api_key="test-key", provider="fal"):
-        res = detect(image(b"target"), classes=["group"], examples=[example])
+        detect(image(PNG_BYTES), classes=["group"], examples=[example])
 
-    prompt_text = next(
-        item for item in res.raw["content"] if item.get("role") == "user" and "context" in item.get("content", "")
-    )["content"]
+    prompt_text = next(text for text in _texts(http, "user") if "context" in text)
     assert prompt_text.index("(10,10) (15,15)") < prompt_text.index("(20,20) (30,30)")
 
 
 def test_detect_stream(monkeypatch):
-    monkeypatch.setattr(client_mod.Client, "stream", _StubClient.stream)
+    http = install(
+        monkeypatch, lambda request: sse_response([chunk({"content": "hello"}), chunk({}, finish_reason="stop")])
+    )
 
     with cfg(api_key="test-key", provider="fal"):
         events = list(detect(image(PNG_BYTES), classes=None, stream=True))
+    assert http.last_body["stream"] is True
     assert events[0]["type"] == "text.delta"
+    assert events[0]["chunk"] == "hello"
     assert events[-1]["type"] == "final"
+    assert events[-1]["result"]["text"] == "hello"
+    assert [client.is_closed for client in http.clients] == [True]  # the stream's end closed the call's client
 
 
 def test_detect_flattens_collection_response(monkeypatch):
@@ -201,30 +198,35 @@ def test_detect_flattens_collection_response(monkeypatch):
             }
         ]
     }
-
-    class _Client:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def post(self, *args, **kwargs):
-            return _FakeResponse(payload)
-
-        def stream(self, *args, **kwargs):  # pragma: no cover
-            raise AssertionError
-
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
-    monkeypatch.setattr(client_mod, "_http_client", lambda timeout: _Client())
+    http = install(monkeypatch, lambda request: json_response(payload))
 
     with cfg(provider="fal", base_url="https://unit.test", api_key="test-key"):
         res = detect(image(PNG_BYTES), classes=["dog"])
 
+    assert [(request.method, str(request.url)) for request in http.requests] == [
+        ("POST", "https://unit.test/perceptron/isaac-01/openai/v1/chat/completions")
+    ]
+    assert http.last.headers["authorization"] == "Key test-key"
+    assert "stream" not in http.last_body  # a plain completion, not a stream
     assert res.text and "<collection" in res.text
     assert res.boxes and len(res.boxes) == 2
     assert res.boxes[0].mention == "dog"
     assert res.boxes[1].mention == "named"
+
+
+def test_detect_flattens_track_response_into_timed_boxes(monkeypatch):
+    content = (
+        '<collection mention="player" asset_idx="0"> <track> '
+        '<point_box t="0.0 seconds"> (10,20) (30,40) </point_box> '
+        '<point_box t="0.5 seconds"> (12,20) (32,40) </point_box> </track> </collection>'
+    )
+    install(monkeypatch, lambda request: json_response({"choices": [{"message": {"content": content}}]}))
+
+    with cfg(provider="fal", base_url="https://unit.test", api_key="test-key"):
+        res = detect(image(PNG_BYTES), classes=["player"])
+
+    assert [(b.mention, b.t, b.asset_idx) for b in res.boxes] == [("player", 0.0, 0), ("player", 0.5, 0)]
 
 
 def test_detect_from_coco(monkeypatch, tmp_path):
@@ -321,13 +323,7 @@ def test_detect_from_coco_shots(monkeypatch, tmp_path):
 
 
 def test_examples_icl_detection_sequence(monkeypatch):
-    captured: dict[str, dict] = {}
-
-    def _mock_generate(self, task, **kwargs):
-        captured["task"] = task
-        return {"text": "ok", "points": [], "parsed": None, "raw": {"choices": []}}
-
-    monkeypatch.setattr(client_mod.Client, "generate", _mock_generate)
+    http = install(monkeypatch, lambda request: json_response(completion("ok")))
 
     cat_example = annotate_image(
         str(cookbook_asset("in-context-learning", "multi", "classA.jpg")),
@@ -347,16 +343,20 @@ def test_examples_icl_detection_sequence(monkeypatch):
         )
 
     assert res.text == "ok"
-    assert "task" in captured
-    task = captured["task"]
-    content = task.get("content", [])
-    assistant_messages = [item.get("content", "") for item in content if item.get("role") == "assistant"]
+    assert [str(request.url) for request in http.requests] == ["https://api.perceptron.inc/v1/chat/completions"]
+    assistant_messages = _texts(http, "assistant")
     assert any("classA" in msg and "(316,136) (703,906)" in msg for msg in assistant_messages)
     assert any("classB" in msg and "(161,48) (666,980)" in msg for msg in assistant_messages)
-    system_msgs = [item.get("content", "") for item in content if item.get("role") == "system"]
-    # The categories prompt should appear in some system message; the hint
-    # injection may add an additional `<hint>BOX</hint>` system entry on
-    # the perceptron provider, so check across all system messages.
+    system_msgs = _texts(http, "system")
+    # The categories prompt should appear in some system message; on the
+    # perceptron provider the `<hint>BOX</hint>` hint is sent with the system
+    # role too, so check across all system messages.
     assert any("classA" in msg and "classB" in msg for msg in system_msgs)
-    image_nodes = [item for item in content if item.get("type") == "image"]
-    assert len(image_nodes) == 3
+    image_parts = [
+        part
+        for message in http.last_body["messages"]
+        if isinstance(message["content"], list)
+        for part in message["content"]
+        if part["type"] == "image_url"
+    ]
+    assert len(image_parts) == 3

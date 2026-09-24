@@ -1,60 +1,59 @@
+"""`async_perceive` over `httpx.MockTransport` (see `_http_mock`): each call runs on its own `AsyncClient`."""
+
 import asyncio
+import json
 
 import pytest
+from _http_mock import install, json_response, sse_response
+from _image_fixtures import PNG_BYTES
 
 from perceptron import async_perceive
 from perceptron.dsl.nodes import image, text
 from perceptron.errors import AuthError
 
-
-class _StubAsyncClient:
-    def __init__(self, **kwargs):  # pylint: disable=unused-argument
-        pass
-
-    async def generate(self, task, **kwargs):  # pylint: disable=unused-argument
-        return {
-            "text": "hello async",
-            "points": None,
-            "parsed": None,
-            "raw": {"choices": [{"message": {"content": "hello async"}}]},
-        }
+FAL_URL = "https://fal.run/perceptron/isaac-01/openai/v1/chat/completions"
+COMPLETION = {"choices": [{"message": {"content": "hello async"}}]}
 
 
-class _StubStreamAsyncClient(_StubAsyncClient):
-    def stream(self, task, **kwargs):  # pylint: disable=unused-argument
-        async def _gen():
-            yield {"type": "text.delta", "chunk": "hi"}
-            yield {
-                "type": "final",
-                "result": {
-                    "text": "hi",
-                    "points": None,
-                    "parsed": None,
-                    "usage": None,
-                    "errors": [],
-                    "raw": None,
-                },
-            }
-
-        return _gen()
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    for key in ("FAL_KEY", "PERCEPTRON_API_KEY", "PERCEPTRON_PROVIDER", "PERCEPTRON_MODEL", "PERCEPTRON_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
 
 
-def test_async_perceive_generate(monkeypatch):
+@pytest.fixture
+def http(monkeypatch):
+    def _handler(request):
+        if json.loads(request.content).get("stream"):
+            return sse_response([{"choices": [{"delta": {"content": "hi"}, "finish_reason": "stop"}]}])
+        return json_response(COMPLETION)
+
+    return install(monkeypatch, _handler)
+
+
+def _sent_once(http):
+    """The body of the only request, a POST to fal (``FAL_KEY`` is the only key); the call's client was closed."""
+    assert [(request.method, str(request.url)) for request in http.requests] == [("POST", FAL_URL)]
+    assert [client.is_closed for client in http.clients] == [True]
+    return http.last_body
+
+
+def test_async_perceive_generate(monkeypatch, http):
     monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubAsyncClient)
 
     @async_perceive()
     def describe(img):
         return image(img) + text("Hello")
 
-    res = asyncio.run(describe(b"fake"))
+    res = asyncio.run(describe(PNG_BYTES))
     assert res.text == "hello async"
+    assert res.raw == COMPLETION
     assert res.errors == []
+    assert "stream" not in _sent_once(http)
 
 
-def test_async_perceive_stream(monkeypatch):
+def test_async_perceive_stream(monkeypatch, http):
     monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubStreamAsyncClient)
 
     @async_perceive(expects="point", stream=True)
     def locate(img):
@@ -62,28 +61,27 @@ def test_async_perceive_stream(monkeypatch):
 
     async def _collect():
         events_local = []
-        async for ev in locate(b"fake"):
+        async for ev in locate(PNG_BYTES):
             events_local.append(ev)
         return events_local
 
     events = asyncio.run(_collect())
 
-    assert any(ev.get("type") == "text.delta" for ev in events)
-    assert events[-1]["type"] == "final"
+    assert [ev["type"] for ev in events] == ["text.delta", "final"]
+    assert events[0]["chunk"] == "hi"
+    assert events[-1]["result"]["text"] == "hi"
+    assert events[-1]["result"]["errors"] == []
+    assert _sent_once(http)["stream"] is True
 
 
-def test_async_perceive_compile_only(monkeypatch):
-    monkeypatch.delenv("PERCEPTRON_PROVIDER", raising=False)
-    monkeypatch.delenv("FAL_KEY", raising=False)
-    monkeypatch.delenv("PERCEPTRON_API_KEY", raising=False)
-    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubAsyncClient)
-
+def test_async_perceive_compile_only(http):
+    # No API key: the call raises with the compiled task before creating a client or sending anything.
     @async_perceive()
     def describe(img):
         return image(img) + text("Hello")
 
     with pytest.raises(AuthError) as excinfo:
-        asyncio.run(describe(b"bytes"))
+        asyncio.run(describe(PNG_BYTES))
 
     details = excinfo.value.details or {}
     task = details.get("task")
@@ -91,16 +89,19 @@ def test_async_perceive_compile_only(monkeypatch):
     assert task["content"][0]["type"] == "image"
     errors = details.get("errors") or []
     assert any(err.get("code") == "credentials_missing" for err in errors)
+    assert http.requests == []
+    assert http.clients == []
 
 
-def test_async_perceive_supports_async_function(monkeypatch):
+def test_async_perceive_supports_async_function(monkeypatch, http):
     monkeypatch.setenv("FAL_KEY", "test")
-    monkeypatch.setattr("perceptron.dsl.perceive.AsyncClient", _StubAsyncClient)
 
     @async_perceive()
     async def describe(img):
         await asyncio.sleep(0)
         return image(img) + text("Hello")
 
-    res = asyncio.run(describe(b"bytes"))
+    res = asyncio.run(describe(PNG_BYTES))
     assert res.text == "hello async"
+    body = _sent_once(http)
+    assert [part["type"] for part in body["messages"][0]["content"]] == ["image_url", "text"]

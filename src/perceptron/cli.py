@@ -8,12 +8,13 @@ from collections.abc import Callable, Iterable
 from enum import Enum
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
+from rich.pretty import Pretty
 from rich.table import Table
 from rich.text import Text
 
@@ -24,24 +25,16 @@ from . import image as image_node
 from . import ocr as ocr_image
 from . import question as question_image
 from . import video as video_node
+from .dsl.nodes import Audio as AudioNode
+from .errors import SDKError
 from .highlevel import default_caption_expects
-from .pointing.types import BoundingBox, Clip, Collection, Polygon, SinglePoint
+from .pointing.types import BoundingBox, Clip, Collection, Polygon, SinglePoint, Track
 
 console = Console()
 app = typer.Typer(help="Interact with the Perceptron SDK and models.")
 
-_IMAGE_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".bmp",
-    ".gif",
-    ".webp",
-    ".tiff",
-    ".tif",
-    ".heic",
-    ".heif",
-}
+# The image formats the API accepts (png, jpeg, webp); directory mode reads only these files.
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 _VIDEO_EXTENSIONS = {".mp4", ".webm"}
 
@@ -76,20 +69,72 @@ class ReasoningEffort(str, Enum):
     HIGH = "high"
 
 
-def _generation_kwargs(*, audio_in_video: bool, reasoning_effort: ReasoningEffort | None) -> dict[str, Any]:
+# Options shared by the model commands (factories, so every command gets its own OptionInfo).
+def _model_option():
+    return typer.Option(None, "--model", help="Model id, e.g. perceptron-mk1.5 (default: the provider's default).")
+
+
+def _provider_option():
+    return typer.Option(
+        None,
+        "--provider",
+        help=(
+            "Provider: perceptron or fal (default: PERCEPTRON_PROVIDER, else perceptron; fal only when FAL_KEY is set "
+            "and PERCEPTRON_API_KEY is not)."
+        ),
+    )
+
+
+def _reasoning_effort_option():
+    return typer.Option(
+        None,
+        "--reasoning-effort",
+        case_sensitive=False,
+        help="How much the model reasons before answering (none, minimal, low, medium, or high).",
+    )
+
+
+def _audio_in_video_option():
+    return typer.Option(
+        None,
+        "--audio-in-video/--no-audio-in-video",
+        help="Process (or explicitly skip) the soundtrack of video input; unset leaves the server default.",
+    )
+
+
+def _generation_kwargs(
+    *,
+    audio_in_video: bool | None = None,
+    reasoning_effort: ReasoningEffort | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+) -> dict[str, Any]:
     """Keyword arguments a command forwards to its helper; only flags the user set are included."""
     gen_kwargs: dict[str, Any] = {}
-    if audio_in_video:
-        gen_kwargs["enable_audio_in_video"] = True
+    if audio_in_video is not None:
+        gen_kwargs["enable_audio_in_video"] = audio_in_video
     if reasoning_effort is not None:
         gen_kwargs["reasoning_effort"] = reasoning_effort.value
+    if model is not None:
+        gen_kwargs["model"] = model
+    if provider is not None:
+        gen_kwargs["provider"] = provider
     return gen_kwargs
+
+
+def _is_url(media: str) -> bool:
+    """True for an http(s) or ``data:`` URL, which is passed through (and never looked up on disk)."""
+    return media.startswith(("http://", "https://", "data:"))
+
+
+def _is_directory(media: str) -> bool:
+    return not _is_url(media) and Path(media).is_dir()
 
 
 def _resolve_media(media: str) -> str | bytes:
     """Resolve a media argument to a URL string or local-file bytes."""
 
-    if media.startswith(("http://", "https://")):
+    if _is_url(media):
         return media
     path = Path(media)
     if path.is_dir():
@@ -115,13 +160,29 @@ def _looks_like_audio(media: str) -> bool:
 
 
 def _make_media_node(media_input: str, media_data: str | bytes):
-    """Wrap resolved media data in `image()`, `video()`, or `audio()` based on the input's extension."""
+    """Wrap resolved media data in `image()`, `video()`, or `audio()`: by MIME type for a ``data:`` URL, else by the
+    input's extension."""
 
+    if media_input.startswith("data:"):
+        family = media_input[len("data:") :].split("/", 1)[0].lower()
+        return {"video": video_node, "audio": audio_node}.get(family, image_node)(media_data)
     if _looks_like_video(media_input):
         return video_node(media_data)
     if _looks_like_audio(media_input):
         return audio_node(media_data)
     return image_node(media_data)
+
+
+def _media_node_or_exit(media: str, output_format: OutputFormat, *, image_only: bool = False):
+    """The media node for a command's argument. Invalid media (an ``SDKError`` such as ``invalid_data_url``) is reported
+    like a request error (exit status 1)."""
+    try:
+        data = _resolve_media(media)
+        return image_node(data) if image_only else _make_media_node(media, data)
+    except SDKError as exc:
+        _exit_with_error(exc, output_format)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def _iter_image_files(directory: Path) -> Iterable[Path]:
@@ -130,57 +191,15 @@ def _iter_image_files(directory: Path) -> Iterable[Path]:
             yield entry
 
 
-def _serialize_single_point(point: SinglePoint) -> dict[str, Any]:
-    data: dict[str, Any] = {"x": point.x, "y": point.y}
-    if point.mention is not None:
-        data["mention"] = point.mention
-    if point.t is not None:
-        data["t"] = point.t
-    return data
+# ---------------------------------------------------------------------------
+# JSON payloads
+# ---------------------------------------------------------------------------
 
 
 def _serialize_annotation(annotation: Any) -> Any:
-    if isinstance(annotation, SinglePoint):
-        return {"type": "point", **_serialize_single_point(annotation)}
-    if isinstance(annotation, BoundingBox):
-        data: dict[str, Any] = {
-            "type": "box",
-            "top_left": _serialize_single_point(annotation.top_left),
-            "bottom_right": _serialize_single_point(annotation.bottom_right),
-        }
-        if annotation.mention is not None:
-            data["mention"] = annotation.mention
-        if annotation.t is not None:
-            data["t"] = annotation.t
-        return data
-    if isinstance(annotation, Polygon):
-        data = {
-            "type": "polygon",
-            "points": [_serialize_single_point(pt) for pt in annotation.hull],
-        }
-        if annotation.mention is not None:
-            data["mention"] = annotation.mention
-        if annotation.t is not None:
-            data["t"] = annotation.t
-        return data
-    if isinstance(annotation, Collection):
-        data = {
-            "type": "collection",
-            "points": [_serialize_annotation(pt) for pt in annotation.points],
-        }
-        if annotation.mention is not None:
-            data["mention"] = annotation.mention
-        if annotation.t is not None:
-            data["t"] = annotation.t
-        return data
-    if isinstance(annotation, Clip):
-        data = {"type": "clip", "at": annotation.timestamp.at}
-        if annotation.timestamp.until is not None:
-            data["until"] = annotation.timestamp.until
-        if annotation.mention is not None:
-            data["mention"] = annotation.mention
-        return data
-    return annotation
+    """An annotation (point, box, polygon, collection, clip, track) or tool call as a JSON-ready dict."""
+    to_dict = getattr(annotation, "to_dict", None)
+    return to_dict() if callable(to_dict) else annotation
 
 
 _BUCKET_BY_EXPECTS = {"point": "points", "box": "boxes", "polygon": "polygons", "clip": "clips"}
@@ -198,7 +217,7 @@ def _bucket_for_expects(result: Any, expects: str | None) -> tuple[str, list[Any
     bucket_name = _BUCKET_BY_EXPECTS.get(expects)
     if bucket_name is None:
         return None
-    items = getattr(result, bucket_name)
+    items = getattr(result, bucket_name, None)
     return (bucket_name, items) if items else None
 
 
@@ -213,14 +232,42 @@ def _serialize_parsed(
             serialized.append({"kind": "unknown", "value": str(segment)})
             continue
         seg_copy = dict(segment)
-        kind = seg_copy.get("kind")
-        if kind in {"point", "box", "polygon", "collection"} and "value" in seg_copy:
-            try:
-                seg_copy["value"] = _serialize_annotation(seg_copy["value"])
-            except Exception:
-                seg_copy["value"] = str(seg_copy.get("value"))
+        if "value" in seg_copy:
+            seg_copy["value"] = _serialize_annotation(seg_copy["value"])
         serialized.append(seg_copy)
     return serialized
+
+
+def _normalize_usage(usage: Any) -> dict[str, Any]:
+    if isinstance(usage, dict):
+        return usage
+    to_dict = getattr(usage, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if hasattr(usage, "_asdict"):
+        return dict(usage._asdict())  # type: ignore[attr-defined]
+    if hasattr(usage, "__dict__"):
+        return dict(usage.__dict__)
+    return {}
+
+
+def _add_metadata(payload: dict[str, Any], result: Any) -> None:
+    """Add ``tracks``, ``tool_calls``, ``finish_reason``, ``usage`` and ``request_id`` when the result has them."""
+    tracks = _serialize_points(getattr(result, "tracks", None))
+    if tracks:
+        payload["tracks"] = tracks
+    tool_calls = _serialize_points(getattr(result, "tool_calls", None))
+    if tool_calls:
+        payload["tool_calls"] = tool_calls
+    finish_reason = getattr(result, "finish_reason", None)
+    if finish_reason is not None:
+        payload["finish_reason"] = finish_reason
+    usage = getattr(result, "usage", None)
+    if usage:
+        payload["usage"] = _normalize_usage(usage)
+    request_id = getattr(result, "request_id", None)
+    if request_id is not None:
+        payload["request_id"] = request_id
 
 
 def _result_payload(result: Any, *, include_raw: bool, expects: str | None = None) -> dict[str, Any]:
@@ -228,17 +275,17 @@ def _result_payload(result: Any, *, include_raw: bool, expects: str | None = Non
     text_value = getattr(result, "text", None)
     if text_value is not None:
         payload["text"] = text_value
+    reasoning = getattr(result, "reasoning", None)
+    if reasoning:
+        payload["reasoning"] = reasoning
     populated = _bucket_for_expects(result, expects)
     if populated is not None:
         bucket_name, items = populated
         payload[bucket_name] = _serialize_points(items)
-    parsed = getattr(result, "parsed", None)
-    serialized_parsed = _serialize_parsed(parsed)
+    serialized_parsed = _serialize_parsed(getattr(result, "parsed", None))
     if serialized_parsed is not None:
         payload["parsed"] = serialized_parsed
-    usage = getattr(result, "usage", None)
-    if usage:
-        payload["usage"] = usage
+    _add_metadata(payload, result)
     errors = getattr(result, "errors", None) or []
     payload["errors"] = errors
     if include_raw:
@@ -261,7 +308,7 @@ def _process_directory(
         # Emit a friendly error to stdout for CLI tests, then exit non-zero.
         console.print(
             Panel(
-                f"Streaming output is not supported when processing a directory for '{command_name}'.",
+                Text(f"Streaming output is not supported when processing a directory for '{command_name}'."),
                 title=command_name.capitalize(),
                 border_style="red",
             )
@@ -272,7 +319,7 @@ def _process_directory(
     if not image_files:
         console.print(
             Panel(
-                f"No image files found in {directory}",
+                Text(f"No image files ({', '.join(sorted(_IMAGE_EXTENSIONS))}) found in {directory}"),
                 title=command_name.capitalize(),
                 border_style="red",
             )
@@ -288,8 +335,8 @@ def _process_directory(
         except Exception as exc:
             console.print(
                 Panel(
-                    str(exc),
-                    title=f"Error reading: {image_path.name}",
+                    Text(str(exc)),
+                    title=Text(f"Error reading: {image_path.name}"),
                     border_style="red",
                 )
             )
@@ -298,7 +345,7 @@ def _process_directory(
         try:
             result = runner(image_bytes)
         except Exception as exc:  # pragma: no cover - defensive logging
-            console.print(Panel(str(exc), title=f"Error: {image_path.name}", border_style="red"))
+            console.print(Panel(Text(str(exc)), title=Text(f"Error: {image_path.name}"), border_style="red"))
             continue
 
         outputs[image_path.name] = payload_factory(result)
@@ -308,12 +355,12 @@ def _process_directory(
                 errors.append((image_path.name, err))
 
         if show_raw and getattr(result, "raw", None):
-            console.print(Panel(result.raw, title=f"Raw: {image_path.name}", border_style="cyan"))
+            console.print(Panel(Pretty(result.raw), title=Text(f"Raw: {image_path.name}"), border_style="cyan"))
 
     if not outputs:
         console.print(
             Panel(
-                f"No successful {command_name} results produced in {directory}",
+                Text(f"No successful {command_name} results produced in {directory}"),
                 title=command_name.capitalize(),
                 border_style="red",
             )
@@ -326,7 +373,7 @@ def _process_directory(
 
     console.print(
         Panel(
-            f"Wrote {command_name} results for {len(outputs)} file(s) to {output_path}",
+            Text(f"Wrote {command_name} results for {len(outputs)} file(s) to {output_path}"),
             title=command_name.capitalize(),
             border_style="green",
         )
@@ -338,17 +385,21 @@ def _process_directory(
         table.add_column("code")
         table.add_column("message")
         for filename, err in errors:
-            table.add_row(filename, str(err.get("code")), str(err.get("message")))
+            table.add_row(Text(filename), Text(str(err.get("code"))), Text(str(err.get("message"))))
         console.print(Panel(table, title="Errors", border_style="red"))
 
 
 def _caption_payload(result: Any, *, expects: str | None = None) -> Any:
     text_value = getattr(result, "text", None) or ""
+    payload: dict[str, Any] = {"text": text_value}
     populated = _bucket_for_expects(result, expects)
     if populated is not None:
         bucket_name, items = populated
-        return {"text": text_value, bucket_name: _serialize_points(items)}
-    return text_value
+        payload[bucket_name] = _serialize_points(items)
+    tracks = _serialize_points(getattr(result, "tracks", None))
+    if tracks:
+        payload["tracks"] = tracks
+    return payload if len(payload) > 1 else text_value
 
 
 def _ocr_payload(result: Any) -> str:
@@ -362,57 +413,130 @@ def _detect_payload(result: Any) -> dict[str, Any]:
     if populated is not None:
         bucket_name, items = populated
         payload[bucket_name] = _serialize_points(items)
-    parsed = getattr(result, "parsed", None)
+    parsed = _serialize_parsed(getattr(result, "parsed", None))
     if parsed:
         payload["parsed"] = parsed
-    usage = getattr(result, "usage", None)
-    if usage:
-        payload["usage"] = usage
+    _add_metadata(payload, result)
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Rendering
+# ---------------------------------------------------------------------------
+
+
 def _print_errors(errors):
+    """The errors as a table (text is printed literally), followed by the request id of any that carry one."""
     if not errors:
         return
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("code")
     table.add_column("message")
     for err in errors:
-        table.add_row(str(err.get("code")), str(err.get("message")))
-    console.print(Panel(table, title="Errors", border_style="red"))
+        table.add_row(Text(str(err.get("code"))), Text(str(err.get("message"))))
+    request_ids = dict.fromkeys(err["request_id"] for err in errors if err.get("request_id"))
+    body = Group(table, *(Text(f"request id: {request_id}") for request_id in request_ids)) if request_ids else table
+    console.print(Panel(body, title="Errors", border_style="red"))
+
+
+def _error_fields(source: Any) -> dict[str, Any]:
+    """The JSON-ready fields of an ``SDKError`` or a stream ``error`` event (None values dropped).
+
+    ``details["task"]`` (the compiled prompt a credentials error carries, with encoded media) is left out.
+    """
+    if isinstance(source, SDKError):
+        fields = {
+            "message": str(source),
+            "code": source.code,
+            "error_type": source.error_type,
+            "param": source.param,
+            "status": source.status_code,
+            "request_id": source.request_id,
+            "details": source.details,
+        }
+    else:
+        fields = {key: source.get(key) for key in ("message", "code", "error_type", "param", "status", "request_id")}
+        fields["details"] = source.get("details")
+    details = fields.get("details")
+    fields["details"] = {k: v for k, v in details.items() if k != "task"} if isinstance(details, dict) else None
+    return {key: value for key, value in fields.items() if value not in (None, {})}
+
+
+def _exit_with_error(exc: SDKError, output_format: OutputFormat) -> NoReturn:
+    """Report an SDK error (code, message, request id, details) and exit with status 1."""
+    fields = _error_fields(exc)
+    if output_format is OutputFormat.JSON:
+        console.print_json(data={"error": json.loads(json.dumps(fields, default=str))})
+    else:
+        lines = [f"[{fields.get('code') or type(exc).__name__}] {fields.get('message') or ''}".rstrip()]
+        if fields.get("request_id"):
+            lines.append(f"request id: {fields['request_id']}")
+        console.print(Panel(Text("\n".join(lines)), title=f"Error: {type(exc).__name__}", border_style="red"))
+    raise typer.Exit(code=1)
+
+
+def _call(output_format: OutputFormat, helper: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run a helper, turning an ``SDKError`` into a readable report and exit status 1 instead of a traceback."""
+    try:
+        return helper(*args, **kwargs)
+    except SDKError as exc:
+        _exit_with_error(exc, output_format)
+
+
+def _seconds(value: Any) -> str:
+    return f"{value:.2f}s"
 
 
 def _describe_point(point: Any) -> tuple[str, str, str]:
-    """Return a tuple describing the point for streaming displays."""
+    """Return a ``(kind, coords, mention)`` tuple describing an annotation for tables and streaming displays.
+
+    ``coords`` ends with the spatial ``t`` and ``@asset N`` (the ``asset_idx``) when the annotation has them.
+    """
 
     if isinstance(point, BoundingBox):
-        coords = f"({point.top_left.x},{point.top_left.y}) → ({point.bottom_right.x},{point.bottom_right.y})"
-        return ("box", coords, point.mention or "")
-    if isinstance(point, SinglePoint):
-        coords = f"({point.x},{point.y})"
-        return ("point", coords, point.mention or "")
-    if isinstance(point, Polygon):
-        coords = ", ".join(f"({p.x},{p.y})" for p in point.hull[:4])
+        kind, coords = (
+            "box",
+            f"({point.top_left.x},{point.top_left.y}) → ({point.bottom_right.x},{point.bottom_right.y})",
+        )
+    elif isinstance(point, SinglePoint):
+        kind, coords = "point", f"({point.x},{point.y})"
+    elif isinstance(point, Polygon):
+        kind, coords = "polygon", ", ".join(f"({p.x},{p.y})" for p in point.hull[:4])
         if len(point.hull) > 4:
             coords += ", …"
-        return ("polygon", coords, point.mention or "")
-    if isinstance(point, Collection):
-        return ("collection", f"{len(point.points)} items", point.mention or "")
-    if isinstance(point, Clip):
+    elif isinstance(point, Collection):
+        kind, coords = "collection", f"{len(point.points)} items"
+    elif isinstance(point, Clip):
         ts = point.timestamp
-        coords = f"@{ts.at:.2f}s" if ts.until is None else f"{ts.at:.2f}s → {ts.until:.2f}s"
-        return ("clip", coords, point.mention or "")
-    return (type(point).__name__, str(point), getattr(point, "mention", "") or "")
+        kind = "clip"
+        coords = f"@{ts.at:.2f}s" if ts.until is None else f"{_seconds(ts.at)} → {_seconds(ts.until)}"
+    elif isinstance(point, Track):
+        count = len(point.points)
+        waypoint_kind = _describe_point(point.points[0])[0] if point.points else "empty"
+        kind, coords = "track", f"{count} {waypoint_kind} waypoint{'' if count == 1 else 's'}"
+        times = [p.t for p in point.points if p.t is not None]
+        if times:
+            coords += f", {_seconds(min(times))} → {_seconds(max(times))}"
+    else:
+        return (type(point).__name__, str(point), getattr(point, "mention", "") or "")
+    t = getattr(point, "t", None)  # spatial leaves (and legacy collections); clips and tracks have none
+    if t is not None:
+        coords += f" t={_seconds(t)}"
+    if getattr(point, "complete", True) is False:
+        coords += " (incomplete)"
+    if point.asset_idx is not None:
+        coords += f" @asset {point.asset_idx}"
+    return (kind, coords, point.mention or "")
 
 
-def _build_points_table(points: Iterable[Any]) -> Table:
-    table = Table(title="Points", show_header=True, header_style="bold blue")
+def _build_points_table(points: Iterable[Any], *, title: str = "Points") -> Table:
+    table = Table(title=title, show_header=True, header_style="bold blue")
     table.add_column("type")
     table.add_column("coords")
     table.add_column("mention")
     for point in points:
         kind, coords, mention = _describe_point(point)
-        table.add_row(kind, coords, mention)
+        table.add_row(Text(kind), Text(coords), Text(mention))
     return table
 
 
@@ -433,11 +557,17 @@ def _dedupe_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _coerce_result_dict(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "text": result.get("text"),
+        "reasoning": result.get("reasoning"),
         "points": result.get("points"),
         "boxes": result.get("boxes"),
         "polygons": result.get("polygons"),
+        "clips": result.get("clips"),
+        "tracks": result.get("tracks"),
         "parsed": result.get("parsed"),
+        "tool_calls": result.get("tool_calls"),
+        "finish_reason": result.get("finish_reason"),
         "usage": result.get("usage"),
+        "request_id": result.get("request_id"),
         "errors": result.get("errors") or [],
         "raw": result.get("raw"),
     }
@@ -450,16 +580,6 @@ def _coerce_int(value: Any) -> int | None:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-
-
-def _normalize_usage(usage: Any) -> dict[str, Any]:
-    if isinstance(usage, dict):
-        return usage
-    if hasattr(usage, "_asdict"):
-        return dict(usage._asdict())  # type: ignore[attr-defined]
-    if hasattr(usage, "__dict__"):
-        return dict(usage.__dict__)
-    return {}
 
 
 def _resolve_usage_tokens(
@@ -483,6 +603,34 @@ def _resolve_usage_tokens(
     return (tokens_in, tokens_out)
 
 
+def _prompt_token_details(usage: Any) -> str:
+    """``" (audio N, cached M)"`` from ``prompt_tokens_details``; empty when neither was reported."""
+    details = _normalize_usage(usage).get("prompt_tokens_details") if usage else None
+    if not isinstance(details, dict):
+        return ""
+    parts = [
+        f"{name} {details[f'{name}_tokens']}"
+        for name in ("audio", "cached")
+        if details.get(f"{name}_tokens") is not None
+    ]
+    return f" ({', '.join(parts)})" if parts else ""
+
+
+def _status_line(result: Any) -> Text | None:
+    """``finish_reason`` and token usage of a result, as one dim line (None when the result has neither)."""
+    parts: list[str] = []
+    finish_reason = getattr(result, "finish_reason", None)
+    if finish_reason is not None:
+        parts.append(f"finish_reason {finish_reason}")
+    usage = getattr(result, "usage", None)
+    tokens_in, tokens_out = _resolve_usage_tokens(usage)
+    if tokens_in is not None:
+        parts.append(f"tokens in {tokens_in}{_prompt_token_details(usage)}")
+    if tokens_out is not None:
+        parts.append(f"tokens out {tokens_out}")
+    return Text(" | ".join(parts), style="dim") if parts else None
+
+
 def _stream_render(
     events: Iterable[dict[str, Any]],
     *,
@@ -492,15 +640,25 @@ def _stream_render(
     show_points_table: bool,
     expects: str | None = None,
 ) -> None:
-    """Render streaming events inside a live-updating panel."""
+    """Render streaming events inside a live-updating panel.
+
+    Handles ``text.delta``, ``reasoning.delta``, ``points.delta`` (with its ``context``), ``tool_call.delta``, the
+    ``final`` result (``finish_reason``, ``usage``, ``tracks``) and the terminal ``error`` event (``code``, ``details``,
+    ``partial``). A stream that ends in an ``error`` event exits with status 1 after the output is printed.
+    """
 
     bucket_name = _BUCKET_BY_EXPECTS.get(expects)
 
     text_buffer: list[str] = []
+    reasoning_buffer: list[str] = []
     annotations_buffer: list[Any] = []
+    containers: list[str | None] = []  # the container ("track"/"collection") each streamed annotation arrived in
+    tool_call_buffer: dict[int, dict[str, Any]] = {}
     errors: list[dict[str, Any]] = []
     final_result: dict[str, Any] | None = None
     usage_info: dict[str, Any] | None = None
+    finish_reason: str | None = None
+    failed = False
 
     start_ts = time.perf_counter()
     first_token_delta: float | None = None
@@ -526,8 +684,16 @@ def _stream_render(
                     line = f"{idx}. {kind}: {coords}"
                     if mention:
                         line += f" ({mention})"
+                    container = containers[idx - 1] if idx - 1 < len(containers) else None
+                    if container:
+                        line += f" [in {container}]"
                     summary.append(line + "\n")
                 body.append(summary)
+        if tool_call_buffer:
+            calls = Text()
+            for call in (tool_call_buffer[i] for i in sorted(tool_call_buffer)):
+                calls.append(f"tool call {call['name'] or '?'}({call['arguments']})\n", style="magenta")
+            body.append(calls)
         # metrics summary
         now = time.perf_counter()
         metrics_parts: list[str] = []
@@ -548,24 +714,26 @@ def _stream_render(
         else:
             metrics_parts.append("Avg —")
 
-        tokens_in_display = (
-            str(usage_tokens_in) if usage_tokens_in is not None else ("—" if usage_info is None else "—")
-        )
+        tokens_in_display = "—" if usage_tokens_in is None else f"{usage_tokens_in}{_prompt_token_details(usage_info)}"
         if usage_tokens_out is not None:
             tokens_out_display = str(usage_tokens_out)
         else:
             tokens_out_display = f"~{delta_event_count}" if delta_event_count else "—"
         metrics_parts.append(f"Tokens in {tokens_in_display}")
         metrics_parts.append(f"Tokens out {tokens_out_display}")
+        if finish_reason is not None:
+            metrics_parts.append(f"Finish {finish_reason}")
 
         metrics_text = Text(" | ".join(metrics_parts), style="dim")
         body.append(metrics_text)
 
         content = body[0] if len(body) == 1 else Group(*body)
-        return Panel(content, title=title, border_style="cyan")
+        return Panel(content, title=title, border_style="red" if failed else "cyan")
 
     live_panel = current_panel()
-    with Live(live_panel, console=console, refresh_per_second=12) as live:
+    # With --format json the live panel is only progress: clear it so stdout ends up holding just the JSON.
+    transient = output_format is OutputFormat.JSON
+    with Live(live_panel, console=console, refresh_per_second=12, transient=transient) as live:
         for event in events:
             event_type = event.get("type")
             if event_type == "text.delta":
@@ -578,36 +746,63 @@ def _stream_render(
                 if last_token_ts is not None:
                     latency_samples.append(now - last_token_ts)
                 last_token_ts = now
+            elif event_type == "reasoning.delta":
+                reasoning_buffer.append(event.get("chunk") or "")
             elif event_type == "points.delta":
                 pts = event.get("points") or []
-                if pts:
-                    annotations_buffer.extend(pts)
+                container = (event.get("context") or {}).get("container")
+                annotations_buffer.extend(pts)
+                containers.extend([container] * len(pts))
+            elif event_type == "tool_call.delta":
+                call = tool_call_buffer.setdefault(event.get("index") or 0, {"id": None, "name": None, "arguments": ""})
+                call["id"] = call["id"] or event.get("id")
+                call["name"] = call["name"] or event.get("name")
+                call["arguments"] += event.get("arguments") or ""
             elif event_type == "error":
-                message = str(event.get("message") or "unknown error")
-                errors.append({"code": "stream_error", "message": message})
+                failed = True
+                error = _error_fields(event)
+                error.setdefault("code", "stream_error")
+                error.setdefault("message", "unknown error")
+                errors.append(error)
+                partial = event.get("partial") or {}
+                if not text_buffer and partial.get("text"):
+                    text_buffer = [partial["text"]]
+                if not reasoning_buffer and partial.get("reasoning"):
+                    reasoning_buffer = [partial["reasoning"]]
+                finish_reason = partial.get("finish_reason") or finish_reason
                 end_ts = time.perf_counter()
+                live.update(current_panel())
                 break
             elif event_type == "final":
-                final_result = event.get("result") or {}
+                final_result = dict(event.get("result") or {})
                 end_ts = time.perf_counter()
                 if final_result.get("text") is not None:
                     text_buffer = [final_result.get("text") or ""]
                 if bucket_name and final_result.get(bucket_name) is not None:
                     annotations_buffer = list(final_result.get(bucket_name) or [])
+                    containers = []
                 final_errs = final_result.get("errors") or []
                 if final_errs:
                     errors.extend(final_errs)
                 if final_result.get("usage"):
                     usage_info = _normalize_usage(final_result.get("usage"))
+                finish_reason = final_result.get("finish_reason")
             live.update(current_panel())
 
     if end_ts is None:
         end_ts = time.perf_counter()
 
+    streamed_calls = [
+        {"id": call["id"], "type": "function", "function": {"name": call["name"], "arguments": call["arguments"]}}
+        for call in (tool_call_buffer[i] for i in sorted(tool_call_buffer))
+    ]
     if final_result is None:
         final_result = {
             "text": "".join(text_buffer) or None,
+            "reasoning": "".join(reasoning_buffer) or None,
             "parsed": None,
+            "tool_calls": streamed_calls or None,
+            "finish_reason": finish_reason,
             "usage": usage_info,
             "errors": _dedupe_errors(errors),
             "raw": None,
@@ -618,8 +813,12 @@ def _stream_render(
         # ensure buffers win if final result lacked data
         if final_result.get("text") is None:
             final_result["text"] = "".join(text_buffer) or None
+        if final_result.get("reasoning") is None:
+            final_result["reasoning"] = "".join(reasoning_buffer) or None
         if bucket_name and not final_result.get(bucket_name) and annotations_buffer:
             final_result[bucket_name] = annotations_buffer
+        if not final_result.get("tool_calls") and streamed_calls:
+            final_result["tool_calls"] = streamed_calls
         merged_errors = list(errors) if errors else []
         final_errs = final_result.get("errors") or []
         if final_errs:
@@ -638,6 +837,8 @@ def _stream_render(
             _print_errors(coerced["errors"])
         if show_raw and coerced.get("raw") is not None:
             console.print(coerced["raw"])
+    if failed:
+        raise typer.Exit(code=1)
 
 
 def _render_result(
@@ -646,7 +847,6 @@ def _render_result(
     title: str,
     output_format: OutputFormat,
     show_raw: bool,
-    show_points_table: bool = False,
     expects: str | None = None,
 ):
     if output_format is OutputFormat.JSON:
@@ -654,73 +854,70 @@ def _render_result(
         console.print_json(data=payload)
         return
 
+    console.print(Panel(Text(result.text or "<no text>"), title=title, border_style="green"))
     populated = _bucket_for_expects(result, expects)
-    console.print(Panel(result.text or "<no text>", title=title, border_style="green"))
-    if show_points_table and populated is not None:
-        _, items = populated
-        table = Table(title="Detections", show_header=True, header_style="bold blue")
-        table.add_column("Bounding Box")
-        table.add_column("Mention")
-        for point in items:
-            table.add_row(str(point), getattr(point, "mention", ""))
-        console.print(table)
-    elif expects == "clip" and populated is not None:
-        _, items = populated
-        table = Table(title="Clips", show_header=True, header_style="bold blue")
-        table.add_column("type")
-        table.add_column("timestamp")
-        table.add_column("mention")
-        for clip in items:
-            kind, coords, mention = _describe_point(clip)
-            table.add_row(kind, coords, mention)
-        console.print(table)
-    elif populated is not None:
-        bucket_name, items = populated
-        console.print_json(data={bucket_name: _serialize_points(items)})
+    annotations = [*(populated[1] if populated is not None else []), *(getattr(result, "tracks", None) or [])]
+    if annotations:
+        console.print(_build_points_table(annotations, title="Clips" if expects == "clip" else "Detections"))
+    status = _status_line(result)
+    if status is not None:
+        console.print(status)
     _print_errors(getattr(result, "errors", []))
     if show_raw and getattr(result, "raw", None):
         console.print(result.raw)
 
 
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+
 @app.command()
 def config(
-    provider: str | None = typer.Option(None, help="Default provider identifier."),
-    api_key: str | None = typer.Option(None, help="API key to export."),
-    base_url: str | None = typer.Option(None, help="Optional custom base URL."),
+    provider: str | None = typer.Option(None, help="Provider to export: perceptron (the Perceptron API) or fal."),
+    api_key: str | None = typer.Option(None, help="API key to export (as FAL_KEY with --provider fal)."),
+    base_url: str | None = typer.Option(None, help="Optional custom base URL (include /v1 for provider perceptron)."),
+    model: str | None = typer.Option(None, help="Default model to export, e.g. perceptron-mk1.5."),
 ):
-    """Show shell commands to export credentials."""
+    """Print shell `export` lines for your settings (nothing is saved)."""
 
     exports: list[str] = []
     if provider:
         exports.append(f"export PERCEPTRON_PROVIDER={provider}")
     if api_key:
-        exports.append(f"export PERCEPTRON_API_KEY={api_key}")
+        # fal reads only FAL_KEY; PERCEPTRON_API_KEY is never sent to it.
+        key_env = "FAL_KEY" if (provider or "").lower() == "fal" else "PERCEPTRON_API_KEY"
+        exports.append(f"export {key_env}={api_key}")
     if base_url:
         exports.append(f"export PERCEPTRON_BASE_URL={base_url}")
+    if model:
+        exports.append(f"export PERCEPTRON_MODEL={model}")
 
     if not exports:
         exports = [
-            "export PERCEPTRON_PROVIDER=<provider>",
             "export PERCEPTRON_API_KEY=<your-key>",
             "export PERCEPTRON_BASE_URL=<optional-base-url>",
         ]
 
-    console.print(Panel("\n".join(exports), title="Add these to your shell", border_style="cyan"))
+    console.print(Panel(Text("\n".join(exports)), title="Add these to your shell", border_style="cyan"))
+    notes = ["Nothing is saved: run these lines in your shell or add them to your shell profile."]
+    if provider is None:
+        notes.append(
+            "Without PERCEPTRON_PROVIDER, the SDK and this CLI use the Perceptron API. Provider 'fal' is selected only "
+            "when FAL_KEY is set and PERCEPTRON_API_KEY is not (fal never receives PERCEPTRON_API_KEY)."
+        )
+    for note in notes:
+        console.print(Text(note, style="dim"))
 
 
 @app.command()
 def caption(
-    media: str = typer.Argument(..., help="Image, video, or audio path or URL."),
+    media: str = typer.Argument(..., help="Image, video, or audio path or URL (or a directory of images)."),
     style: str = typer.Option("concise", help="Captioning style."),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
-    audio_in_video: bool = typer.Option(False, "--audio-in-video", help="Also process the soundtrack of video input."),
-    reasoning_effort: ReasoningEffort | None = typer.Option(
-        None,
-        "--reasoning-effort",
-        case_sensitive=False,
-        help="How much the model reasons before answering (none, minimal, low, medium, or high).",
-    ),
+    audio_in_video: bool | None = _audio_in_video_option(),
+    reasoning_effort: ReasoningEffort | None = _reasoning_effort_option(),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
         "--format",
@@ -734,35 +931,34 @@ def caption(
         case_sensitive=False,
         help="Expected output structure (text, point, box, polygon, clip, or think). Defaults to box for images, text for video and audio.",
     ),
+    model: str | None = _model_option(),
+    provider: str | None = _provider_option(),
 ):
     """Generate captions using the high-level helper."""
 
-    path = Path(media)
-    if path.is_dir():
+    gen_kwargs = _generation_kwargs(
+        audio_in_video=audio_in_video, reasoning_effort=reasoning_effort, model=model, provider=provider
+    )
+    if _is_directory(media):
+        # Directory mode only reads images, so the default stays box.
         directory_expects = expects.value if expects is not None else ExpectationType.BOX.value
         _process_directory(
-            path,
+            Path(media),
             command_name="caption",
             stream=stream,
             show_raw=show_raw,
-            runner=lambda data: caption_image(image_node(data), style=style, expects=directory_expects),
+            runner=lambda data: caption_image(image_node(data), style=style, expects=directory_expects, **gen_kwargs),
             payload_factory=lambda result: _caption_payload(result, expects=directory_expects),
         )
         return
 
-    try:
-        media_data = _resolve_media(media)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-    node = _make_media_node(media, media_data)
+    node = _media_node_or_exit(media, output_format)
     expects_value = expects.value if expects is not None else default_caption_expects(node)
     show_points_table = expects_value == ExpectationType.BOX.value
-    gen_kwargs = _generation_kwargs(audio_in_video=audio_in_video, reasoning_effort=reasoning_effort)
 
     if stream:
         _stream_render(
-            caption_image(node, style=style, expects=expects_value, stream=True, **gen_kwargs),
+            _call(output_format, caption_image, node, style=style, expects=expects_value, stream=True, **gen_kwargs),
             title="Caption",
             output_format=output_format,
             show_raw=show_raw,
@@ -771,20 +967,19 @@ def caption(
         )
         return
 
-    res = caption_image(node, style=style, expects=expects_value, **gen_kwargs)
+    res = _call(output_format, caption_image, node, style=style, expects=expects_value, **gen_kwargs)
     _render_result(
         res,
         title="Caption",
         output_format=output_format,
         show_raw=show_raw,
-        show_points_table=show_points_table,
         expects=expects_value,
     )
 
 
 @app.command()
 def ocr(
-    image: str = typer.Argument(..., help="Image path or URL."),
+    image: str = typer.Argument(..., help="Image path or URL (or a directory of images)."),
     prompt: str | None = typer.Option(None, help="Optional instruction override."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
     output_format: OutputFormat = typer.Option(
@@ -794,23 +989,26 @@ def ocr(
         case_sensitive=False,
         help="Output format (text or json).",
     ),
+    reasoning_effort: ReasoningEffort | None = _reasoning_effort_option(),
+    model: str | None = _model_option(),
+    provider: str | None = _provider_option(),
 ):
     """Run OCR via the high-level helper. Image inputs only."""
 
-    path = Path(image)
-    if path.is_dir():
+    gen_kwargs = _generation_kwargs(reasoning_effort=reasoning_effort, model=model, provider=provider)
+    if _is_directory(image):
         _process_directory(
-            path,
+            Path(image),
             command_name="ocr",
             stream=False,
             show_raw=show_raw,
-            runner=lambda data: ocr_image(image_node(data), prompt=prompt),
+            runner=lambda data: ocr_image(image_node(data), prompt=prompt, **gen_kwargs),
             payload_factory=_ocr_payload,
         )
         return
 
-    img_data = _resolve_media(image)
-    res = ocr_image(image_node(img_data), prompt=prompt)
+    node = _media_node_or_exit(image, output_format, image_only=True)
+    res = _call(output_format, ocr_image, node, prompt=prompt, **gen_kwargs)
     _render_result(
         res,
         title="OCR",
@@ -821,7 +1019,7 @@ def ocr(
 
 @app.command()
 def detect(
-    image: str = typer.Argument(..., help="Image path or URL."),
+    media: str = typer.Argument(..., help="Image or video path or URL (or a directory of images)."),
     classes: str | None = typer.Option(None, help="Comma-separated class list."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
     output_format: OutputFormat = typer.Option(
@@ -832,27 +1030,34 @@ def detect(
         help="Output format (text or json).",
     ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
+    audio_in_video: bool | None = _audio_in_video_option(),
+    reasoning_effort: ReasoningEffort | None = _reasoning_effort_option(),
+    model: str | None = _model_option(),
+    provider: str | None = _provider_option(),
 ):
-    """Run detection via the high-level helper. Image inputs only."""
+    """Run detection via the high-level helper. Image and video inputs."""
 
     class_list = [c.strip() for c in classes.split(",")] if classes else None
-    path = Path(image)
-    if path.is_dir():
+    gen_kwargs = _generation_kwargs(
+        audio_in_video=audio_in_video, reasoning_effort=reasoning_effort, model=model, provider=provider
+    )
+    if _is_directory(media):
         _process_directory(
-            path,
+            Path(media),
             command_name="detect",
             stream=False,
             show_raw=show_raw,
-            runner=lambda data: detect_image(image_node(data), classes=class_list),
+            runner=lambda data: detect_image(image_node(data), classes=class_list, **gen_kwargs),
             payload_factory=_detect_payload,
         )
         return
 
-    img_data = _resolve_media(image)
-    node = image_node(img_data)
+    node = _media_node_or_exit(media, output_format)
+    if isinstance(node, AudioNode):
+        raise typer.BadParameter("detect takes an image or a video, not audio.")
     if stream:
         _stream_render(
-            detect_image(node, classes=class_list, stream=True),
+            _call(output_format, detect_image, node, classes=class_list, stream=True, **gen_kwargs),
             title="Detect",
             output_format=output_format,
             show_raw=show_raw,
@@ -860,13 +1065,12 @@ def detect(
             expects="box",
         )
         return
-    res = detect_image(node, classes=class_list)
+    res = _call(output_format, detect_image, node, classes=class_list, **gen_kwargs)
     _render_result(
         res,
         title="Detect",
         output_format=output_format,
         show_raw=show_raw,
-        show_points_table=True,
         expects="box",
     )
 
@@ -883,13 +1087,8 @@ def question(
     ),
     stream: bool = typer.Option(False, help="Stream incremental output."),
     show_raw: bool = typer.Option(False, help="Display raw response JSON."),
-    audio_in_video: bool = typer.Option(False, "--audio-in-video", help="Also process the soundtrack of video input."),
-    reasoning_effort: ReasoningEffort | None = typer.Option(
-        None,
-        "--reasoning-effort",
-        case_sensitive=False,
-        help="How much the model reasons before answering (none, minimal, low, medium, or high).",
-    ),
+    audio_in_video: bool | None = _audio_in_video_option(),
+    reasoning_effort: ReasoningEffort | None = _reasoning_effort_option(),
     output_format: OutputFormat = typer.Option(
         OutputFormat.TEXT,
         "--format",
@@ -897,25 +1096,23 @@ def question(
         case_sensitive=False,
         help="Output format (text or json).",
     ),
+    model: str | None = _model_option(),
+    provider: str | None = _provider_option(),
 ):
     """Answer a question about an image, video, or audio clip."""
 
-    path = Path(media)
-    if path.is_dir():
+    if _is_directory(media):
         raise typer.BadParameter("Directory mode is not supported for 'question'.")
 
-    try:
-        media_data = _resolve_media(media)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-    node = _make_media_node(media, media_data)
+    node = _media_node_or_exit(media, output_format)
     expects_value = expects.value
-    gen_kwargs = _generation_kwargs(audio_in_video=audio_in_video, reasoning_effort=reasoning_effort)
+    gen_kwargs = _generation_kwargs(
+        audio_in_video=audio_in_video, reasoning_effort=reasoning_effort, model=model, provider=provider
+    )
 
     if stream:
         _stream_render(
-            question_image(node, prompt, expects=expects_value, stream=True, **gen_kwargs),
+            _call(output_format, question_image, node, prompt, expects=expects_value, stream=True, **gen_kwargs),
             title="Question",
             output_format=output_format,
             show_raw=show_raw,
@@ -924,18 +1121,12 @@ def question(
         )
         return
 
-    res = question_image(node, prompt, expects=expects_value, **gen_kwargs)
-    show_points = expects in {
-        ExpectationType.POINT,
-        ExpectationType.BOX,
-        ExpectationType.POLYGON,
-    }
+    res = _call(output_format, question_image, node, prompt, expects=expects_value, **gen_kwargs)
     _render_result(
         res,
         title="Question",
         output_format=output_format,
         show_raw=show_raw,
-        show_points_table=show_points and expects is ExpectationType.BOX,
         expects=expects_value,
     )
 
