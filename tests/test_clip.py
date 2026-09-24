@@ -200,6 +200,7 @@ def test_serialize_clip_format_and_attr_order():
     )
     assert PointParser.serialize(clip(3.25)) == '<clip t="3.25 seconds" />'
     assert extract_clips(PointParser.serialize(clip(0.0, asset_idx=0))) == [clip(0.0, asset_idx=0)]
+    assert PointParser.serialize(clip(-0.0)) == '<clip t="0 seconds" />'  # not "-0", which the parser rejects
 
 
 def test_clip_mode_ignores_malformed_geometry_inside_collections():

@@ -347,11 +347,43 @@ class TestSpatialTime:
     def test_serialized_with_explicit_seconds(self):
         assert PointParser.serialize(SinglePoint(1, 2, t=0)) == '<point t="0.0 seconds"> (1,2) </point>'
         assert PointParser.serialize(SinglePoint(1, 2, t=2)) == '<point t="2.0 seconds"> (1,2) </point>'
-        assert PointParser.serialize(SinglePoint(1, 2, t=1.25)) == '<point t="1.2 seconds"> (1,2) </point>'
+        assert PointParser.serialize(SinglePoint(1, 2, t=1.25)) == '<point t="1.25 seconds"> (1,2) </point>'
         # a string t is normalized, never emitted as a bare number
         assert PointParser.serialize(SinglePoint(1, 2, t="2")) == '<point t="2.0 seconds"> (1,2) </point>'
         with pytest.raises(ParseError):
             PointParser.serialize(SinglePoint(1, 2, t="soon"))
+
+    @pytest.mark.parametrize(
+        ("t", "written"),
+        [
+            (1.5, "1.5"),
+            (2, "2.0"),
+            (0.15, "0.15"),
+            (0.033, "0.033"),
+            (1 / 30, "0.033333"),
+            (12.345678, "12.345678"),
+            (0.1 + 0.2, "0.3"),
+            (0.0000004, "0.0"),
+            (-0.0, "0.0"),
+            (np.float64(0.25), "0.25"),
+            ("0.066 seconds", "0.066"),
+        ],
+    )
+    def test_serialized_exactly_to_the_microsecond(self, t, written):
+        # The shortest form with at least one decimal digit; never rounded to tenths.
+        serialized = PointParser.serialize(SinglePoint(1, 2, t=t))
+        assert serialized == f'<point t="{written} seconds"> (1,2) </point>'
+        assert parse_text(serialized)[0]["value"].t == float(written)
+
+    def test_frame_rate_waypoints_survive_a_round_trip(self):
+        times = [i / 30 for i in range(10)]  # 30 fps: frames 0.033 s apart
+        markup = PointParser.serialize(track([pt(i, i, t=t) for i, t in enumerate(times)], mention="ball"))
+
+        assert '<point t="0.033333 seconds"> (1,1) </point> <point t="0.066667 seconds"> (2,2) </point>' in markup
+        waypoints = extract_tracks(markup)[0].points
+        assert [p.t for p in waypoints] == [round(t, 6) for t in times]
+        assert len({p.t for p in waypoints}) == len(times)
+        assert PointParser.serialize(extract_tracks(markup)[0]) == markup  # a fixed point
 
     @pytest.mark.parametrize(
         "obj",

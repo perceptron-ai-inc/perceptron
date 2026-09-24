@@ -224,6 +224,21 @@ def test_serialize_annotations_writes_clips_and_tracks():
     )
 
 
+def test_annotate_image_and_serialize_annotations_keep_authored_times():
+    example = annotate_image(
+        "frame.png",
+        [
+            {"type": "point", "x": 5, "y": 5, "t": 0.15},
+            {"type": "track", "mention": "ball", "points": [{"x": 2, "y": 2, "t": 0.033}, {"x": 1, "y": 1, "t": 0.0}]},
+        ],
+    )
+    serialized = serialize_annotations(None, None, example["points"], None, tracks=example["tracks"])
+    assert serialized == (
+        '<point t="0.15 seconds"> (5,5) </point> '
+        '<track mention="ball"> <point t="0.0 seconds"> (1,1) </point> <point t="0.033 seconds"> (2,2) </point> </track>'
+    )
+
+
 def test_tracks_whose_waypoints_name_different_assets_are_rejected():
     conflicting = Track([pt(1, 1, t=0.0, asset_idx=0), pt(2, 2, t=1.0, asset_idx=1)], "x")
     for call in (

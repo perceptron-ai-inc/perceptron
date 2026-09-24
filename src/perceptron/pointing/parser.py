@@ -197,7 +197,7 @@ def _authored_seconds(value: Any) -> float:
         return _parse_time_value(value)  # unsigned grammar; ParseError(invalid_time) when malformed
     if isinstance(value, bool) or not isinstance(value, numbers.Real) or not (math.isfinite(value) and value >= 0):
         raise ValueError(f"invalid_time: expected a finite, non-negative number of seconds, got {value!r}")
-    return float(value)
+    return abs(float(value))  # -0.0 passes the check above; written as "-0" the parser would reject it
 
 
 def _authored_asset_idx(value: Any) -> int:
@@ -207,7 +207,10 @@ def _authored_asset_idx(value: Any) -> int:
 
 
 def _format_t(t: Any) -> str:
-    return f"{round(_authored_seconds(t), 1)} seconds"
+    """A spatial ``t`` as written: the value to the microsecond, shortest form with at least one decimal digit
+    ("1.5 seconds", "2.0 seconds", "0.033333 seconds"), so frame-rate timestamps stay distinct."""
+    value = f"{_authored_seconds(t):.6f}".rstrip("0")
+    return f"{value}0 seconds" if value.endswith(".") else f"{value} seconds"
 
 
 def _format_clip_time(x: Any) -> str:

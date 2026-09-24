@@ -86,6 +86,18 @@ def test_temporal_tags_write_explicit_seconds():
     )
 
 
+def test_temporal_tags_keep_frame_accurate_times():
+    clip = video("https://x/v.mp4")
+    assert _tags(clip, point(1, 2, t=0.033), box(1, 2, 3, 4, t=1 / 30), polygon([(1, 1), (2, 1), (2, 2)], t=0.15)) == (
+        [
+            '<point t="0.033 seconds"> (1,2) </point>',
+            '<point_box t="0.033333 seconds"> (1,2) (3,4) </point_box>',
+            '<polygon t="0.15 seconds"> (1,1) (2,1) (2,2) </polygon>',
+        ],
+        [],
+    )
+
+
 def test_multi_asset_prompts_write_the_anchor_index():
     ref, tgt = _img(), _img()
     tags, issues = _tags(
@@ -197,6 +209,26 @@ def test_detect_examples_do_not_gain_selectors(monkeypatch):
 
     assistant = [e["content"] for e in seen["task"]["content"] if e.get("role") == "assistant"]
     assert len(assistant) == 2 and all("<point_box" in c and "asset_idx" not in c for c in assistant)
+
+
+def test_detect_examples_keep_authored_times(monkeypatch):
+    seen = {}
+
+    def _generate(self, task, **kwargs):
+        seen["task"] = task
+        return {"text": ""}
+
+    monkeypatch.setattr(client_mod.Client, "generate", _generate)
+    waypoints = [{"x": 1, "y": 1, "t": 0.0}, {"x": 2, "y": 2, "t": 0.033}, {"x": 3, "y": 3, "t": 0.067}]
+    example = annotate_image(PNG_BYTES, [{"type": "track", "mention": "cup", "points": waypoints}])
+
+    detect(image(PNG_BYTES), classes=["cup"], examples=[example], provider="perceptron")
+
+    (assistant,) = [e["content"] for e in seen["task"]["content"] if e.get("role") == "assistant"]
+    assert (
+        '<track mention="cup"> <point t="0.0 seconds"> (1,1) </point> <point t="0.033 seconds"> (2,2) </point> '
+        '<point t="0.067 seconds"> (3,3) </point> </track>'
+    ) in assistant
 
 
 # ---------------------------------------------------------------------------
