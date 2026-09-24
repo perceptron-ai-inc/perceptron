@@ -341,7 +341,9 @@ def test_isaac_02_reasoning_true_adds_think_hint(monkeypatch):
     assert "reasoning" not in payload
     assert "vision_config" not in payload
     messages = payload.get("messages") or []
-    assert any(isinstance(m, dict) and isinstance(m.get("content"), str) and "THINK" in m.get("content") for m in messages)
+    assert any(
+        isinstance(m, dict) and isinstance(m.get("content"), str) and "THINK" in m.get("content") for m in messages
+    )
 
 
 def test_payload_shape_matches_expected(monkeypatch):
@@ -570,7 +572,9 @@ def test_enable_audio_in_video_false_is_sent_explicitly(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_API_KEY", "test-key")
 
     with cfg(provider="perceptron", base_url="https://mock.api"):
-        perceive(text("Describe."), enable_audio_in_video=False, model="perceptron-mk1.5-preview", provider="perceptron")
+        perceive(
+            text("Describe."), enable_audio_in_video=False, model="perceptron-mk1.5-preview", provider="perceptron"
+        )
 
     payload = captured.get("payload", {})
     assert payload.get("vision_config") == {"enable_audio_in_video": False}
@@ -617,7 +621,7 @@ def test_hint_tokens_are_sorted_and_deduped(monkeypatch):
     with cfg(provider="perceptron", base_url="https://mock.api"):
         make_request()
 
-    messages = (captured.get("payload", {}).get("messages") or [])
+    messages = captured.get("payload", {}).get("messages") or []
     assert messages and messages[0]["content"].startswith("<hint>BOX THINK</hint>")
     assert messages[0]["content"].count("<hint") == 1
 
@@ -657,7 +661,7 @@ def test_manual_think_hint_does_not_get_double_injected(monkeypatch):
     with cfg(provider="perceptron", base_url="https://mock.api"):
         make_request()
 
-    messages = (captured.get("payload", {}).get("messages") or [])
+    messages = captured.get("payload", {}).get("messages") or []
     # Should still have only one hint, and it should be THINK (no duplicate THINK THINK)
     assert messages and messages[0]["content"].count("<hint") == 1
     assert messages[0]["content"].startswith("<hint>THINK</hint>")
@@ -840,9 +844,7 @@ def test_perceptron_expects_text_no_system_hint(monkeypatch):
         status_code = 200
 
         def json(self):
-            return {
-                "choices": [{"message": {"content": "stub", "reasoning_content": None}}]
-            }
+            return {"choices": [{"message": {"content": "stub", "reasoning_content": None}}]}
 
     class _Client:
         def __enter__(self):
@@ -884,9 +886,7 @@ def test_non_perceptron_provider_keeps_top_level_reasoning(monkeypatch):
         status_code = 200
 
         def json(self):
-            return {
-                "choices": [{"message": {"content": "stub", "reasoning_content": None}}]
-            }
+            return {"choices": [{"message": {"content": "stub", "reasoning_content": None}}]}
 
     class _Client:
         def __enter__(self):

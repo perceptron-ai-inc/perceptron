@@ -149,21 +149,25 @@ class _StreamProcessor:
         reasoning = delta.get("reasoning_content")
         if reasoning:
             self._reasoning += reasoning
-            events.append({
-                "type": "reasoning.delta",
-                "chunk": reasoning,
-                "total_chars": len(self._reasoning),
-            })
+            events.append(
+                {
+                    "type": "reasoning.delta",
+                    "chunk": reasoning,
+                    "total_chars": len(self._reasoning),
+                }
+            )
 
         # Process answer content
         content = delta.get("content")
         if content:
             self._cumulative += content
-            events.append({
-                "type": "text.delta",
-                "chunk": content,
-                "total_chars": len(self._cumulative),
-            })
+            events.append(
+                {
+                    "type": "text.delta",
+                    "chunk": content,
+                    "total_chars": len(self._cumulative),
+                }
+            )
 
         # Check buffer limits
         if self._parsing_enabled and self._max_buffer_bytes is not None:
@@ -341,8 +345,7 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
                 fmt = item.get("format")
                 if fmt is None:
                     raise BadRequestError(
-                        "Could not determine video format from input. The wire protocol "
-                        "supports mp4 and webm.",
+                        "Could not determine video format from input. The wire protocol supports mp4 and webm.",
                         code="invalid_video_format",
                     )
                 video_part = {
@@ -364,8 +367,7 @@ def _task_to_openai_messages(task: dict) -> list[dict[str, Any]]:
                 fmt = item.get("format")
                 if fmt is None:
                     raise BadRequestError(
-                        "Could not determine audio format from input. The wire protocol "
-                        "supports wav, mp3, and flac.",
+                        "Could not determine audio format from input. The wire protocol supports wav, mp3, and flac.",
                         code="invalid_audio_format",
                     )
                 audio_part = {"type": "input_audio", "input_audio": {"data": payload, "format": fmt}}
@@ -501,11 +503,6 @@ def _apply_reasoning_and_hints(
     )
 
     return task_with_hint, final_reasoning
-
-
-def _requires_reasoning(model_name: str | None, provider_cfg: dict[str, Any] | None) -> bool:
-    _, requires, _ = _reasoning_capabilities(model_name, provider_cfg)
-    return requires
 
 
 _PROVIDER_CONFIG = {
@@ -951,11 +948,8 @@ def json_schema_format(
     Example:
         >>> schema = {
         ...     "type": "object",
-        ...     "properties": {
-        ...         "name": {"type": "string"},
-        ...         "age": {"type": "integer"}
-        ...     },
-        ...     "required": ["name", "age"]
+        ...     "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+        ...     "required": ["name", "age"],
         ... }
         >>> result = client.generate(task, response_format=json_schema_format(schema))
     """
@@ -976,7 +970,9 @@ def regex_format(pattern: str) -> RegexFormat:
 
     Example:
         >>> # Constrain output to a valid email address format
-        >>> result = client.generate(task, response_format=regex_format(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"))
+        >>> result = client.generate(
+        ...     task, response_format=regex_format(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+        ... )
     """
     return {"type": "regex", "regex": pattern}
 

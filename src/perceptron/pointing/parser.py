@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from html import escape, unescape
 from typing import Any, Literal
 
@@ -267,7 +267,7 @@ def _parse_clip_body(attrs: str) -> Clip:
     ts = _parse_clip_t(attrs)
     if ts is None:
         raise ParseError(
-            f"Malformed <clip /> tag: expected a numeric t= attribute (e.g., t=1.5 or t=\"1.5 2.0\") but got attrs: {attrs!r}",
+            f'Malformed <clip /> tag: expected a numeric t= attribute (e.g., t=1.5 or t="1.5 2.0") but got attrs: {attrs!r}',
             code="invalid_clip_timestamp",
             details={"attrs": attrs},
         )

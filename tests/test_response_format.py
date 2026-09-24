@@ -158,18 +158,18 @@ def test_pydantic_format_with_strict():
 
 def test_pydantic_format_complex_model():
     pytest.importorskip("pydantic")
+
     from pydantic import BaseModel, Field
-    from typing import Optional
 
     class Address(BaseModel):
         street: str
         city: str
-        zip_code: Optional[str] = None
+        zip_code: str | None = None
 
     class Person(BaseModel):
         name: str
         age: int = Field(ge=0, le=150)
-        address: Optional[Address] = None
+        address: Address | None = None
 
     result = pydantic_format(Person)
 
@@ -180,8 +180,9 @@ def test_pydantic_format_complex_model():
 
 def test_pydantic_format_with_literals():
     pytest.importorskip("pydantic")
-    from pydantic import BaseModel
     from typing import Literal
+
+    from pydantic import BaseModel
 
     class Mood(BaseModel):
         feeling: Literal["happy", "sad", "neutral"]
@@ -425,4 +426,3 @@ def test_pydantic_format_in_payload(monkeypatch):
     # Verify result can be parsed back
     output = Output.model_validate_json(result.text)
     assert output.value == "test"
-

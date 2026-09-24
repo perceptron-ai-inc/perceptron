@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from perceptron import Clip, ClipTimestamp, clip, extract_clips
 
-
 # ---- Type construction -----------------------------------------------------
 
 
@@ -78,12 +77,7 @@ def test_extract_clip_with_self_close_in_mention():
 
 
 def test_extract_clip_in_collection_inherits_mention():
-    text = (
-        '<collection mention="parent">'
-        "<clip t=1.0/>"
-        '<clip mention="child" t=2.0/>'
-        "</collection>"
-    )
+    text = '<collection mention="parent"><clip t=1.0/><clip mention="child" t=2.0/></collection>'
     clips = extract_clips(text)
     assert len(clips) == 2
     assert clips[0].mention == "parent"  # inherited

@@ -34,14 +34,17 @@ try:
 except Exception:  # pragma: no cover
     np = None  # type: ignore
 
-from ..client import _PROVIDER_CONFIG, AsyncClient, Client, _inject_expectation_hint, ResponseFormat
+from ..client import _PROVIDER_CONFIG, AsyncClient, Client, ResponseFormat, _inject_expectation_hint
+from ..config import settings
 from ..errors import (
     REASONING_DISABLED_FOR_THINKING_MODEL,
     REASONING_NOT_SUPPORTED,
     REASONING_REQUIRED_FOR_MODEL,
+    AnchorError,
+    AuthError,
+    BadRequestError,
+    ExpectationError,
 )
-from ..config import settings
-from ..errors import AnchorError, AuthError, BadRequestError, ExpectationError
 from ..pointing.geometry import scale_points_to_pixels
 from ..pointing.parser import PointParser_serialize
 from ..pointing.types import BoundingBox, Clip, Polygon, SinglePoint
@@ -51,6 +54,9 @@ from .nodes import (
     Sequence,
     System,
     Text,
+)
+from .nodes import (
+    Audio as AudioNode,
 )
 from .nodes import (
     BoxTag as BoxTagNode,
@@ -66,9 +72,6 @@ from .nodes import (
 )
 from .nodes import (
     Video as VideoNode,
-)
-from .nodes import (
-    Audio as AudioNode,
 )
 
 _IMAGE_SIGNATURES = (

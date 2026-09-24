@@ -144,22 +144,14 @@ def test_caption_video_uses_video_modality_prompt():
 
     with cfg(api_key="test", provider="fal"):
         res = caption(video("https://x.com/v.mp4"), style="concise")
-    user_msgs = [
-        e["content"]
-        for e in res.raw["content"]
-        if e.get("type") == "text" and e.get("role") == "user"
-    ]
+    user_msgs = [e["content"] for e in res.raw["content"] if e.get("type") == "text" and e.get("role") == "user"]
     assert any("upcoming video" in m for m in user_msgs)
 
 
 def test_caption_image_uses_image_modality_prompt():
     with cfg(api_key="test", provider="fal"):
         res = caption(image(PNG_BYTES), style="concise")
-    user_msgs = [
-        e["content"]
-        for e in res.raw["content"]
-        if e.get("type") == "text" and e.get("role") == "user"
-    ]
+    user_msgs = [e["content"] for e in res.raw["content"] if e.get("type") == "text" and e.get("role") == "user"]
     assert any("upcoming image" in m for m in user_msgs)
 
 
@@ -168,34 +160,24 @@ def test_detect_video_includes_tracking_instruction():
 
     with cfg(api_key="test", provider="fal"):
         res = detect(video("https://x.com/v.mp4"), classes=["person"])
-    sys_msgs = [
-        e["content"]
-        for e in res.raw["content"]
-        if e.get("type") == "text" and e.get("role") == "system"
-    ]
+    sys_msgs = [e["content"] for e in res.raw["content"] if e.get("type") == "text" and e.get("role") == "system"]
     assert any("Make sure to track the objects." in m for m in sys_msgs)
 
 
 def test_detect_image_omits_tracking_instruction():
     with cfg(api_key="test", provider="fal"):
         res = detect(image(PNG_BYTES), classes=["person"])
-    sys_msgs = [
-        e["content"]
-        for e in res.raw["content"]
-        if e.get("type") == "text" and e.get("role") == "system"
-    ]
+    sys_msgs = [e["content"] for e in res.raw["content"] if e.get("type") == "text" and e.get("role") == "system"]
     assert all("Make sure to track" not in m for m in sys_msgs)
 
 
 def test_caption_requires_wrapped_input():
     """Loose input is rejected — caller must wrap with image() or video()."""
 
-    with pytest.raises(TypeError):
-        with cfg(api_key="test", provider="fal"):
-            caption(PNG_BYTES)
+    with pytest.raises(TypeError), cfg(api_key="test", provider="fal"):
+        caption(PNG_BYTES)
 
 
 def test_ocr_requires_wrapped_input():
-    with pytest.raises(TypeError):
-        with cfg(api_key="test", provider="fal"):
-            ocr(PNG_BYTES)
+    with pytest.raises(TypeError), cfg(api_key="test", provider="fal"):
+        ocr(PNG_BYTES)
