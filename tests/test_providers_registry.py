@@ -74,7 +74,7 @@ def test_fal_rejects_perceptron_models_with_an_actionable_message():
     assert "not supported for provider='fal'" in message
     assert 'configure(provider="perceptron")' in message
     assert "PERCEPTRON_PROVIDER=perceptron" in message
-    assert "when FAL_KEY is set and PERCEPTRON_API_KEY is not" in message  # why fal is in use
+    assert "when FAL_KEY is set and neither PERCEPTRON_API_KEY nor a key set in code is" in message  # why fal is in use
 
 
 def test_fal_rejects_other_ids_without_the_perceptron_hint():
@@ -110,6 +110,22 @@ def test_no_provider_resolves_by_the_rule(monkeypatch):
     assert _providers._resolve_provider(None)["name"] == "fal"
     monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
     assert _providers._resolve_provider(None)["name"] == "perceptron"
+
+
+def test_a_key_set_in_code_counts_as_a_perceptron_key(monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "fal-key")
+    assert settings().provider == "fal"  # FAL_KEY is the only key
+    assert client_mod.Client(api_key="sk-test")._settings.provider == "perceptron"
+    assert client_mod.AsyncClient(api_key="sk-test")._settings.provider == "perceptron"
+    assert client_mod.Client(provider="fal", api_key="fal-key")._settings.provider == "fal"
+    with cfg(api_key="sk-test"):
+        assert settings().provider == "perceptron"
+        assert client_mod.Client()._settings.provider == "perceptron"
+        assert _providers._resolve_provider(None)["name"] == "perceptron"
+    with cfg(provider="fal", api_key="fal-key"):
+        assert settings().provider == "fal"
+    with cfg(api_key=""):  # an empty key is no key
+        assert settings().provider == "fal"
 
 
 def test_configured_provider_wins_over_the_rule(monkeypatch):

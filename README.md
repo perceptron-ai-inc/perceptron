@@ -77,16 +77,16 @@ with config(max_tokens=512, timeout=300):
 
 **Providers.** `perceptron` is the Perceptron API (`https://api.perceptron.inc/v1`); its default model is `perceptron-mk1.5`. `fal` serves `isaac-0.1` only.
 
-> **Which provider is used.** One rule applies to every surface (the helpers, `perceive`, `Client.generate`/`stream`, the message API, Files, Models, Multilook, and the CLI): the provider you choose wins (`Client(provider=...)`, `configure(provider=...)`, `PERCEPTRON_PROVIDER`, a per-call `provider=`, or the CLI's `--provider`). Otherwise it is `fal` only when `FAL_KEY` is set and `PERCEPTRON_API_KEY` is not, and the Perceptron API in every other case.
+> **Which provider is used.** One rule applies to every surface (the helpers, `perceive`, `Client.generate`/`stream`, the message API, Files, Models, Multilook, and the CLI): the provider you choose wins (`Client(provider=...)`, `configure(provider=...)`, `PERCEPTRON_PROVIDER`, a per-call `provider=`, or the CLI's `--provider`). Otherwise it is `fal` only when `FAL_KEY` is your only key (it is set, and neither `PERCEPTRON_API_KEY` nor a key set in code with `configure(api_key=...)` or `Client(api_key=...)` is), and the Perceptron API in every other case. So a key you set in code goes to the Perceptron API unless you choose `fal`.
 >
-> Provider `fal` authenticates with `FAL_KEY` or a key you pass in code (`configure(api_key=...)`, `Client(api_key=...)`); a `PERCEPTRON_API_KEY` is never sent to fal. Files, Models, and Multilook exist only on the Perceptron API: on provider `fal` they raise `BadRequestError` with code `unsupported_provider_feature`. A `base_url` you set (`Client(base_url=...)`, `configure(base_url=...)`, or `PERCEPTRON_BASE_URL`) applies to every surface.
+> Provider `fal` authenticates with `FAL_KEY`, or with a key you set in code when you choose `fal` (`configure(provider="fal", api_key=...)`, `Client(provider="fal", api_key=...)`); a `PERCEPTRON_API_KEY` is never sent to fal. Files, Models, and Multilook exist only on the Perceptron API: on provider `fal` they raise `BadRequestError` with code `unsupported_provider_feature`. A `base_url` you set (`Client(base_url=...)`, `configure(base_url=...)`, or `PERCEPTRON_BASE_URL`) applies to every surface.
 >
-> **Upgrading from 0.3.x:** with no provider set, 0.3.x used fal and sent it `PERCEPTRON_API_KEY` (or the key from `configure(api_key=...)`). The Perceptron API is now used unless only `FAL_KEY` is set. To keep using fal, choose it (`PERCEPTRON_PROVIDER=fal` or `configure(provider="fal")`) and put its key in `FAL_KEY` or `configure(api_key=...)`.
+> **Upgrading from 0.3.x:** with no provider set, 0.3.x used fal and sent it `PERCEPTRON_API_KEY` (or the key from `configure(api_key=...)`). The Perceptron API is now used unless `FAL_KEY` is your only key. To keep using fal, choose it (`PERCEPTRON_PROVIDER=fal` or `configure(provider="fal")`) and put its key in `FAL_KEY` or `configure(api_key=...)`.
 
 | Setting | Environment variable | Notes |
 | --- | --- | --- |
 | `provider` | `PERCEPTRON_PROVIDER` | `perceptron` or `fal` (see above) |
-| `api_key` | `PERCEPTRON_API_KEY` (provider `fal`: `FAL_KEY`) | a key set in code is used by whichever provider is selected |
+| `api_key` | `PERCEPTRON_API_KEY` (provider `fal`: `FAL_KEY`) | a key set in code is used by whichever provider is selected, and selects the Perceptron API when you choose no provider |
 | `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1`, `isaac-0.3-fast`, `isaac-0.2-2b-preview`, `isaac-0.2-1b`, `isaac-0.1` |
 | `base_url` | `PERCEPTRON_BASE_URL` | replaces the provider's URL on every surface; include `/v1` for provider `perceptron` |
 | `timeout` | | seconds per request, default 125 (Multilook waits at least 305) |
@@ -317,7 +317,7 @@ print(result.text)
 
 ## Files, Models, and Multilook (Mk1.5)
 
-These exist only on the Perceptron API: on provider `fal` (chosen, or selected because only `FAL_KEY` is set) they raise `BadRequestError` with code `unsupported_provider_feature`.
+These exist only on the Perceptron API: on provider `fal` (chosen, or selected because `FAL_KEY` is your only key) they raise `BadRequestError` with code `unsupported_provider_feature`.
 
 ```python
 from perceptron import Client, image
@@ -532,7 +532,7 @@ Prompt nodes: `text`, `system`, `agent`, `image`, `video`, `audio`, `video_frame
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| Requests go to `fal.run`, or `Model 'perceptron-mk1.5' is not supported for provider='fal'` | Provider `fal` is selected: you chose it, or `FAL_KEY` is set and `PERCEPTRON_API_KEY` is not | Export `PERCEPTRON_API_KEY`, or choose the Perceptron API with `configure(provider="perceptron")` or `export PERCEPTRON_PROVIDER=perceptron`. |
+| Requests go to `fal.run`, or `Model 'perceptron-mk1.5' is not supported for provider='fal'` | Provider `fal` is selected: you chose it, or `FAL_KEY` is your only key (no `PERCEPTRON_API_KEY` and no key set in code) | Export `PERCEPTRON_API_KEY`, or choose the Perceptron API with `configure(provider="perceptron")` or `export PERCEPTRON_PROVIDER=perceptron`. |
 | `AuthError` with code `credentials_missing` (`No API key for provider ...`) | No API key for the selected provider (`fal` never uses `PERCEPTRON_API_KEY`) | Export `PERCEPTRON_API_KEY` (Perceptron API) or `FAL_KEY` (fal), or call `configure(api_key=...)`. |
 | `BadRequestError` with code `unsupported_provider_feature` | Files, Models, Multilook, or an uploaded file's id on provider `fal` | `configure(provider="perceptron")` or `export PERCEPTRON_PROVIDER=perceptron`. |
 | `BadRequestError` with code `model_renamed` | `perceptron-mk1.5-preview` was renamed | Use `perceptron-mk1.5`. |

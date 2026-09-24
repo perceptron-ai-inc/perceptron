@@ -1,7 +1,7 @@
 """One provider rule for every surface, fal's key isolation, and the default timeout (DESIGN §14.1, §14.2).
 
-The provider you choose wins; otherwise ``fal`` only when ``FAL_KEY`` is set and ``PERCEPTRON_API_KEY`` is not;
-otherwise ``perceptron``. Provider ``fal`` never receives a key read from ``PERCEPTRON_API_KEY``, and files, models and
+The provider you choose wins; otherwise ``fal`` only when ``FAL_KEY`` is set and neither ``PERCEPTRON_API_KEY`` nor a
+key set in code is; otherwise ``perceptron``. Provider ``fal`` never receives a key read from ``PERCEPTRON_API_KEY``, and files, models and
 multilook exist only on ``perceptron``. Requests go through `httpx.MockTransport` (see `_http_mock`).
 """
 
@@ -306,12 +306,59 @@ def test_chosen_fal_uses_fal_key_even_when_both_keys_are_set(http, monkeypatch):
         assert _sent(http) == FAL
 
 
-def test_a_key_set_in_code_goes_to_the_perceptron_api_by_default(http):
+def _with_key_in_config(call):
     with config(api_key="sk-test"):
-        question(_img(), "Hi")
-        assert _sent(http) == PERCEPTRON
-    Client(api_key="sk-test").chat.completions.create(messages=[USER])
+        return call()
+
+
+# A key set in code (configure/config or a client's api_key=) with no chosen provider, on each kind of surface.
+KEY_SET_IN_CODE = {
+    "configure-question": lambda: _with_key_in_config(lambda: question(_img(), "Hi")),
+    "configure-perceive-stream": lambda: _with_key_in_config(lambda: list(perceive(_img(), text("Hi"), stream=True))),
+    "configure-create": lambda: _with_key_in_config(lambda: Client().chat.completions.create(messages=[USER])),
+    "configure-files": lambda: _with_key_in_config(lambda: Client().files.list()),
+    "client-generate": lambda: Client(api_key="sk-test").generate(TASK),
+    "client-create": lambda: Client(api_key="sk-test").chat.completions.create(messages=[USER]),
+    "client-models": lambda: Client(api_key="sk-test").models.list(),
+    "client-multilook": lambda: Client(api_key="sk-test").chat.completions.multilook(context=[], prompts=["q"]),
+    "async-client-generate": lambda: asyncio.run(AsyncClient(api_key="sk-test").generate(TASK)),
+    "async-client-files": lambda: asyncio.run(AsyncClient(api_key="sk-test").files.retrieve(FILE_ID)),
+}
+
+
+@pytest.mark.parametrize("surface", KEY_SET_IN_CODE)
+@pytest.mark.parametrize("env", [{}, {"FAL_KEY": "fal-key"}], ids=["no-env-keys", "fal-key-in-env"])
+def test_a_key_set_in_code_goes_to_the_perceptron_api_by_default(http, monkeypatch, env, surface):
+    """With no chosen provider a key set in code is a Perceptron key: a FAL_KEY in the environment does not send it
+    (or the request) to fal, and files, models and multilook work."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    KEY_SET_IN_CODE[surface]()
+
+    assert len(http.requests) == 1
+    request = http.last
+    assert request.url.host == "api.perceptron.inc"
+    assert request.headers["authorization"] == "Bearer sk-test"
+    if request.method == "POST":
+        assert json.loads(request.content)["model"] == "perceptron-mk1.5"
+
+
+def test_a_key_set_in_code_goes_to_fal_only_when_fal_is_chosen(http, monkeypatch):
+    monkeypatch.setenv("FAL_KEY", "fal-env-key")
+
+    with config(api_key="sk-test"):
+        assert settings().provider == "perceptron"
+    with config(provider="fal", api_key="fal-key"):
+        assert settings().provider == "fal"
+        Client().chat.completions.create(messages=[USER])
+        assert _sent(http) == FAL
+    Client(provider="fal", api_key="fal-key").chat.completions.create(messages=[USER])
+    assert _sent(http) == FAL
+    Client(provider=None, api_key="sk-test").generate(TASK)  # provider=None chooses nothing
     assert _sent(http) == PERCEPTRON
+    question(_img(), "Hi")  # no key set in code: FAL_KEY is the only key
+    assert _sent(http) == (FAL_CHAT, "Key fal-env-key", "isaac-0.1")
 
 
 def test_client_keeps_its_provider_and_key_pairing(http, monkeypatch):

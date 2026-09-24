@@ -2,8 +2,8 @@
 
 Providers
 - perceptron: the Perceptron API (the default)
-- fal: Fal-hosted endpoint (OpenAI-compatible); selected when you choose it, or when `FAL_KEY` is set and
-  `PERCEPTRON_API_KEY` is not (see `perceptron.config.Settings`)
+- fal: Fal-hosted endpoint (OpenAI-compatible); selected when you choose it, or when `FAL_KEY` is set and neither
+  `PERCEPTRON_API_KEY` nor a key set in code is (see `perceptron.config.Settings`)
 
 Additional transports can be registered by extending `_PROVIDER_CONFIG`.
 
@@ -50,7 +50,7 @@ from .chat import (
     _normalize_vision_config,
     _validate_request_body,
 )
-from .config import settings
+from .config import Settings, _settings_with
 
 # The error classes, INVALID_REASONING_EFFORT, parse_text, extract_points and extract_clips stay importable from here,
 # as in earlier releases.
@@ -568,15 +568,12 @@ def _http_client(timeout: float):
 
 class _ClientCore:
     def __init__(self, **overrides: Any) -> None:
-        self._settings = settings()
-        known = {f.name for f in fields(self._settings)}
+        known = {f.name for f in fields(Settings)}
         for k in overrides:
             if k not in known:
                 raise TypeError(f"{type(self).__name__}() got an unexpected keyword argument {k!r}")
-        for k, v in overrides.items():
-            setattr(self._settings, k, v)
-        if "api_key" in overrides:
-            self._settings._api_key_env = None  # a key passed in code goes to whichever provider is in use
+        # The keyword arguments count as configured settings, so the provider rule sees a key passed here.
+        self._settings = _settings_with(overrides)
 
     def _sync_session(self, timeout: float):
         """A new sync HTTP session; `_http_client` is looked up at call time so tests can patch it."""
@@ -776,8 +773,9 @@ class Client(_ClientCore):
 
     Keyword arguments override the settings for this client (``Client(provider="fal", api_key=...)``). The provider is
     resolved when the client is built, with the rule of :class:`~perceptron.config.Settings` (``perceptron`` unless you
-    choose one, or only ``FAL_KEY`` is set), and every surface uses it; ``files``, ``models`` and multilook need
-    provider ``perceptron``. ``generate``/``stream`` also take a per-call ``provider=``.
+    choose one, or ``FAL_KEY`` is your only key; an ``api_key=`` without a ``provider=`` goes to the Perceptron API),
+    and every surface uses it; ``files``, ``models`` and multilook need provider ``perceptron``. ``generate``/``stream``
+    also take a per-call ``provider=``.
 
     ``generate``/``stream`` send only the parameters you set (or configured defaults). ``reasoning=True`` adds the
     ``<hint>THINK</hint>`` encoding and ``expects`` the ``<hint>BOX</hint>``-style one (a system message on provider

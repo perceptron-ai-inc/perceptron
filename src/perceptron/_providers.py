@@ -2,9 +2,10 @@
 
 Every surface resolves the provider with one rule (``config._from_env``, :func:`_provider_key`): the provider the caller
 chose (``Client(provider=...)``, ``configure``/``config``, ``PERCEPTRON_PROVIDER``, a per-call ``provider=``, the CLI's
-``--provider``), otherwise ``fal`` only when ``FAL_KEY`` is set and ``PERCEPTRON_API_KEY`` is not, otherwise
-``perceptron``. :func:`provider_api_key` never gives fal a key read from ``PERCEPTRON_API_KEY``. Files, models and
-multilook exist only on ``perceptron`` (:func:`surface_provider_cfg`). A configured ``base_url`` applies to every surface.
+``--provider``), otherwise ``fal`` only when ``FAL_KEY`` is set and neither ``PERCEPTRON_API_KEY`` nor a key set in code
+is, otherwise ``perceptron``. :func:`provider_api_key` never gives fal a key read from ``PERCEPTRON_API_KEY``, and fal
+gets a key set in code only when the caller chose fal. Files, models and multilook exist only on ``perceptron``
+(:func:`surface_provider_cfg`). A configured ``base_url`` applies to every surface.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .config import _default_provider
+from .config import settings as _effective_settings
 from .errors import INVALID_REASONING_EFFORT, MODEL_RENAMED, UNSUPPORTED_PROVIDER_FEATURE, BadRequestError
 
 PERCEPTRON_PROVIDER = "perceptron"
@@ -103,7 +104,10 @@ def _select_model(
                 f". '{model}' is served by the Perceptron API: select provider 'perceptron' with {_SELECT_PERCEPTRON}"
             )
             if provider_label == "fal":
-                message += " (fal is used when you choose it, or when FAL_KEY is set and PERCEPTRON_API_KEY is not)"
+                message += (
+                    " (fal is used when you choose it, or when FAL_KEY is set and neither PERCEPTRON_API_KEY nor a key"
+                    " set in code is)"
+                )
             message += "."
         raise BadRequestError(message)
     return model
@@ -126,10 +130,10 @@ def _pop_and_resolve_model(provider_cfg: dict[str, Any], gen_kwargs: dict[str, A
 def _provider_key(provider: str | None) -> str:
     """The registry key of ``provider`` (case-insensitive).
 
-    No provider means the default rule, ``config._default_provider``: ``fal`` only when ``FAL_KEY`` is set and
-    ``PERCEPTRON_API_KEY`` is not, otherwise ``perceptron``.
+    No provider means the one :func:`~perceptron.config.settings` resolves: the configured provider, else the default
+    rule (``fal`` only when ``FAL_KEY`` is set and neither ``PERCEPTRON_API_KEY`` nor a key set in code is).
     """
-    provider = provider or _default_provider()
+    provider = provider or _effective_settings().provider
     return provider.lower() if isinstance(provider, str) else provider
 
 

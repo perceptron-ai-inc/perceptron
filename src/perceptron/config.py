@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 
@@ -16,12 +16,14 @@ class Settings:
     One rule picks the provider for every surface (the helpers, ``perceive``, ``Client``, the message API, files,
     models, multilook and the CLI): the provider you chose (``Client(provider=...)``, ``configure``/``config``,
     ``PERCEPTRON_PROVIDER``, a per-call ``provider=`` or ``--provider``); otherwise ``"fal"`` only when ``FAL_KEY`` is
-    set and ``PERCEPTRON_API_KEY`` is not; otherwise ``"perceptron"`` (see :func:`_default_provider`).
+    your only key (it is set, and neither ``PERCEPTRON_API_KEY`` nor a key set in code is); otherwise ``"perceptron"``
+    (see :func:`_default_provider`). So without a chosen provider, a key set in code goes to the Perceptron API.
 
-    ``api_key`` is the key you set in code, else ``PERCEPTRON_API_KEY``. Provider ``"fal"`` authenticates with a key
-    set in code or ``FAL_KEY``, never with one read from ``PERCEPTRON_API_KEY``. Files, models and multilook exist only
-    on provider ``"perceptron"``. A configured ``base_url`` (``PERCEPTRON_BASE_URL``) replaces the provider's base URL
-    on every surface.
+    ``api_key`` is the key you set in code (``configure``/``config``, ``Client(api_key=...)``), else
+    ``PERCEPTRON_API_KEY``. Provider ``"fal"`` authenticates with a key set in code or ``FAL_KEY``, never with one read
+    from ``PERCEPTRON_API_KEY``; it gets a key set in code only when you choose ``"fal"``. Files, models and multilook
+    exist only on provider ``"perceptron"``. A configured ``base_url`` (``PERCEPTRON_BASE_URL``) replaces the
+    provider's base URL on every surface.
     """
 
     base_url: str | None = None  # every surface uses it when set; for provider "perceptron" include the /v1 prefix
@@ -63,25 +65,27 @@ _defaults = Settings()  # Track default values
 _explicit_fields: set[str] = set()  # Track which fields have been explicitly configured
 
 
-def _default_provider() -> str:
-    """The provider when none was chosen: ``"fal"`` only when ``FAL_KEY`` is set and ``PERCEPTRON_API_KEY`` is not."""
-    if os.getenv("FAL_KEY") and not os.getenv("PERCEPTRON_API_KEY"):
+def _default_provider(*, key_set_in_code: bool = False) -> str:
+    """The provider when none was chosen: ``"fal"`` only when ``FAL_KEY`` is set and neither ``PERCEPTRON_API_KEY``
+    nor a key set in code is, otherwise ``"perceptron"``. A key set in code without a provider is a Perceptron key."""
+    if os.getenv("FAL_KEY") and not key_set_in_code and not os.getenv("PERCEPTRON_API_KEY"):
         return "fal"
     return "perceptron"
 
 
-def _from_env(s: Settings) -> Settings:
-    # Only read from environment for fields that haven't been explicitly configured
-    base_url = s.base_url if "base_url" in _explicit_fields else os.getenv("PERCEPTRON_BASE_URL", s.base_url)
-    env_api_key = None if "api_key" in _explicit_fields else os.getenv("PERCEPTRON_API_KEY")
+def _from_env(s: Settings, explicit: set[str] | None = None) -> Settings:
+    # Only read from environment for fields that haven't been explicitly configured (`explicit`, default: configure())
+    explicit = _explicit_fields if explicit is None else explicit
+    base_url = s.base_url if "base_url" in explicit else os.getenv("PERCEPTRON_BASE_URL", s.base_url)
+    env_api_key = None if "api_key" in explicit else os.getenv("PERCEPTRON_API_KEY")
     api_key = s.api_key if env_api_key is None else env_api_key
-    provider = s.provider if "provider" in _explicit_fields else os.getenv("PERCEPTRON_PROVIDER", s.provider)
-    model = s.model if "model" in _explicit_fields else os.getenv("PERCEPTRON_MODEL", s.model)
+    provider = s.provider if "provider" in explicit else os.getenv("PERCEPTRON_PROVIDER", s.provider)
+    model = s.model if "model" in explicit else os.getenv("PERCEPTRON_MODEL", s.model)
 
     merged = Settings(
         base_url=base_url,
         api_key=api_key,
-        provider=provider or _default_provider(),
+        provider=provider or _default_provider(key_set_in_code="api_key" in explicit and bool(s.api_key)),
         model=model,
         timeout=s.timeout,
         retries=s.retries,
@@ -135,3 +139,9 @@ def config(**kwargs: Any):
 def settings() -> Settings:
     """Return the effective merged settings (env overlaid on current)."""
     return _from_env(_global_settings)
+
+
+def _settings_with(overrides: dict[str, Any]) -> Settings:
+    """:func:`settings` with ``overrides`` applied as configured fields: a client's settings (``Client(**overrides)``),
+    so a key passed to the client counts as a key set in code for the provider rule."""
+    return _from_env(replace(_global_settings, **overrides), _explicit_fields | overrides.keys())

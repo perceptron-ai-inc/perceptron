@@ -1438,7 +1438,7 @@ class ChatCompletions:
         (``stream_options={"include_usage": True}``) unless you pass ``stream_options``.
 
         Uses the client's provider (``Client(provider=...)``, ``configure(provider=...)``, ``PERCEPTRON_PROVIDER``;
-        otherwise ``perceptron``, or ``fal`` when only ``FAL_KEY`` is set). Invalid values raise ``BadRequestError``
+        otherwise ``perceptron``, or ``fal`` when ``FAL_KEY`` is your only key). Invalid values raise ``BadRequestError``
         before any request; unknown or unsupported OpenAI parameters raise ``TypeError``.
 
         Returns a :class:`ChatCompletion`, or with ``stream=True`` a :class:`ChatCompletionStream` (the request is
