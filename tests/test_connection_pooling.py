@@ -398,6 +398,52 @@ def test_async_streams_leave_the_pool_open_and_survive_closing_the_client(http):
     assert len(http.clients) == 1 and http.clients[0].is_closed
 
 
+def test_async_client_opens_a_pool_per_event_loop_and_leaves_a_supplied_one_alone(http):
+    client = AsyncClient()
+    own = http.async_http_client()
+    supplied = AsyncClient(http_client=own)
+
+    async def _create(on: AsyncClient) -> str:
+        return (await on.chat.completions.create(messages=[USER])).text
+
+    for _ in range(2):  # each asyncio.run is a new event loop
+        assert asyncio.run(_create(client)) == "Hello"
+        assert asyncio.run(_create(supplied)) == "Hello"
+
+    first, second = http.clients  # the first loop's pool was released, not reused; the supplied one is used as is
+    assert first is not second and not own.is_closed
+    asyncio.run(client.aclose())  # from yet another loop: the pool's loop has ended, so there is nothing to await
+    with pytest.raises(RuntimeError, match="AsyncClient is closed"):
+        asyncio.run(_create(client))
+    assert len(http.clients) == 2
+    asyncio.run(own.aclose())
+
+
+def test_async_client_in_use_on_a_loop_running_in_another_thread_says_so(http):
+    client = AsyncClient()
+    ready, done = threading.Event(), threading.Event()
+
+    async def _hold_its_loop() -> None:
+        await client.chat.completions.create(messages=[USER])
+        ready.set()
+        while not done.is_set():
+            await asyncio.sleep(0.005)
+
+    thread = threading.Thread(target=asyncio.run, args=(_hold_its_loop(),))
+    thread.start()
+    try:
+        assert ready.wait(timeout=5)
+        with pytest.raises(RuntimeError, match=r"running in another thread.*one AsyncClient per event loop"):
+            asyncio.run(client.chat.completions.create(messages=[USER]))
+    finally:
+        done.set()
+        thread.join()
+
+    (pool,) = http.clients  # the other thread's pool was left alone
+    assert asyncio.run(client.chat.completions.create(messages=[USER])).text == "Hello"  # its loop has ended now
+    assert len(http.clients) == 2 and not pool.is_closed
+
+
 # ---------------------------------------------------------------------------
 # A real connection pool (httpcore over in-process socket pairs, no network)
 # ---------------------------------------------------------------------------
@@ -428,6 +474,35 @@ class _SocketStream(httpcore.NetworkStream):
         return None
 
 
+class _AsyncSocketStream(httpcore.AsyncNetworkStream):
+    """A socket read and written through asyncio streams, so bound to the event loop that opened it (as httpx's own
+    connections are)."""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._reader, self._writer = reader, writer
+
+    async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        try:
+            return await asyncio.wait_for(self._reader.read(max_bytes), timeout)
+        except asyncio.TimeoutError as exc:
+            raise httpcore.ReadTimeout(exc) from exc
+        except OSError as exc:
+            raise httpcore.ReadError(exc) from exc
+
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        try:
+            self._writer.write(buffer)
+            await self._writer.drain()
+        except OSError as exc:
+            raise httpcore.WriteError(exc) from exc
+
+    async def aclose(self) -> None:
+        self._writer.close()
+
+    def get_extra_info(self, info: str):
+        return None
+
+
 class _SocketServer(httpcore.NetworkBackend):
     """Each connection is a socket pair served by a thread: JSON completions, and streams that send their first event
     and then wait for ``release``."""
@@ -438,11 +513,14 @@ class _SocketServer(httpcore.NetworkBackend):
         self.release = threading.Event()
 
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        return _SocketStream(self._connect())
+
+    def _connect(self) -> socket.socket:
         self.connects += 1
         ours, theirs = socket.socketpair()
         self.connections.append(ours)
         threading.Thread(target=self._serve, args=(theirs,), daemon=True).start()
-        return _SocketStream(ours)
+        return ours
 
     def _serve(self, sock: socket.socket) -> None:
         with sock, sock.makefile("rb") as reader:
@@ -483,6 +561,31 @@ def socket_server(monkeypatch):
     monkeypatch.setattr(client_mod, "_http_client", _pool)
     yield server
     server.release.set()
+
+
+class _AsyncSocketServer(httpcore.AsyncNetworkBackend):
+    """``server``'s connections for an async pool."""
+
+    def __init__(self, server: _SocketServer) -> None:
+        self.server = server
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        reader, writer = await asyncio.open_connection(sock=self.server._connect())
+        return _AsyncSocketStream(reader, writer)
+
+
+@pytest.fixture
+def async_socket_server(monkeypatch):
+    server = _SocketServer()
+    server.release.set()  # streams are sent whole
+
+    def _pool(timeout):
+        transport = httpx.AsyncHTTPTransport()
+        transport._pool = httpcore.AsyncConnectionPool(network_backend=_AsyncSocketServer(server))
+        return httpx.AsyncClient(transport=transport, timeout=timeout)
+
+    monkeypatch.setattr(client_mod, "_async_http_client", _pool)
+    return server
 
 
 def _socket_client() -> Client:
@@ -557,3 +660,26 @@ def test_closing_a_client_ends_its_open_streams_with_a_truncation_error(socket_s
     client.close()
 
     assert list(events)[-1]["code"] == STREAM_TRUNCATED
+
+
+def test_an_async_client_moves_to_each_new_event_loop(async_socket_server):
+    # A kept-alive connection belongs to the loop that opened it: reused from a later loop it failed with a raw
+    # "RuntimeError: Event loop is closed". A request on a new loop now opens a new pool there.
+    client = AsyncClient(base_url="http://pool.test/v1", timeout=2.0)
+
+    async def _twice() -> list[str]:
+        return [(await client.chat.completions.create(messages=[USER])).text for _ in range(2)]
+
+    async def _streamed() -> str:
+        async with await client.chat.completions.create(messages=[USER], stream=True) as stream:
+            return (await stream.get_final_completion()).text
+
+    assert asyncio.run(_twice()) == ["Hello", "Hello"]
+    assert async_socket_server.connects == 1  # one kept-alive connection within a loop
+    assert asyncio.run(_streamed()) == "Hello"
+    assert asyncio.run(_twice()) == ["Hello", "Hello"]
+    assert async_socket_server.connects == 3  # one more per new loop, none reused from a loop that has ended
+
+    asyncio.run(client.aclose())  # a later loop cannot close the last loop's connections, and does not fail trying
+    with pytest.raises(RuntimeError, match="AsyncClient is closed"):
+        asyncio.run(_twice())

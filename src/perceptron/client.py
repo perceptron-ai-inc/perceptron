@@ -26,6 +26,7 @@ closes it.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass, fields
@@ -602,25 +603,47 @@ class _ClientCore:
         self._settings = _settings_with(overrides)
         self._http: Any = http_client  # the pooled HTTP client; created on first use unless one was passed
         self._owns_http = http_client is None  # only an HTTP client created here is closed by close()/aclose()
+        self._http_loop: asyncio.AbstractEventLoop | None = None  # the loop an AsyncClient's own pool belongs to
         self._closed = False
         self._lock = threading.Lock()
 
+    def _current_loop(self) -> asyncio.AbstractEventLoop | None:
+        """The event loop an HTTP client created now would belong to; None for :class:`Client`, whose pool has none."""
+        return None
+
     def _session(self) -> Any:
         """The HTTP client every request goes through: ``http_client``, else one created on first use (by the
-        subclass's ``_new_session``) and reused until the client is closed."""
+        subclass's ``_new_session``) and reused until the client is closed.
+
+        An :class:`AsyncClient`'s own HTTP client belongs to the event loop it was created on, whose connections cannot
+        be used from another. Once that loop has stopped (a later ``asyncio.run``), a request on a new loop creates a
+        new one; while it still runs in another thread, a request from a different loop raises ``RuntimeError``.
+        """
+        loop = self._current_loop()
         with self._lock:
             if self._closed:
                 raise RuntimeError(f"This {type(self).__name__} is closed; create a new one to send requests.")
+            if self._owns_http and self._http is not None and loop is not self._http_loop:
+                if self._http_loop is not None and self._http_loop.is_running():
+                    raise RuntimeError(
+                        f"This {type(self).__name__} is in use on an event loop running in another thread, which its "
+                        f"connections belong to; create one {type(self).__name__} per event loop."
+                    )
+                # Released, not closed: only its stopped loop could close it (asyncio closes the sockets on collection).
+                self._http = None
             if self._http is None:
-                self._http = self._new_session(self._settings.timeout)
+                self._http, self._http_loop = self._new_session(self._settings.timeout), loop
             return self._http
 
     def _detach_session(self) -> Any:
-        """Mark the client closed; returns the HTTP client to close (None when there is none or it was passed in)."""
+        """Mark the client closed; returns the HTTP client to close: None when there is none, it was passed in, or it
+        belongs to another event loop (which alone could close it)."""
+        loop = self._current_loop()
         with self._lock:
             self._closed = True
             session, self._http = self._http, None
-        return session if self._owns_http else None
+            closable = self._owns_http and loop is self._http_loop
+        return session if closable else None
 
     def _prepare_invocation(
         self,
@@ -1009,8 +1032,11 @@ class Client(_ClientCore):
 class AsyncClient(_ClientCore):
     """Asynchronous variant of :class:`Client` (same parameters) over one pooled ``httpx.AsyncClient`` (HTTP/1.1).
 
-    Close it with ``await client.aclose()`` or an ``async with AsyncClient() as client:`` block; use it on one event
-    loop. ``http_client=`` takes your own ``httpx.AsyncClient``, which the SDK never closes.
+    Close it with ``await client.aclose()`` or an ``async with AsyncClient() as client:`` block. Its pool belongs to
+    the event loop it runs on: after that loop ends (say, a second ``asyncio.run``), the next request opens a new pool
+    on the new loop; using the client from event loops running at the same time in different threads raises
+    ``RuntimeError`` (create one client per loop). ``http_client=`` takes your own ``httpx.AsyncClient``, which the SDK
+    uses as is and never closes.
     """
 
     _HTTP_CLIENT_TYPE = httpx.AsyncClient
@@ -1018,9 +1044,16 @@ class AsyncClient(_ClientCore):
     def _new_session(self, timeout: float | None) -> httpx.AsyncClient:
         return _async_http_client(timeout)
 
+    def _current_loop(self) -> asyncio.AbstractEventLoop | None:
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:  # not on an asyncio loop (another async library): the pool is not bound to one
+            return None
+
     async def aclose(self) -> None:
         """Close the HTTP client this client created (an ``http_client`` you passed stays open); streams still
-        reading from it then end with an error. Safe to call more than once."""
+        reading from it then end with an error. Safe to call more than once, and from a later event loop: a pool left
+        on a loop that has ended is only released, since that loop took its connections with it."""
         session = self._detach_session()
         if session is not None:
             await session.aclose()
