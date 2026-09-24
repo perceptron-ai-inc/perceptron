@@ -14,13 +14,16 @@ and results are typed dataclasses with ``to_dict()``. Tool calling round trip::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
 import re
 import sys
 import warnings
+import weakref
 from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -652,7 +655,6 @@ class _StreamBase:
         self.request_id = request_id
         self.completion: ChatCompletion | None = None
         self._closer = closer
-        self._closed = False
         self._error: SDKError | None = None
         self._accumulator = ChatStreamAccumulator(request_id=request_id, asset_count=asset_count)
 
@@ -693,11 +695,14 @@ class ChatCompletionStream(_StreamBase):
 
     ``.completion`` holds the :class:`ChatCompletion` once the stream is exhausted; ``get_final_completion()`` consumes
     the rest and returns it. Error events, malformed chunks and a missing ``[DONE]`` raise mapped errors carrying
-    ``.partial``. The stream owns its connection and closes it when exhausted, on error, on ``close()`` or on exit.
+    ``.partial``. The stream owns its connection and closes it when exhausted, on error, on ``close()``, on exit, or
+    when it is garbage collected unfinished (never iterated, or left mid-way).
     """
 
     def __init__(self, response: Any, closer: Any, *, request_id: str | None = None, asset_count: int | None = None):
         super().__init__(response, closer, request_id=request_id, asset_count=asset_count)
+        # Holds the closer, not the stream, so a dropped stream can still be collected (and then closed).
+        self._finalizer = weakref.finalize(self, closer.close)
         self._iterator = self._iterate()
 
     def _iterate(self) -> Iterator[ChatCompletionChunk]:
@@ -715,9 +720,7 @@ class ChatCompletionStream(_StreamBase):
             self._release()
 
     def _release(self) -> None:
-        if not self._closed:
-            self._closed = True
-            self._closer.close()
+        self._finalizer()  # closes the connection the first time; later calls, and garbage collection, do nothing
 
     def __iter__(self) -> ChatCompletionStream:
         return self
@@ -745,10 +748,21 @@ class ChatCompletionStream(_StreamBase):
 
 class AsyncChatCompletionStream(_StreamBase):
     """Async :class:`ChatCompletionStream` (``async for``, ``async with``, ``await close()``,
-    ``await get_final_completion()``)."""
+    ``await get_final_completion()``).
+
+    Use ``async with`` (or ``await close()``) when you may stop early: closing needs the event loop. A stream garbage
+    collected unfinished is closed on its event loop while that loop runs; after the loop stops it can only be
+    reported (``ResourceWarning``), as asyncio does for unclosed transports.
+    """
 
     def __init__(self, response: Any, closer: Any, *, request_id: str | None = None, asset_count: int | None = None):
         super().__init__(response, closer, request_id=request_id, asset_count=asset_count)
+        try:
+            loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()  # the loop the connection belongs to
+        except RuntimeError:
+            loop = None
+        # Holds the closer and the loop, not the stream, so a dropped stream can still be collected.
+        self._finalizer = weakref.finalize(self, _close_dropped_async_stream, loop, closer)
         self._iterator = self._aiterate()
 
     async def _aiterate(self) -> AsyncIterator[ChatCompletionChunk]:
@@ -766,8 +780,7 @@ class AsyncChatCompletionStream(_StreamBase):
             await self._release()
 
     async def _release(self) -> None:
-        if not self._closed:
-            self._closed = True
+        if self._finalizer.detach() is not None:  # the first release; garbage collection then does nothing
             await self._closer.aclose()
 
     def __aiter__(self) -> AsyncChatCompletionStream:
@@ -792,6 +805,41 @@ class AsyncChatCompletionStream(_StreamBase):
         async for _ in self:
             pass
         return self._final()
+
+
+# Closes of dropped async streams scheduled on their loop, kept referenced until they finish.
+_PENDING_CLOSES: set[asyncio.Task] = set()
+
+
+def _close_dropped_async_stream(loop: asyncio.AbstractEventLoop | None, closer: Any) -> None:
+    """Finalizer of an :class:`AsyncChatCompletionStream` collected unclosed; it must not reference the stream.
+
+    It cannot await: while the stream's loop runs, the close is scheduled there. Otherwise nothing can be closed
+    synchronously (httpx closes async clients and responses only on their loop; asyncio closes the sockets when their
+    transports are collected), so it warns, like asyncio does for unclosed transports.
+    """
+    if loop is not None and loop.is_running():
+        with suppress(RuntimeError):  # the loop closed meanwhile
+            loop.call_soon_threadsafe(_schedule_close, loop, closer)
+            return
+    warnings.warn(
+        "An AsyncChatCompletionStream was garbage collected unclosed while its event loop was not running, so its "
+        "connection was not released; use 'async with' or 'await stream.close()'.",
+        ResourceWarning,
+        stacklevel=1,  # raised during garbage collection: there is no caller to point at
+    )
+
+
+def _schedule_close(loop: asyncio.AbstractEventLoop, closer: Any) -> None:
+    task = loop.create_task(closer.aclose())
+    _PENDING_CLOSES.add(task)
+    task.add_done_callback(_close_done)
+
+
+def _close_done(task: asyncio.Task) -> None:
+    _PENDING_CLOSES.discard(task)
+    if not task.cancelled():
+        task.exception()  # retrieved: nobody awaits this close, so a failure must not be logged as unretrieved
 
 
 # ---------------------------------------------------------------------------

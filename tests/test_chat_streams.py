@@ -1,6 +1,7 @@
 """`create(stream=True)`: SSE parsing, accumulation, terminal conditions, and stream lifetime (sync and async)."""
 
 import asyncio
+import gc
 import json
 from types import SimpleNamespace
 
@@ -403,6 +404,260 @@ def test_context_manager_and_close_release_the_connection(monkeypatch):
     stream.close()
     assert body.closed
     assert list(stream) == []
+
+
+# ---------------------------------------------------------------------------
+# Dropped streams release their connection
+# ---------------------------------------------------------------------------
+
+
+class _CountingSession:
+    """Wraps a session and counts how often it is closed."""
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+        self.closes = 0
+
+    def __enter__(self):
+        self.inner.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        self.closes += 1
+        return self.inner.__exit__(*exc)
+
+    async def __aenter__(self):
+        await self.inner.__aenter__()
+        return self
+
+    async def __aexit__(self, *exc):
+        self.closes += 1
+        return await self.inner.__aexit__(*exc)
+
+    def stream(self, *args, **kwargs):
+        return self.inner.stream(*args, **kwargs)
+
+
+def _serve_counted(monkeypatch, events=TEXT_EVENTS, *, done=True):
+    """Serve ``events``; returns the response body and the sessions the client opens (counting their closes)."""
+    _, body = _serve(monkeypatch, events, done=done)
+    sessions: list[_CountingSession] = []
+    sync_factory, async_factory = client_mod._http_client, client_mod.httpx.AsyncClient
+
+    def _sync(timeout):
+        sessions.append(_CountingSession(sync_factory(timeout)))
+        return sessions[-1]
+
+    def _async(timeout):
+        sessions.append(_CountingSession(async_factory(timeout)))
+        return sessions[-1]
+
+    monkeypatch.setattr(client_mod, "_http_client", _sync)
+    monkeypatch.setattr(client_mod.httpx, "AsyncClient", _async)
+    return body, sessions
+
+
+def _released(body, sessions) -> bool:
+    """The response body and the one session are closed, the session exactly once."""
+    (session,) = sessions
+    return body.closed and session.inner.is_closed and session.closes == 1
+
+
+async def _loop_turns():
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+def test_a_dropped_unconsumed_stream_releases_its_connection(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch)
+    stream = _stream()
+    assert not body.closed
+
+    del stream
+    gc.collect()
+
+    assert _released(body, sessions)
+
+
+def test_a_stream_dropped_after_breaking_out_of_a_loop_releases_its_connection(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch)
+    stream = _stream()
+    for _ in stream:
+        break
+    assert not body.closed
+
+    del stream
+    gc.collect()
+
+    assert _released(body, sessions)
+
+
+def _break_inside_with(stream):
+    with stream:
+        for _ in stream:
+            break
+
+
+@pytest.mark.parametrize(
+    "finish",
+    [list, ChatCompletionStream.get_final_completion, ChatCompletionStream.close, _break_inside_with],
+    ids=["exhausted", "get_final_completion", "close", "break-inside-with"],
+)
+def test_normal_paths_close_exactly_once(monkeypatch, finish):
+    body, sessions = _serve_counted(monkeypatch)
+    stream = _stream()
+
+    finish(stream)
+
+    assert _released(body, sessions)
+    stream.close()
+    del stream
+    gc.collect()
+    assert sessions[0].closes == 1
+
+
+def test_a_failed_stream_closes_exactly_once(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch, [chunk({"content": "x"})], done=False)
+    stream = _stream()
+
+    with pytest.raises(IncompleteStreamError):
+        stream.get_final_completion()
+
+    assert _released(body, sessions)
+    del stream
+    gc.collect()
+    assert sessions[0].closes == 1
+
+
+@pytest.mark.parametrize("iterated", [False, True], ids=["unconsumed", "break-without-async-with"])
+def test_an_async_stream_dropped_while_its_loop_runs_is_closed_there(monkeypatch, iterated):
+    body, sessions = _serve_counted(monkeypatch)
+
+    async def _run():
+        stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
+        if iterated:
+            async for _ in stream:
+                break
+        assert not body.closed
+        del stream
+        gc.collect()
+        await _loop_turns()
+        return _released(body, sessions)
+
+    assert asyncio.run(_run())
+    assert sessions[0].closes == 1
+
+
+def test_async_early_break_inside_async_with_releases_at_once(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch)
+
+    async def _run():
+        async with await AsyncClient().chat.completions.create(messages=[USER], stream=True) as stream:
+            async for _ in stream:
+                break
+        return _released(body, sessions)
+
+    assert asyncio.run(_run())
+
+
+@pytest.mark.parametrize("iterated", [False, True])
+def test_async_close_releases_at_once_and_exactly_once(monkeypatch, iterated):
+    body, sessions = _serve_counted(monkeypatch)
+
+    async def _run():
+        stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
+        if iterated:
+            await stream.__anext__()
+        await stream.close()
+        released = _released(body, sessions)
+        await stream.close()
+        del stream
+        gc.collect()
+        await _loop_turns()
+        return released
+
+    assert asyncio.run(_run())
+    assert sessions[0].closes == 1
+
+
+def test_async_normal_paths_close_exactly_once(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch)
+
+    async def _run():
+        stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
+        await stream.get_final_completion()
+        released = _released(body, sessions)
+        del stream
+        gc.collect()
+        await _loop_turns()
+        return released
+
+    assert asyncio.run(_run())
+    assert sessions[0].closes == 1
+
+
+def test_a_failed_scheduled_close_is_not_reported_as_unretrieved(monkeypatch):
+    _, sessions = _serve_counted(monkeypatch)
+    reported = []
+
+    async def _failing_aexit(*exc):
+        raise httpx.ConnectError("gone")
+
+    async def _run():
+        asyncio.get_running_loop().set_exception_handler(lambda loop, context: reported.append(context))
+        stream = await AsyncClient().chat.completions.create(messages=[USER], stream=True)
+        monkeypatch.setattr(sessions[0].inner, "__aexit__", _failing_aexit, raising=False)
+        del stream
+        gc.collect()
+        await _loop_turns()
+        gc.collect()  # a task whose exception was never retrieved reports it when collected
+
+    asyncio.run(_run())
+
+    assert sessions[0].closes == 1
+    assert reported == []
+
+
+def test_an_async_stream_collected_after_its_loop_stopped_warns(monkeypatch):
+    _, sessions = _serve_counted(monkeypatch)
+
+    async def _open():
+        return await AsyncClient().chat.completions.create(messages=[USER], stream=True)
+
+    stream = asyncio.run(_open())
+    with pytest.warns(ResourceWarning, match="garbage collected unclosed while its event loop was not running"):
+        del stream
+        gc.collect()
+
+    assert sessions[0].closes == 0  # an async session closes only on its (now stopped) loop
+
+
+LEGACY_TASK = {"content": [{"type": "text", "role": "user", "content": "hi"}]}
+
+
+def test_a_legacy_stream_dropped_mid_iteration_releases_its_session(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch)
+    events = Client().stream(LEGACY_TASK)
+    next(events)
+    assert not body.closed
+
+    del events  # the generator is closed as soon as nothing references it
+
+    assert _released(body, sessions)
+
+
+def test_an_async_legacy_stream_dropped_mid_iteration_releases_its_session(monkeypatch):
+    body, sessions = _serve_counted(monkeypatch)
+
+    async def _run():
+        events = AsyncClient().stream(LEGACY_TASK)
+        await events.__anext__()
+        assert not body.closed
+        del events  # asyncio closes a dropped async generator on its loop
+        await _loop_turns()
+        return _released(body, sessions)
+
+    assert asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
