@@ -28,7 +28,6 @@ import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass, fields
 from functools import cached_property
-from types import ModuleType
 from typing import Any, TypedDict
 
 import httpx
@@ -568,11 +567,6 @@ def _apply_reasoning_and_hints(
 _map_http_error = http_error_from_response
 
 
-# The real httpx client classes (tests may replace this module's `httpx` with a stub namespace).
-_HTTPX_CLIENT = httpx.Client
-_HTTPX_ASYNC_CLIENT = httpx.AsyncClient
-
-
 def _http_client(timeout: float | None) -> httpx.Client:
     """The pooled HTTP client a :class:`Client` creates on first use; looked up at call time so tests can patch it."""
     return httpx.Client(timeout=timeout, http2=True)
@@ -581,37 +575,11 @@ def _http_client(timeout: float | None) -> httpx.Client:
 def _async_http_client(timeout: float | None) -> httpx.AsyncClient:
     """The pooled HTTP client an :class:`AsyncClient` creates on first use; looked up at call time so tests can patch
     it."""
-    if not isinstance(httpx, ModuleType):  # compat: a test stub namespace in place of httpx (it takes no `http2`)
-        return httpx.AsyncClient(timeout=timeout)
     return httpx.AsyncClient(timeout=timeout, http2=True)
 
 
-class _StubSession:
-    """Compat for hand-rolled test stand-ins for an httpx client, until the tests all use ``httpx.MockTransport``.
-
-    The stand-ins take no per-request ``timeout`` and have no ``close``/``aclose``; everything else passes through.
-    """
-
-    def __init__(self, stub: Any) -> None:
-        self._stub = stub
-
-    def __getattr__(self, name: str) -> Any:
-        method = getattr(self._stub, name)
-
-        def call(*args: Any, timeout: Any = None, **kwargs: Any) -> Any:
-            return method(*args, **kwargs)
-
-        return call
-
-    def close(self) -> None:
-        pass
-
-    async def aclose(self) -> None:
-        pass
-
-
 class _ClientCore:
-    _HTTP_CLIENT_TYPE: type = _HTTPX_CLIENT  # what `http_client=` must be
+    _HTTP_CLIENT_TYPE: type = httpx.Client  # what `http_client=` must be
 
     def __init__(self, *, http_client: Any = None, **overrides: Any) -> None:
         known = {f.name for f in fields(Settings)}
@@ -856,9 +824,8 @@ class Client(_ClientCore):
     request still carries the SDK's timeout (``timeout``, or a per-call one).
     """
 
-    def _new_session(self, timeout: float | None) -> Any:
-        session = _http_client(timeout)
-        return session if isinstance(session, _HTTPX_CLIENT) else _StubSession(session)  # compat: test stand-ins
+    def _new_session(self, timeout: float | None) -> httpx.Client:
+        return _http_client(timeout)
 
     def close(self) -> None:
         """Close the HTTP client this client created (an ``http_client`` you passed stays open); streams still
@@ -1036,11 +1003,10 @@ class AsyncClient(_ClientCore):
     loop. ``http_client=`` takes your own ``httpx.AsyncClient``, which the SDK never closes.
     """
 
-    _HTTP_CLIENT_TYPE = _HTTPX_ASYNC_CLIENT
+    _HTTP_CLIENT_TYPE = httpx.AsyncClient
 
-    def _new_session(self, timeout: float | None) -> Any:
-        session = _async_http_client(timeout)
-        return session if isinstance(session, _HTTPX_ASYNC_CLIENT) else _StubSession(session)  # compat: test stand-ins
+    def _new_session(self, timeout: float | None) -> httpx.AsyncClient:
+        return _async_http_client(timeout)
 
     async def aclose(self) -> None:
         """Close the HTTP client this client created (an ``http_client`` you passed stays open); streams still

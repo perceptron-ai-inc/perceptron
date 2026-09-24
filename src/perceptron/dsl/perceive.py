@@ -765,29 +765,15 @@ def _with_issues(event: Any, issues: list[dict]) -> Any:
     return {**event, "result": {**result, "errors": [*issues, *(result.get("errors") or [])]}}
 
 
-def _close_client(client: Any) -> None:
-    close = getattr(client, "close", None)  # compat: test stand-ins for `Client` have no close()
-    if close is not None:
-        close()
-
-
-async def _aclose_client(client: Any) -> None:
-    aclose = getattr(client, "aclose", None)  # compat: test stand-ins for `AsyncClient` have no aclose()
-    if aclose is not None:
-        await aclose()
-
-
 def _stream_with_issues(events: Any, issues: list[dict], client: Client) -> Iterator[Any]:
     """The stream's events, with the compile ``issues`` added to the ``final`` result (see :func:`_with_issues`).
-    Closes the stream, then ``client`` (the one it came from), when it ends or is closed."""
+    Closes the stream (a generator), then ``client`` (the one it came from), when it ends or is closed."""
     try:
         for event in events:
             yield _with_issues(event, issues)
     finally:
-        close = getattr(events, "close", None)
-        if close is not None:
-            close()
-        _close_client(client)
+        events.close()
+        client.close()
 
 
 def _perceive_result_from_response(resp: dict, issues: list[dict]) -> PerceiveResult:
@@ -1008,14 +994,6 @@ def _normalize_direct_nodes(values: tuple[Any, ...]) -> DSLNode | Sequence:
     return Sequence(flat)
 
 
-def _takes_self(fn: Callable[..., Any]) -> bool:
-    try:
-        params = list(inspect.signature(fn).parameters)
-    except (TypeError, ValueError):
-        return True
-    return bool(params) and params[0] == "self"
-
-
 def _execute_sync_task(
     *,
     task: dict,
@@ -1056,14 +1034,8 @@ def _execute_sync_task(
 
     try:
         resp = client.generate(task, **client_kwargs)
-    except TypeError:
-        # Only for a `generate` stub without `self` (a staticmethod patched onto the class); real errors re-raise.
-        gen = getattr(type(client), "generate", None)
-        if not callable(gen) or _takes_self(gen):
-            raise
-        resp = gen(task, **client_kwargs)
     finally:
-        _close_client(client)
+        client.close()
     return _perceive_result_from_response(resp, issues)
 
 
@@ -1267,10 +1239,8 @@ def async_perceive(
                         async for event in events:
                             yield _with_issues(event, issues)
                     finally:
-                        aclose = getattr(events, "aclose", None)
-                        if aclose is not None:
-                            await aclose()
-                        await _aclose_client(client)
+                        await events.aclose()
+                        await client.aclose()
 
                 return _generator()
 
@@ -1296,7 +1266,7 @@ def async_perceive(
             try:
                 resp = await client.generate(task, **client_kwargs)
             finally:
-                await _aclose_client(client)
+                await client.aclose()
             return _perceive_result_from_response(resp, issues)
 
         _call.__perceptron_inspector__ = _inspect_async  # type: ignore[attr-defined]

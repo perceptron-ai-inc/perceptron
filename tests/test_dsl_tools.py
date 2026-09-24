@@ -253,18 +253,20 @@ def test_perceive_forwards_strict_only_when_true(monkeypatch):
     assert all("allow_multiple" not in kwargs and "max_outputs" not in kwargs for kwargs in seen)
 
 
-def test_generate_type_errors_are_not_retried(monkeypatch):
-    calls = []
+def test_a_type_error_from_generate_propagates_after_one_call_and_closes_the_client(monkeypatch):
+    calls, closed = [], []
 
     def _generate(self, task, **kwargs):
         calls.append(task)
         raise TypeError("boom")
 
     monkeypatch.setattr(client_mod.Client, "generate", _generate)
+    monkeypatch.setattr(client_mod.Client, "close", lambda self: closed.append(self))
 
     with pytest.raises(TypeError, match="boom"):
         perceive(text("a"))
     assert len(calls) == 1
+    assert len(closed) == 1
 
 
 def test_async_perceive_sends_tools_and_returns_metadata(monkeypatch):

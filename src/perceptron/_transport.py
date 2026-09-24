@@ -8,15 +8,11 @@
   closed on its own; the pool stays open.
 - :func:`iter_response_lines` / :func:`iter_response_bytes` (and async twins) read an open response body with the same
   conversion for failures mid-body.
-
-SDK errors are always raised outside the ``try`` blocks that catch transport exceptions: the async path catches the
-exception classes of ``perceptron.client.httpx``, which tests replace with a namespace where both are ``Exception``.
 """
 
 from __future__ import annotations
 
 import codecs
-import importlib
 import json as _json
 import math
 import re
@@ -59,27 +55,19 @@ DONE: Any = object()
 # ---------------------------------------------------------------------------
 
 
-def header_value(headers: Any, name: str) -> str | None:
-    """Case-insensitive header lookup that also works on the plain dicts test stubs use."""
-    if not headers:
-        return None
-    try:
-        value = headers.get(name)
-        if value is None:
-            lowered = name.lower()
-            value = next((v for k, v in headers.items() if isinstance(k, str) and k.lower() == lowered), None)
-    except Exception:
-        return None
-    return value
+def header_value(headers: httpx.Headers | None, name: str) -> str | None:
+    """The ``name`` header (case-insensitive, like all ``httpx.Headers`` lookups); None when absent or without
+    headers."""
+    return None if headers is None else headers.get(name)
 
 
-def request_id_of(resp: Any) -> str | None:
+def request_id_of(resp: httpx.Response) -> str | None:
     """The gateway's correlation id (the ``x-trace-id`` response header), when present."""
-    return header_value(getattr(resp, "headers", None), TRACE_ID_HEADER)
+    return resp.headers.get(TRACE_ID_HEADER)
 
 
-def _retry_after(headers: Any) -> float | None:
-    raw = header_value(headers, "Retry-After")
+def _retry_after(headers: httpx.Headers) -> float | None:
+    raw = headers.get("Retry-After")
     if raw is None:
         return None
     try:
@@ -164,17 +152,18 @@ def _str_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def http_error_from_response(resp: Any) -> SDKError:  # noqa: PLR0911 - one return per status class
+def http_error_from_response(resp: httpx.Response) -> SDKError:  # noqa: PLR0911 - one return per status class
     """Map a non-2xx response to an SDK error.
 
     Parses ``{"error": {message, type, param, code}}`` (also the ``/v1/detect`` shape, flat dicts, lists and plain-text
     bodies). ``code`` is the server code, else its type; ``request_id`` comes from ``x-trace-id``; ``retry_after`` from
-    ``Retry-After`` on 429 and 503 (None when absent). Tolerates responses without ``json``/``text``/``headers``.
+    ``Retry-After`` on 429 and 503 (None when absent). A body that is empty, not JSON, or could not be read falls back
+    to the status.
     """
-    status = getattr(resp, "status_code", None)
+    status = resp.status_code
     try:
         data = resp.json()
-    except Exception:
+    except Exception:  # not JSON, or a streamed body whose read failed (`httpx.ResponseNotRead`)
         data = None
     if isinstance(data, dict) and isinstance(data.get("error"), dict):
         inner = _unwrap_error(data["error"])
@@ -183,17 +172,16 @@ def http_error_from_response(resp: Any) -> SDKError:  # noqa: PLR0911 - one retu
 
     message, code, details = _extract_error_metadata(data)
     try:
-        fallback_text = resp.text
-    except Exception:
+        fallback_text = resp.text.strip()
+    except httpx.ResponseNotRead:
         fallback_text = ""
-    fallback_text = fallback_text.strip() if isinstance(fallback_text, str) else ""
     fields = details if isinstance(details, dict) else {}
-    headers = getattr(resp, "headers", None) or {}
+    headers = resp.headers
     error_type = _str_or_none(fields.get("type"))
     attrs: dict[str, Any] = {
         "details": fields,
         "status_code": status,
-        "request_id": header_value(headers, TRACE_ID_HEADER),
+        "request_id": headers.get(TRACE_ID_HEADER),
         "error_type": error_type,
         "param": _str_or_none(fields.get("param")),
     }
@@ -210,7 +198,7 @@ def http_error_from_response(resp: Any) -> SDKError:  # noqa: PLR0911 - one retu
         return PermissionDeniedError(msg, code=code or "auth_error", **attrs)
     if status == HTTPStatus.NOT_FOUND:
         return NotFoundError(message or fallback_text or "not found", code=code, **attrs)
-    if isinstance(status, int) and HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR:
+    if HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR:
         return BadRequestError(message or fallback_text or "bad request", code=code, **attrs)
     retry_after = _retry_after(headers) if status == HTTPStatus.SERVICE_UNAVAILABLE else None
     msg = message or fallback_text or f"server error: {status}"
@@ -303,17 +291,16 @@ def _guarded(items: Iterable[Any], cut_off: Callable[[Exception], SDKError]) -> 
 
 
 async def _aguarded(items: AsyncIterable[Any], cut_off: Callable[[Exception], SDKError]) -> AsyncIterator[Any]:
-    """Async :func:`_guarded`, catching the exception classes of :func:`_async_httpx`."""
-    errors = _async_httpx()
+    """Async :func:`_guarded`."""
     iterator = items.__aiter__()
     while True:
         try:
             item = await iterator.__anext__()
         except StopAsyncIteration:
             return
-        except errors.TimeoutException as exc:
+        except httpx.TimeoutException as exc:
             raise TimeoutError("The stream timed out.") from exc
-        except errors.HTTPError as exc:
+        except httpx.HTTPError as exc:
             raise cut_off(exc) from exc
         yield item
 
@@ -379,29 +366,24 @@ async def _asplit_lines(chunks: AsyncIterable[Any]) -> AsyncIterator[str]:
         yield line
 
 
-def iter_response_lines(resp: Any) -> Iterator[Any]:
+def iter_response_lines(resp: httpx.Response) -> Iterator[str]:
     """The SSE lines of an open response body (see :class:`_SSELineSplitter`); a timeout mid-body raises
-    ``TimeoutError``, a cut connection ``IncompleteStreamError(code="stream_truncated")``. A stub without
-    ``iter_bytes`` is read with its ``iter_lines()``."""
-    if not callable(getattr(resp, "iter_bytes", None)):
-        return _guarded(resp.iter_lines(), _stream_truncated)
+    ``TimeoutError``, a cut connection ``IncompleteStreamError(code="stream_truncated")``."""
     return _split_lines(_guarded(resp.iter_bytes(), _stream_truncated))
 
 
-def aiter_response_lines(resp: Any) -> AsyncIterator[Any]:
-    """Async :func:`iter_response_lines` over ``resp.aiter_bytes()`` (a stub's ``aiter_lines()``)."""
-    if not callable(getattr(resp, "aiter_bytes", None)):
-        return _aguarded(resp.aiter_lines(), _stream_truncated)
+def aiter_response_lines(resp: httpx.Response) -> AsyncIterator[str]:
+    """Async :func:`iter_response_lines` over ``resp.aiter_bytes()``."""
     return _asplit_lines(_aguarded(resp.aiter_bytes(), _stream_truncated))
 
 
-def iter_response_bytes(resp: Any, chunk_size: int | None = None) -> Iterator[bytes]:
+def iter_response_bytes(resp: httpx.Response, chunk_size: int | None = None) -> Iterator[bytes]:
     """``resp.iter_bytes(chunk_size)``; a timeout mid-body raises ``TimeoutError``, a cut connection
     ``TransportError``. Use it to read a :func:`stream_request` body (e.g. ``files.download``)."""
     return _guarded(resp.iter_bytes(chunk_size=chunk_size), _body_cut_off)
 
 
-def aiter_response_bytes(resp: Any, chunk_size: int | None = None) -> AsyncIterator[bytes]:
+def aiter_response_bytes(resp: httpx.Response, chunk_size: int | None = None) -> AsyncIterator[bytes]:
     """Async :func:`iter_response_bytes` over ``resp.aiter_bytes(chunk_size)``."""
     return _aguarded(resp.aiter_bytes(chunk_size=chunk_size), _body_cut_off)
 
@@ -409,11 +391,6 @@ def aiter_response_bytes(resp: Any, chunk_size: int | None = None) -> AsyncItera
 # ---------------------------------------------------------------------------
 # Requests through the client's pooled HTTP client
 # ---------------------------------------------------------------------------
-
-
-def _async_httpx() -> Any:
-    """``perceptron.client.httpx``, whose exception classes the async path catches (tests swap in a stub)."""
-    return importlib.import_module(".client", __package__).httpx
 
 
 _API_KEY_CHARS = re.compile(r"[\x21-\x7e]+")  # visible ASCII
@@ -493,36 +470,17 @@ def _send_kwargs(*, json: Any, params: Any, files: Any, data: Any, is_async: boo
     return kwargs
 
 
-def _is_success(resp: Any) -> bool:
-    status = getattr(resp, "status_code", None)
-    return isinstance(status, int) and HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES
-
-
-def _read_quietly(resp: Any) -> None:
-    read = getattr(resp, "read", None)
-    if callable(read):
-        with suppress(Exception):
-            read()
-
-
-async def _aread_quietly(resp: Any) -> None:
-    aread = getattr(resp, "aread", None)
-    if callable(aread):
-        with suppress(Exception):
-            await aread()
-
-
-def _json_payload(resp: Any) -> tuple[Any, Any]:
+def _json_payload(resp: httpx.Response) -> tuple[Any, httpx.Headers]:
     try:
         payload = resp.json()
     except Exception as exc:
         raise ServerError(
             "The server returned a response that is not valid JSON.",
             code=INVALID_RESPONSE,
-            status_code=getattr(resp, "status_code", None),
+            status_code=resp.status_code,
             request_id=request_id_of(resp),
         ) from exc
-    return payload, getattr(resp, "headers", None) or {}
+    return payload, resp.headers
 
 
 def request(  # noqa: PLR0913 - keyword-only request options
@@ -539,8 +497,8 @@ def request(  # noqa: PLR0913 - keyword-only request options
 ) -> Any:
     """Send one request and return the (read) response; non-2xx raise the mapped error.
 
-    ``path`` is appended to the provider's base URL (``provider_cfg`` defaults to :func:`surface_provider_cfg`). Calls
-    the pooled client's verb method, e.g. ``session.post(url, headers=..., timeout=..., json=...)``.
+    ``path`` is appended to the provider's base URL (``provider_cfg`` defaults to :func:`surface_provider_cfg`). Sends
+    ``session.request(method, url, headers=..., timeout=..., json=...)`` on the pooled client.
     """
     url, headers, effective_timeout = _prepare(
         client, path, has_json=json is not None, timeout=timeout, provider_cfg=provider_cfg
@@ -548,12 +506,12 @@ def request(  # noqa: PLR0913 - keyword-only request options
     kwargs = _send_kwargs(json=json, params=params, files=files, data=data, is_async=False)
     session = client._session()
     try:
-        resp = getattr(session, method.lower())(url, headers=headers, timeout=effective_timeout, **kwargs)
+        resp = session.request(method, url, headers=headers, timeout=effective_timeout, **kwargs)
     except httpx.TimeoutException as exc:
         raise TimeoutError("request timed out") from exc
     except httpx.HTTPError as exc:
         raise _send_failed(exc) from exc
-    if not _is_success(resp):
+    if not resp.is_success:
         raise http_error_from_response(resp)
     return resp
 
@@ -593,8 +551,9 @@ def open_stream(  # noqa: PLR0913 - keyword-only request options
             raise TimeoutError("request timed out") from exc
         except httpx.HTTPError as exc:
             raise _send_failed(exc) from exc
-        if not _is_success(resp):
-            _read_quietly(resp)
+        if not resp.is_success:
+            with suppress(httpx.HTTPError):  # a body cut off or timed out still maps by its status and headers
+                resp.read()
             raise http_error_from_response(resp)
     except BaseException:
         closer.close()
@@ -631,15 +590,14 @@ async def arequest(  # noqa: PLR0913 - keyword-only request options
         client, path, has_json=json is not None, timeout=timeout, provider_cfg=provider_cfg
     )
     kwargs = _send_kwargs(json=json, params=params, files=files, data=data, is_async=True)
-    errors = _async_httpx()
     session = client._session()
     try:
-        resp = await getattr(session, method.lower())(url, headers=headers, timeout=effective_timeout, **kwargs)
-    except errors.TimeoutException as exc:
+        resp = await session.request(method, url, headers=headers, timeout=effective_timeout, **kwargs)
+    except httpx.TimeoutException as exc:
         raise TimeoutError("request timed out") from exc
-    except errors.HTTPError as exc:
+    except httpx.HTTPError as exc:
         raise _send_failed(exc) from exc
-    if not _is_success(resp):
+    if not resp.is_success:
         raise http_error_from_response(resp)
     return resp
 
@@ -664,7 +622,6 @@ async def aopen_stream(  # noqa: PLR0913 - keyword-only request options
         client, path, has_json=json is not None, timeout=timeout, provider_cfg=provider_cfg
     )
     kwargs = _send_kwargs(json=json, params=params, files=None, data=None, is_async=True)
-    errors = _async_httpx()
     session = client._session()
     closer = AsyncExitStack()
     try:
@@ -672,12 +629,13 @@ async def aopen_stream(  # noqa: PLR0913 - keyword-only request options
             resp = await closer.enter_async_context(
                 session.stream(method, url, headers=headers, timeout=effective_timeout, **kwargs)
             )
-        except errors.TimeoutException as exc:
+        except httpx.TimeoutException as exc:
             raise TimeoutError("request timed out") from exc
-        except errors.HTTPError as exc:
+        except httpx.HTTPError as exc:
             raise _send_failed(exc) from exc
-        if not _is_success(resp):
-            await _aread_quietly(resp)
+        if not resp.is_success:
+            with suppress(httpx.HTTPError):  # a body cut off or timed out still maps by its status and headers
+                await resp.aread()
             raise http_error_from_response(resp)
     except BaseException:
         await closer.aclose()

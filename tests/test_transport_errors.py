@@ -262,6 +262,30 @@ def test_streamed_error_body_is_read_before_mapping(monkeypatch, perceptron_env)
     assert body.closed  # the response was closed before the error was raised
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("exc", [httpx.ReadTimeout("read timed out"), httpx.RemoteProtocolError("peer closed")])
+def test_streamed_error_whose_body_read_fails_maps_by_status(monkeypatch, perceptron_env, exc, mode):
+    """Reading a non-2xx streaming body can time out or be cut off; the error then comes from the status and headers."""
+    body = FailingBody(b'{"error": {"message": "cut', exc)
+    headers = {"retry-after": "7", "x-trace-id": "t503"}
+    install(monkeypatch, lambda request: httpx.Response(503, stream=body, headers=headers))
+
+    async def _aopen():
+        async with client_mod.AsyncClient() as client:
+            await _transport.aopen_stream(client, "POST", "/chat/completions", json={"model": "m"})
+
+    with pytest.raises(ServerError) as excinfo:
+        if mode == "sync":
+            _transport.open_stream(client_mod.Client(), "POST", "/chat/completions", json={"model": "m"})
+        else:
+            asyncio.run(_aopen())
+
+    err = excinfo.value
+    assert type(err) is ServerError
+    assert (str(err), err.status_code, err.retry_after, err.request_id) == ("server error: 503", 503, 7.0, "t503")
+    assert body.closed
+
+
 # ---------------------------------------------------------------------------
 # Error classes
 # ---------------------------------------------------------------------------
