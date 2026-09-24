@@ -2,7 +2,7 @@
 
 The legacy surfaces (``perceive``, the helpers, ``Client.generate/stream``) use ``settings().provider``, which keeps the
 fal auto-detect of ``config._from_env``. The message API, files, models and multilook use :func:`surface_provider_cfg`:
-the provider the caller chose explicitly, otherwise ``perceptron``.
+the provider the caller chose explicitly, otherwise ``perceptron``. A configured ``base_url`` applies to every surface.
 """
 
 from __future__ import annotations
@@ -146,9 +146,10 @@ def explicit_provider(override: str | None = None) -> str | None:
 def surface_provider_cfg(client: Any, *, feature: str | None = None) -> dict[str, Any]:
     """Provider config for the message API, files, models and multilook.
 
-    Uses the explicit provider chosen when the client was built (like its settings), otherwise ``perceptron``.
-    ``settings.base_url`` applies only when it was configured for this provider: an explicit provider, or settings whose
-    provider is ``perceptron``. With ``feature`` set (e.g. ``"Files"``), a non-``perceptron`` provider raises
+    Uses the explicit provider chosen when the client was built (like its settings), otherwise ``perceptron``. A
+    configured ``settings.base_url`` (``Client(base_url=...)``, ``configure``/``config``, ``PERCEPTRON_BASE_URL``)
+    replaces the provider's base URL, as it does for ``Client.generate``: requests and the API key go where the caller
+    pointed them. With ``feature`` set (e.g. ``"Files"``), a non-``perceptron`` provider raises
     ``unsupported_provider_feature``.
     """
     settings = client._settings
@@ -161,8 +162,7 @@ def surface_provider_cfg(client: Any, *, feature: str | None = None) -> dict[str
             f"Select it with {_SELECT_PERCEPTRON}.",
             code=UNSUPPORTED_PROVIDER_FEATURE,
         )
-    configured_provider = settings.provider.lower() if isinstance(settings.provider, str) else None
-    if settings.base_url and (explicit is not None or configured_provider == PERCEPTRON_PROVIDER):
+    if settings.base_url:
         cfg["base_url"] = settings.base_url
     return cfg
 

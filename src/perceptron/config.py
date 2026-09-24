@@ -18,9 +18,10 @@ class Settings:
     ``Client.generate``/``stream`` then call fal. Select the Perceptron API with ``configure(provider="perceptron")``
     or ``PERCEPTRON_PROVIDER=perceptron``. The message API (``client.chat.completions``), ``client.files``,
     ``client.models`` and multilook ignore that auto-detect: they use the provider you chose, else ``"perceptron"``.
+    A configured ``base_url`` (``PERCEPTRON_BASE_URL``) replaces the provider's base URL on every surface.
     """
 
-    base_url: str | None = None  # for provider "perceptron" include the /v1 prefix
+    base_url: str | None = None  # every surface uses it when set; for provider "perceptron" include the /v1 prefix
     api_key: str | None = None
     provider: str | None = None  # "perceptron" or "fal"; None = auto-detect (see above)
     model: str | None = None  # None = the provider's default model

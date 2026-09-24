@@ -185,18 +185,24 @@ def test_feature_on_non_perceptron_provider_is_rejected():
     assert _providers.surface_provider_cfg(client_mod.Client(), feature="Files")["name"] == "perceptron"
 
 
-def test_base_url_applies_only_when_configured_for_this_provider(monkeypatch):
+def test_a_configured_base_url_always_applies(monkeypatch):
     monkeypatch.setenv("PERCEPTRON_API_KEY", "sk-test")
-    monkeypatch.setenv("PERCEPTRON_BASE_URL", "https://proxy.example/v1")
-
-    # Auto-detected fal settings: the base URL was meant for fal, not for the Perceptron surfaces.
     assert _providers.surface_provider_cfg(client_mod.Client())["base_url"] == "https://api.perceptron.inc/v1"
+
+    # Even with the legacy fal auto-detect in effect: the request and its key go where the caller pointed them.
+    monkeypatch.setenv("PERCEPTRON_BASE_URL", "https://proxy.example/v1")
+    assert client_mod.Client()._settings.provider == "fal"
+    resolved = _providers.surface_provider_cfg(client_mod.Client())
+    assert (resolved["name"], resolved["base_url"]) == ("perceptron", "https://proxy.example/v1")
 
     with cfg(provider="perceptron"):
         assert _providers.surface_provider_cfg(client_mod.Client())["base_url"] == "https://proxy.example/v1"
 
-    client = client_mod.Client(provider="fal")
-    assert _providers.surface_provider_cfg(client)["base_url"] == "https://proxy.example/v1"
+    resolved = _providers.surface_provider_cfg(client_mod.Client(provider="fal"))
+    assert (resolved["name"], resolved["base_url"]) == ("fal", "https://proxy.example/v1")
+
+    client = client_mod.Client(base_url="http://localhost:8080/v1")
+    assert _providers.surface_provider_cfg(client)["base_url"] == "http://localhost:8080/v1"
 
 
 def test_surface_model_prefers_argument_then_settings_then_default():

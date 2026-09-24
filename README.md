@@ -80,14 +80,14 @@ with config(max_tokens=512, timeout=120):
 
 > **Set the provider.** When no provider is configured and `PERCEPTRON_API_KEY` or `FAL_KEY` is set, the helpers (`caption`, `question`, `detect`, `ocr`, ...), `perceive`, `Client.generate`/`stream`, and the CLI select provider **`fal`** (kept for compatibility). Asking them for `perceptron-mk1.5`, or passing them an uploaded file's id (files exist only on the Perceptron API), then raises `BadRequestError`. Choose the Perceptron API with `configure(provider="perceptron")` or `PERCEPTRON_PROVIDER=perceptron`.
 >
-> The message API (`client.chat.completions`), `client.files`, `client.models`, and Multilook do not auto-detect: they use the provider you chose, else the Perceptron API.
+> The message API (`client.chat.completions`), `client.files`, `client.models`, and Multilook do not auto-detect: they use the provider you chose, else the Perceptron API. A `base_url` you set (`Client(base_url=...)`, `configure(base_url=...)`, or `PERCEPTRON_BASE_URL`) applies to every surface.
 
 | Setting | Environment variable | Notes |
 | --- | --- | --- |
 | `provider` | `PERCEPTRON_PROVIDER` | `perceptron` or `fal` (see above) |
 | `api_key` | `PERCEPTRON_API_KEY` (`FAL_KEY` for fal) | |
 | `model` | `PERCEPTRON_MODEL` | default `perceptron-mk1.5` on `perceptron`; also `perceptron-mk1`, `isaac-0.3-fast`, `isaac-0.2-2b-preview`, `isaac-0.2-1b`, `isaac-0.1` |
-| `base_url` | `PERCEPTRON_BASE_URL` | include `/v1` for provider `perceptron` |
+| `base_url` | `PERCEPTRON_BASE_URL` | replaces the provider's URL on every surface; include `/v1` for provider `perceptron` |
 | `timeout` | | seconds per request, default 60 (Multilook waits at least 305) |
 | `retries` | | accepted, but the SDK does not retry requests |
 
