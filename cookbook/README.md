@@ -12,8 +12,6 @@ Hands-on quickstarts, capability recipes, and end-to-end tutorials for building 
 | --- | --- | --- |
 | [`quickstart_perceptron`](quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) | Ask Perceptron Mk1 a question about an image and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron/quickstart_perceptron.ipynb) |
 | [`quickstart_perceptron_video`](quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) | Ask Perceptron Mk1 a question about a video and get a natural-language answer. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_perceptron_video/quickstart_perceptron_video.ipynb) |
-| [`quickstart_isaac_0_2`](quickstart/quickstart_isaac_0_2/quickstart_isaac_0_2.ipynb) | Ask Isaac 0.2 a question about an image (defaults to `isaac-0.2-1b`); switch to `isaac-0.2-2b-preview` for reasoning. | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_isaac_0_2/quickstart_isaac_0_2.ipynb) |
-| [`quickstart_isaac_0_1`](quickstart/quickstart_isaac_0_1/quickstart_isaac_0_1.ipynb) | Ask Isaac 0.1 a question about an image (legacy open-weights model; reasoning not supported). | [Open in Colab](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/quickstart/quickstart_isaac_0_1/quickstart_isaac_0_1.ipynb) |
 
 ---
 
@@ -37,33 +35,6 @@ Image and video recipes for the flagship `perceptron-mk1` model, using the v0.3.
 
 > **When to use `detect()` vs `@perceive`?** Use `detect()` for quick, single-shot helpers. Reach for `@perceive` when you want to embed custom prompts, streaming, or multi-step logic inside your own pipeline.
 
-### Isaac 0.2
-
-Image-only recipes pinned to `isaac-0.2-1b`. Open-weights edge-tier model with reasoning support on the 2B Preview variant.
-
-| Notebook | Scenario | Colab |
-| --- | --- | --- |
-| [`isaac-0.2/image-qa`](recipes/capabilities/isaac-0.2/image-qa.ipynb) | Ask grounded questions and cite regions with bounding boxes. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/image-qa.ipynb) |
-| [`isaac-0.2/image-captioning`](recipes/capabilities/isaac-0.2/image-captioning.ipynb) | Generate concise or grounded captions (with bounding boxes). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/image-captioning.ipynb) |
-| [`isaac-0.2/object-detection`](recipes/capabilities/isaac-0.2/object-detection.ipynb) | Detect PPE with a `@perceive` helper or the high-level `detect()` API. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/object-detection.ipynb) |
-| [`isaac-0.2/ocr`](recipes/capabilities/isaac-0.2/ocr.ipynb) | Run OCR with custom prompts and parse the output. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/ocr.ipynb) |
-| [`isaac-0.2/in-context-learning-image`](recipes/capabilities/isaac-0.2/in-context-learning-image.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/in-context-learning-image.ipynb) |
-| [`isaac-0.2/multi-image-in-context-learning`](recipes/capabilities/isaac-0.2/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/multi-image-in-context-learning.ipynb) |
-| [`isaac-0.2/structured-outputs`](recipes/capabilities/isaac-0.2/structured-outputs.ipynb) | Structured output with Pydantic schemas or regex patterns (uses `isaac-0.2-1b`). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.2/structured-outputs.ipynb) |
-
-### Isaac 0.1 (legacy)
-
-Original Isaac recipes pinned to `isaac-0.1`. Kept for existing integrations.
-
-| Notebook | Scenario | Colab |
-| --- | --- | --- |
-| [`isaac-0.1/image-qa`](recipes/capabilities/isaac-0.1/image-qa.ipynb) | Ask grounded questions and cite regions with bounding boxes. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.1/image-qa.ipynb) |
-| [`isaac-0.1/image-captioning`](recipes/capabilities/isaac-0.1/image-captioning.ipynb) | Generate concise or grounded captions (with bounding boxes). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.1/image-captioning.ipynb) |
-| [`isaac-0.1/object-detection`](recipes/capabilities/isaac-0.1/object-detection.ipynb) | Detect PPE with a `@perceive` helper or the high-level `detect()` API. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.1/object-detection.ipynb) |
-| [`isaac-0.1/ocr`](recipes/capabilities/isaac-0.1/ocr.ipynb) | Run OCR with custom prompts and parse the output. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.1/ocr.ipynb) |
-| [`isaac-0.1/in-context-learning-image`](recipes/capabilities/isaac-0.1/in-context-learning-image.ipynb) | Single-image in-context detection (bootstrap exemplar → apply to target). | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.1/in-context-learning-image.ipynb) |
-| [`isaac-0.1/multi-image-in-context-learning`](recipes/capabilities/isaac-0.1/multi-image-in-context-learning.ipynb) | Multi-shot guidance to classify/ground multiple categories at once. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/capabilities/isaac-0.1/multi-image-in-context-learning.ipynb) |
-
 ---
 
 ## Tutorials
@@ -72,4 +43,4 @@ Original Isaac recipes pinned to `isaac-0.1`. Kept for existing integrations.
 
 | Notebook | Description | Colab |
 | --- | --- | --- |
-| [`isaac_frame_by_frame`](recipes/tutorials/isaac_frame_by_frame/isaac_frame_by_frame.ipynb) | Extract frames from a video, run Isaac 0.1 on each frame, and stitch an annotated video. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/tutorials/isaac_frame_by_frame/isaac_frame_by_frame.ipynb) |
+| [`isaac_frame_by_frame`](recipes/tutorials/isaac_frame_by_frame/isaac_frame_by_frame.ipynb) | Extract frames from a video, run Perceptron Mk1.5 detection on each frame, and stitch an annotated video. | [Launch](https://colab.research.google.com/github/perceptron-ai-inc/perceptron/blob/main/cookbook/recipes/tutorials/isaac_frame_by_frame/isaac_frame_by_frame.ipynb) |

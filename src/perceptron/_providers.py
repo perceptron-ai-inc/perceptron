@@ -59,19 +59,11 @@ _PROVIDER_CONFIG = {
         # The ids the SDK knows capabilities for. The gateway is authoritative (some ids are feature-gated), so other
         # ids pass through and get permissive capability defaults.
         "supported_models": [
-            "isaac-0.1",
-            "isaac-0.2-1b",
-            "isaac-0.2-2b-preview",
-            "isaac-0.3-fast",
             "perceptron-mk1",
             "perceptron-mk1.5",
         ],
         "accepts_unknown_models": True,
         "models": {
-            "isaac-0.1": {"reasoning": False, "skip_structured_hints": False},
-            "isaac-0.2-1b": {"reasoning": True, "skip_structured_hints": False},
-            "isaac-0.2-2b-preview": {"reasoning": True, "skip_structured_hints": False},
-            "isaac-0.3-fast": {"reasoning": True, "skip_structured_hints": False},
             "perceptron-mk1": {"reasoning": True, "skip_structured_hints": False},
             "perceptron-mk1.5": {"reasoning": True, "skip_structured_hints": False},
         },
