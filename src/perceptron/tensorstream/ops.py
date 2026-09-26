@@ -35,7 +35,8 @@ def compute_mrope_pos_tensor(ts: TensorStream, n_pos_dims: int = 3) -> torch.Ten
 
         for event in stream:
             # --- build coordinate grid for THIS event using itertools (no tensor ops) ---
-            dims = (event.dims() or [1]) + [1] * (n_pos_dims - len(event.dims() or []))
+            raw_dims = event.dims() or [1]
+            dims = raw_dims + [1] * (n_pos_dims - len(raw_dims))
 
             # Create ranges for each dimension (similar to old _finalize implementation)
             first_dim = range(cumulative_offset, cumulative_offset + dims[0])
